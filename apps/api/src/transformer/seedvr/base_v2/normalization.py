@@ -40,7 +40,6 @@ def get_norm_layer(norm_type: Optional[str]) -> norm_layer_type:
                 elementwise_affine=elementwise_affine,
             )
 
-
         raise NotImplementedError(f"{norm_type} is not supported")
 
     return _norm_layer

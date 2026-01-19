@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from .cosmos import CosmosGuardrailPostprocessor as CosmosGuardrailPostprocessor
     from .rife import RifePostprocessor as RifePostprocessor
 
+
 def __getattr__(name: str):
     mod_name = _SYMBOL_TO_MODULE.get(name)
     if mod_name is None:

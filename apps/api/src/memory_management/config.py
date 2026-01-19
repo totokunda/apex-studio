@@ -20,7 +20,7 @@ class MemoryConfig:
     group_offload_disk_path: Optional[str] = None
     ignore_modules: Optional[List[str]] = None
     block_modules: Optional[List[str]] = None
-    
+
     def to_group_offload_kwargs(self, onload_device: torch.device) -> Dict[str, Any]:
         """
         Translate this config into keyword arguments expected by `model.enable_group_offload`.

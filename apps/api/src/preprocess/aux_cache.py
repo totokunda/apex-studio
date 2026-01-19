@@ -50,7 +50,9 @@ class AuxillaryCache:
         self.end_frame = end_frame
         self.params = params
         self.cache_key = self._create_cache_key()
-        self.cache_path = Path(DEFAULT_CACHE_PATH) / "preprocessor_results" / self.cache_key
+        self.cache_path = (
+            Path(DEFAULT_CACHE_PATH) / "preprocessor_results" / self.cache_key
+        )
         self.metadata_path = self.cache_path / "metadata.json"
         self.supports_alpha_channel = supports_alpha_channel
         self.result_path = (
@@ -226,9 +228,7 @@ class AuxillaryCache:
         result_path_str = str(self.result_path)
 
         if cv2 is None:
-            raise ValueError(
-                "Cannot read cached result: 'cv2' is not available."
-            )
+            raise ValueError("Cannot read cached result: 'cv2' is not available.")
 
         cap = cv2.VideoCapture(result_path_str)
         if not cap.isOpened():

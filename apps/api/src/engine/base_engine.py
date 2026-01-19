@@ -75,6 +75,7 @@ from src.memory_management.group_offloading import (
     _is_group_offload_enabled,
 )
 import types
+
 try:
     torch.backends.cuda.preferred_linalg_library()
 except Exception as e:
@@ -335,7 +336,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         except Exception:
             return None
 
-
     @staticmethod
     def _mem_debug_enabled() -> bool:
         return str(os.environ.get("APEX_MEM_DEBUG", "")).lower() in {"1", "true", "yes"}
@@ -346,6 +346,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         effective values (with defaults applied when unset). This can be exposed via
         API to introspect/tune behavior without digging through code.
         """
+
         def _float(name: str, default: float) -> float:
             try:
                 raw = os.environ.get(name, None)
@@ -370,23 +371,43 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         return {
             # Offload/pressure
-            "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION": _float("APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.10),
-            "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION": _float("APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.08),
-            "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION": _float("APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION", 0.06),
-            "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES": _int("APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3),
-            "APEX_VRAM_PRESSURE_CPU_MULTIPLIER": _float("APEX_VRAM_PRESSURE_CPU_MULTIPLIER", 1.25),
-            "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES": _int("APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES", 32 * 1024**3),
+            "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION": _float(
+                "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.10
+            ),
+            "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION": _float(
+                "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.08
+            ),
+            "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION": _float(
+                "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION", 0.06
+            ),
+            "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES": _int(
+                "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3
+            ),
+            "APEX_VRAM_PRESSURE_CPU_MULTIPLIER": _float(
+                "APEX_VRAM_PRESSURE_CPU_MULTIPLIER", 1.25
+            ),
+            "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES": _int(
+                "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES", 32 * 1024**3
+            ),
             # Load-model guards (GPU state_dict materialization)
-            "APEX_LOAD_MODEL_TARGET_FREE_FRACTION": _float("APEX_LOAD_MODEL_TARGET_FREE_FRACTION", 0.10),
+            "APEX_LOAD_MODEL_TARGET_FREE_FRACTION": _float(
+                "APEX_LOAD_MODEL_TARGET_FREE_FRACTION", 0.10
+            ),
             "APEX_LOAD_MODEL_VRAM_MULT": _float("APEX_LOAD_MODEL_VRAM_MULT", 1.20),
-            "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES": _int("APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2),
+            "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES": _int(
+                "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
+            ),
             # Decode guards
             "APEX_VAE_DECODE_FORCE_FLUSH": _str("APEX_VAE_DECODE_FORCE_FLUSH", "1"),
             "APEX_VAE_DECODE_FLUSH_TARGET": _str("APEX_VAE_DECODE_FLUSH_TARGET", "cpu"),
             "APEX_VAE_DECODE_MIN_FREE_BYTES": _int("APEX_VAE_DECODE_MIN_FREE_BYTES", 0),
-            "APEX_VAE_DECODE_MIN_FREE_FRAC": _float("APEX_VAE_DECODE_MIN_FREE_FRAC", 0.12),
+            "APEX_VAE_DECODE_MIN_FREE_FRAC": _float(
+                "APEX_VAE_DECODE_MIN_FREE_FRAC", 0.12
+            ),
             "APEX_VAE_DECODE_SAFETY_MULT": _float("APEX_VAE_DECODE_SAFETY_MULT", 8.0),
-            "APEX_VAE_DECODE_TARGET_FREE_FRACTION": _float("APEX_VAE_DECODE_TARGET_FREE_FRACTION", 0.30),
+            "APEX_VAE_DECODE_TARGET_FREE_FRACTION": _float(
+                "APEX_VAE_DECODE_TARGET_FREE_FRACTION", 0.30
+            ),
             # Preforward
             "APEX_PREFWD_ENABLE": _str("APEX_PREFWD_ENABLE", "1"),
             "APEX_PREFWD_FLUSH_TARGET": _str("APEX_PREFWD_FLUSH_TARGET", "cpu"),
@@ -394,12 +415,15 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             "APEX_PREFWD_MIN_FREE_FRAC": _float("APEX_PREFWD_MIN_FREE_FRAC", 0.50),
             "APEX_PREFWD_KEEP_COMPONENTS": _str("APEX_PREFWD_KEEP_COMPONENTS", "vae"),
             # Weight manager defaults
-            "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12),
-            "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION": _float("APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10),
+            "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION": _float(
+                "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12
+            ),
+            "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION": _float(
+                "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10
+            ),
             "APEX_DISABLE_WARM_WEIGHTS": _str("APEX_DISABLE_WARM_WEIGHTS", ""),
             "APEX_FORCE_DISK_ONLY": _str("APEX_FORCE_DISK_ONLY", ""),
         }
-
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -526,7 +550,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         Register a component with the memory manager so we can track VRAM usage.
         Falls back to a no-op if the manager is unavailable.
         """
-        manager = getattr(self, "_component_memory_manager", None) or get_memory_manager()
+        manager = (
+            getattr(self, "_component_memory_manager", None) or get_memory_manager()
+        )
         try:
             return manager.register_component(module, label, tags or set(), engine=self)
         except Exception:
@@ -536,7 +562,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         """
         Install lightweight pre/post forward hooks used by the memory manager.
         """
-        manager = getattr(self, "_component_memory_manager", None) or get_memory_manager()
+        manager = (
+            getattr(self, "_component_memory_manager", None) or get_memory_manager()
+        )
         try:
             comp = manager.register_component(
                 module, label, {label}, engine=self, install_hooks=False
@@ -589,7 +617,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         self._memory_management_map = self._normalize_memory_management(
             memory_spec, allow_auto=allow_auto
         )
-        print("memory_management_map", self._memory_management_map, memory_spec, allow_auto)
+        print(
+            "memory_management_map",
+            self._memory_management_map,
+            memory_spec,
+            allow_auto,
+        )
 
     def _init_logger(self):
         self.logger = logger
@@ -864,8 +897,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             device = "cpu"
         component_module = None
 
-      
-
         if component_type == "scheduler":
             scheduler = self.load_scheduler(component)
             component_module = scheduler
@@ -902,23 +933,26 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         config.pop("type")
         config.pop("name", None)
         module = config.pop("module", None)
-        
 
         def get_helper(base: str):
             try:
                 helper_class = helpers.get(base)
             except Exception:
-                helper_class = find_class_recursive(importlib.import_module(module), base)
+                helper_class = find_class_recursive(
+                    importlib.import_module(module), base
+                )
             if helper_class is None:
                 raise ValueError(f"Helper class {base} not found")
             return helper_class
 
         # create an instance of the helper class
         helper = None
-        if "model_path" in config and not "ignore_model_load" in component.get("extra_kwargs", {}):
+        if "model_path" in config and not "ignore_model_load" in component.get(
+            "extra_kwargs", {}
+        ):
             try:
                 helper = self._load_model(
-                    component, 
+                    component,
                     getter_fn=get_helper,
                     no_weights=False,
                     key_map=component.get("key_map", {}),
@@ -927,15 +961,18 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 )
             except Exception as e:
                 pass
-            
+
             helper_class = get_helper(base)
-        
+
             # check if helper has the method for from_pretrained
             if hasattr(helper_class, "from_pretrained"):
                 try:
-                    helper = helper_class.from_pretrained(config.get("model_path", None), trust_remote_code=True)
+                    helper = helper_class.from_pretrained(
+                        config.get("model_path", None), trust_remote_code=True
+                    )
                 except Exception as e:
                     import traceback
+
                     traceback.print_exc()
                     pass
 
@@ -980,13 +1017,13 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     helper = helper.to(device)
                 except Exception:
                     pass
-        
+
         mm_config = self._resolve_memory_config_for_component(component)
 
         if mm_config is not None:
-            helper._resolve_memory_config_for_component =  types.MethodType(
-                    lambda self, x: mm_config, helper
-                )
+            helper._resolve_memory_config_for_component = types.MethodType(
+                lambda self, x: mm_config, helper
+            )
 
         try:
             self._register_tracked_module(helper, helper_name, {"helper"})
@@ -1261,7 +1298,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 # Proactively relieve VRAM pressure before materializing weights.
                 # Text encoders are often lazily loaded during prompt encoding, which
                 # can occur after the transformer has already filled VRAM.
- 
+
                 model = original_load_model(
                     no_weights=no_weights, to_device=False, *args, **kwargs
                 )
@@ -1276,7 +1313,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
                 if not already_enabled:
                     offloading_module = component.get("offloading_module", None)
-                    ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+                    ignore_offloading_modules = component.get(
+                        "ignore_offloading_modules", None
+                    )
                     block_modules = component.get("block_modules", None)
                     mm_config.ignore_modules = ignore_offloading_modules
                     mm_config.block_modules = block_modules
@@ -1306,7 +1345,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
             def _guarded_load_model(*args, **kwargs):
                 model = original_load_model(*args, **kwargs)
-                
+
                 return model
 
             text_encoder.load_model = _guarded_load_model  # type: ignore
@@ -1400,7 +1439,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 )
             else:
                 try:
-                    
+
                     model_to_offload = (
                         transformer.get_submodule(offloading_module)
                         if offloading_module
@@ -1424,7 +1463,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             maybe_compile = getattr(self, "_maybe_compile_module", None)
             if callable(maybe_compile):
                 model = maybe_compile(model, component)
-        
 
         return transformer
 
@@ -2113,7 +2151,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         # This avoids recomputing expensive VAE encodes for repeated inputs.
         # Only cache deterministic encodes. `sample_mode="sample"` is stochastic
         # (generator advances), so caching would change behavior.
-        enable_vae_cache = getattr(self, "enable_cache", True) and sample_mode != "sample"
+        enable_vae_cache = (
+            getattr(self, "enable_cache", True) and sample_mode != "sample"
+        )
         cache_file = None
         prompt_hash = None
         if enable_vae_cache:
@@ -2168,7 +2208,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 return latents.to(dtype=dtype)
 
         video = video.to(dtype=getattr(self, component_name).dtype, device=self.device)
-        
+
         self.enable_vae_tiling(component_name=component_name)
 
         latents = getattr(self, component_name).encode(video, return_dict=False)[0]
@@ -2246,6 +2286,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         normalized: Dict[str, MemoryConfig] = {}
 
         if spec:
+
             def to_config(v: Union[str, MemoryConfig, Dict[str, Any]]) -> MemoryConfig:
                 if isinstance(v, MemoryConfig):
                     return v
@@ -2461,7 +2502,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         # Applying LoRAs can allocate additional adapter weights/buffers on GPU.
         # In pooled mode, previous components may still be resident; ensure we
         # have headroom or proactively offload/discard other components.
-
 
         resolved = self.lora_manager.load_into(
             model, loras, adapter_names=adapter_names, scales=scales

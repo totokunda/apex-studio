@@ -55,6 +55,7 @@ def _get_engine_warm_pool() -> EngineWarmPool:
         _ENGINE_WARM_POOL = EngineWarmPool.from_env()
     return _ENGINE_WARM_POOL
 
+
 _MEM_ENV_KEYS = [
     "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION",
     "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION",
@@ -90,7 +91,11 @@ def _apply_memory_env_from_store() -> None:
             if k in data and data[k] is not None:
                 os.environ[k] = str(data[k])
         if str(os.environ.get("APEX_MEM_DEBUG", "")).lower() in {"1", "true", "yes"}:
-            applied = {k: os.environ.get(k) for k in _MEM_ENV_KEYS if os.environ.get(k) is not None}
+            applied = {
+                k: os.environ.get(k)
+                for k in _MEM_ENV_KEYS
+                if os.environ.get(k) is not None
+            }
             print(f"[ray_tasks] applied memory env from store: {applied}")
     except Exception:
         # Best-effort only.
@@ -167,7 +172,9 @@ def _optimize_mp4_for_editor_in_place(
             gop_frames_int = max(1, min(1000, int(gop_frames_int)))
 
         try:
-            gop_seconds = float(os.environ.get("APEX_VIDEO_EDITOR_GOP_SECONDS", "1.0") or "1.0")
+            gop_seconds = float(
+                os.environ.get("APEX_VIDEO_EDITOR_GOP_SECONDS", "1.0") or "1.0"
+            )
         except Exception:
             gop_seconds = 1.0
         gop_seconds = max(0.25, min(10.0, gop_seconds))
@@ -178,7 +185,9 @@ def _optimize_mp4_for_editor_in_place(
             crf = 18
         crf = max(0, min(51, crf))
 
-        preset = str(os.environ.get("APEX_VIDEO_EDITOR_PRESET", "veryfast") or "veryfast").strip()
+        preset = str(
+            os.environ.get("APEX_VIDEO_EDITOR_PRESET", "veryfast") or "veryfast"
+        ).strip()
         if not preset:
             preset = "veryfast"
 
@@ -254,8 +263,6 @@ def _optimize_mp4_for_editor_in_place(
         return True
     except Exception:
         return False
-
-
 
 
 @ray.remote(num_cpus=0.1)
@@ -646,7 +653,9 @@ def _remove_lora_from_manifest(
                     entry.get("url"),
                     entry.get("remote_source"),
                 )
-                if any(c == lora_name for c in entry_id_candidates if isinstance(c, str)):
+                if any(
+                    c == lora_name for c in entry_id_candidates if isinstance(c, str)
+                ):
                     removed = True
                     continue
                 new_loras.append(entry)
@@ -681,7 +690,9 @@ def _engine_pool_key(
     # Include a manifest fingerprint so edits (e.g. changing LoRAs) don't reuse a stale engine.
     try:
         st = os.stat(manifest_path)
-        manifest_fingerprint = {"mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))}
+        manifest_fingerprint = {
+            "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))
+        }
     except Exception:
         manifest_fingerprint = None
     payload = {
@@ -706,7 +717,12 @@ def _warm_weights_disabled() -> bool:
     for key in ("APEX_DISABLE_WARM_WEIGHTS", "APEX_FORCE_DISK_ONLY"):
         try:
             val = os.environ.get(key)
-            if val is not None and str(val).strip().lower() in {"1", "true", "yes", "on"}:
+            if val is not None and str(val).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
                 return True
         except Exception:
             pass
@@ -747,7 +763,9 @@ def warmup_engine_from_manifest(
 
         attention_type = None
         try:
-            attention_type = (selected_components or {}).get("attention", {}).get("name", None)
+            attention_type = (
+                (selected_components or {}).get("attention", {}).get("name", None)
+            )
         except Exception:
             attention_type = None
 
@@ -762,7 +780,7 @@ def warmup_engine_from_manifest(
 
         auto_mm = _bool_env("AUTO_MEMORY_MANAGEMENT", False)
 
-        engine_kwargs = (config.get("engine_kwargs", {}) or {})
+        engine_kwargs = config.get("engine_kwargs", {}) or {}
         input_kwargs = {
             "engine_type": engine_type,
             "yaml_path": manifest_path,
@@ -802,7 +820,9 @@ def warmup_engine_from_manifest(
                 return UniversalEngine(**input_kwargs)
 
             allow_pool = not _warm_weights_disabled()
-            engine, pooled = pool.acquire(engine_pool_key, _factory, allow_pool=allow_pool)
+            engine, pooled = pool.acquire(
+                engine_pool_key, _factory, allow_pool=allow_pool
+            )
 
             # Optional: load weights/components to avoid first-run stalls.
             # This can be expensive; keep it opt-in.
@@ -826,16 +846,24 @@ def warmup_engine_from_manifest(
                     except Exception:
                         warm_components = []
                 else:
-                    warm_components = [s.strip() for s in warm_components_raw.split(",") if s.strip()]
+                    warm_components = [
+                        s.strip() for s in warm_components_raw.split(",") if s.strip()
+                    ]
 
                 if warm_components:
                     try:
                         eng_impl = getattr(engine, "engine", None)
-                        comps_cfg = getattr(eng_impl, "config", {}).get("components", []) if eng_impl is not None else []
+                        comps_cfg = (
+                            getattr(eng_impl, "config", {}).get("components", [])
+                            if eng_impl is not None
+                            else []
+                        )
                         if eng_impl is not None and isinstance(comps_cfg, list):
                             eng_impl.load_components(comps_cfg, warm_components)
                     except Exception as e:
-                        logger.warning(f"Engine component warmup failed for key={engine_pool_key}: {e}")
+                        logger.warning(
+                            f"Engine component warmup failed for key={engine_pool_key}: {e}"
+                        )
 
             # Release back into pool for future runs.
             if pooled and engine_pool_key:
@@ -1561,7 +1589,11 @@ def download_unified(
                 try:
                     local_paths = getattr(lora_item, "local_paths", None)
                     if isinstance(local_paths, list) and local_paths:
-                        html_like = [p for p in local_paths if isinstance(p, str) and _file_looks_like_html(p)]
+                        html_like = [
+                            p
+                            for p in local_paths
+                            if isinstance(p, str) and _file_looks_like_html(p)
+                        ]
                         invalid_safetensors = [
                             p
                             for p in local_paths
@@ -1575,13 +1607,19 @@ def download_unified(
                             )
                             # Best-effort: clear any persisted resolution mapping
                             try:
-                                from src.utils.lora_resolution import delete_lora_resolution
+                                from src.utils.lora_resolution import (
+                                    delete_lora_resolution,
+                                )
 
-                                delete_lora_resolution(getattr(lora_item, "source", None) or source)
+                                delete_lora_resolution(
+                                    getattr(lora_item, "source", None) or source
+                                )
                             except Exception:
                                 pass
                             # Ensure manifest doesn't retain an entry (best-effort; should be empty at this point)
-                            removed = _remove_lora_from_manifest(lora_name or source, manifest_id)
+                            removed = _remove_lora_from_manifest(
+                                lora_name or source, manifest_id
+                            )
                             if not removed:
                                 _remove_lora_from_manifest(source, manifest_id)
                             reason = (
@@ -1620,14 +1658,18 @@ def download_unified(
                         "Ensuring LoRA is not present in manifest."
                     )
                     # Best-effort: remove by name first, then by source
-                    removed = _remove_lora_from_manifest(lora_name or source, manifest_id)
+                    removed = _remove_lora_from_manifest(
+                        lora_name or source, manifest_id
+                    )
                     if not removed:
                         _remove_lora_from_manifest(source, manifest_id)
                     # Best-effort: clear any persisted resolution mapping
                     try:
                         from src.utils.lora_resolution import delete_lora_resolution
 
-                        delete_lora_resolution(getattr(lora_item, "source", None) or source)
+                        delete_lora_resolution(
+                            getattr(lora_item, "source", None) or source
+                        )
                     except Exception:
                         pass
                     send_progress(
@@ -1667,7 +1709,9 @@ def download_unified(
                 try:
                     from src.utils.lora_resolution import set_lora_resolution
 
-                    set_lora_resolution(source, list(getattr(lora_item, "local_paths", []) or []))
+                    set_lora_resolution(
+                        source, list(getattr(lora_item, "local_paths", []) or [])
+                    )
                 except Exception:
                     pass
                 # Explicitly mark the end of the download phase at 75%
@@ -1707,7 +1751,9 @@ def download_unified(
 
                 # If verification explicitly failed, surface an error and remove the LoRA
                 if verified is False:
-                    removed = _remove_lora_from_manifest(lora_name or source, manifest_id)
+                    removed = _remove_lora_from_manifest(
+                        lora_name or source, manifest_id
+                    )
                     if not removed:
                         _remove_lora_from_manifest(source, manifest_id)
                     _cleanup_lora_artifacts_if_remote(lora_item)
@@ -2017,7 +2063,7 @@ def _execute_preprocessor(
         except (ValueError, AttributeError):
             # Fallback if path conversion fails
             preview_url = None
-            
+
         results_dict = {
             "Complete": "Complete",
             "result_path": result_path,
@@ -2028,10 +2074,19 @@ def _execute_preprocessor(
             "job_id": job_id,
             "start_frame": start_frame,
         }
-        
+
         logger.info(f"{results_dict}")
-        
-        send_progress(1.0, "Complete", {"status": "complete", "result_path": result_path, "preview_url": preview_url, "type": media_type})
+
+        send_progress(
+            1.0,
+            "Complete",
+            {
+                "status": "complete",
+                "result_path": result_path,
+                "preview_url": preview_url,
+                "type": media_type,
+            },
+        )
         return {
             "job_id": job_id,
             "status": "complete",
@@ -2094,7 +2149,9 @@ def _execute_preprocessor(
             if media_type == "video" and isinstance(result_path, str):
                 fps_hint = None
                 try:
-                    fps_hint = int(round(float((cache._video_info or {}).get("fps") or 0)))
+                    fps_hint = int(
+                        round(float((cache._video_info or {}).get("fps") or 0))
+                    )
                 except Exception:
                     fps_hint = None
                 _optimize_mp4_for_editor_in_place(result_path, fps=fps_hint)
@@ -2128,7 +2185,7 @@ def _execute_preprocessor(
                 )
         except Exception:
             pass
-        
+
         # Construct preview URL for frontend access
         preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
         try:
@@ -2137,7 +2194,7 @@ def _execute_preprocessor(
         except (ValueError, AttributeError):
             # Fallback if path conversion fails
             preview_url = None
-            
+
         results_dict = {
             "Complete": "Complete",
             "result_path": result_path,
@@ -2151,8 +2208,17 @@ def _execute_preprocessor(
             "kwargs": kwargs,
         }
         logger.info(f"{results_dict}")
-        
-        send_progress(1.0, "Complete", {"status": "complete", "result_path": result_path, "preview_url": preview_url, "type": cache.type})
+
+        send_progress(
+            1.0,
+            "Complete",
+            {
+                "status": "complete",
+                "result_path": result_path,
+                "preview_url": preview_url,
+                "type": cache.type,
+            },
+        )
 
         return {
             "status": "complete",
@@ -2302,7 +2368,7 @@ def run_engine_from_manifest(
             model_type = model_type[0] if model_type else None
 
         attention_type = selected_components.pop("attention", {}).get("name", None)
-        
+
         def _bool_env(name: str, default: bool = True) -> bool:
             try:
                 v = os.environ.get(name)
@@ -2333,7 +2399,6 @@ def run_engine_from_manifest(
             attention_type=attention_type,
             auto_memory_management=_bool_env("AUTO_MEMORY_MANAGEMENT", False),
         )
-        
 
         def _factory():
             return UniversalEngine(**input_kwargs)
@@ -2471,7 +2536,12 @@ def run_engine_from_manifest(
         safe_job_id = _safe_fs_component(job_id, fallback="job")
         if folder_uuid:
             safe_folder_uuid = _safe_fs_component(folder_uuid, fallback="folder")
-            job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / safe_folder_uuid / safe_job_id
+            job_dir = (
+                Path(DEFAULT_CACHE_PATH)
+                / "engine_results"
+                / safe_folder_uuid
+                / safe_job_id
+            )
         else:
             job_dir = Path(DEFAULT_CACHE_PATH) / "engine_results" / safe_job_id
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -2683,7 +2753,8 @@ def run_engine_from_manifest(
                         try:
                             try:
                                 engine_gop = int(
-                                    os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1") or "1"
+                                    os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1")
+                                    or "1"
                                 )
                             except Exception:
                                 engine_gop = 1
@@ -2742,7 +2813,6 @@ def run_engine_from_manifest(
                 logger.error(f"Failed to save output: {save_err}")
                 raise
             return result_path, media_type
-
 
         total_steps = max(1, len(preprocessor_jobs) + 1)
 
@@ -2817,7 +2887,9 @@ def run_engine_from_manifest(
         # Optional: limit how many *preview* saves we do per run (final result always saves).
         # Useful for test-suite runs to avoid saving a frame on every denoising step.
         try:
-            _max_preview_saves = int(os.environ.get("APEX_RENDER_STEP_MAX_SAVES", "0") or "0")
+            _max_preview_saves = int(
+                os.environ.get("APEX_RENDER_STEP_MAX_SAVES", "0") or "0"
+            )
         except Exception:
             _max_preview_saves = 0
 
@@ -2830,7 +2902,11 @@ def run_engine_from_manifest(
                 idx = step_counter["i"]
                 step_counter["i"] = idx + 1
                 # Enforce preview-save limit (do not block final outputs).
-                if not is_result and _max_preview_saves > 0 and idx >= _max_preview_saves:
+                if (
+                    not is_result
+                    and _max_preview_saves > 0
+                    and idx >= _max_preview_saves
+                ):
                     return None, None
                 # Persist preview to cache and notify over websocket with metadata only
                 result_path, media_type = save_output(
@@ -2846,12 +2922,14 @@ def run_engine_from_manifest(
                     # Construct preview URL for frontend access
                     engine_results_base = Path(DEFAULT_CACHE_PATH) / "engine_results"
                     try:
-                        relative_path = Path(result_path).relative_to(engine_results_base)
+                        relative_path = Path(result_path).relative_to(
+                            engine_results_base
+                        )
                         preview_url = f"/files/engine_results/{relative_path}"
                     except (ValueError, AttributeError):
                         # Fallback if path conversion fails
                         preview_url = None
-                    
+
                     # Send an update that does not overwrite progress (progress=None)
                     logger.info(
                         f"Sending preview websocket update at step {idx} with result path {result_path} and media type {media_type}"
@@ -2907,7 +2985,7 @@ def run_engine_from_manifest(
                 except (ValueError, AttributeError):
                     # Fallback if path conversion fails
                     preview_url = None
-                
+
                 logger.info(
                     f"Sending preview websocket update at step {idx} with result path {result_path} and media type {media_type}"
                 )
@@ -2941,7 +3019,6 @@ def run_engine_from_manifest(
                 engine_stage_start + bounded * engine_stage_span, message, metadata
             )
 
-        
         # Persist a snapshot of the invocation into the structured `runs` directory
 
         render_func = (
@@ -2949,7 +3026,7 @@ def run_engine_from_manifest(
             if model_type.lower() == "ovi" or engine_type.lower() == "ltx2"
             else render_on_step_callback
         )
-    
+
         if os.environ.get("ENABLE_PERSIST_RUN_CONFIG", "true") == "true":
             _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
 
@@ -2984,7 +3061,11 @@ def run_engine_from_manifest(
 
         # OVI models return a tuple of (video_tensor, audio_numpy). Use a dedicated
         # saver so we correctly embed the generated audio into the MP4 output.
-        if isinstance(model_type, str) and model_type.lower() == "ovi" or model_type.lower() == "ti2v":
+        if (
+            isinstance(model_type, str)
+            and model_type.lower() == "ovi"
+            or model_type.lower() == "ti2v"
+        ):
             result_path, media_type = render_func(
                 output,
                 is_result=True,
@@ -3112,8 +3193,10 @@ def run_frame_interpolation(
         import subprocess
         import shutil
 
-        job_dir = Path(DEFAULT_CACHE_PATH) / "postprocessor_results" / _safe_fs_component(
-            job_id, fallback="job"
+        job_dir = (
+            Path(DEFAULT_CACHE_PATH)
+            / "postprocessor_results"
+            / _safe_fs_component(job_id, fallback="job")
         )
         job_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3126,7 +3209,9 @@ def run_frame_interpolation(
         # Post-pass: generate a seek/editor-friendly MP4 before we mux original audio.
         try:
             try:
-                engine_gop = int(os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1") or "1")
+                engine_gop = int(
+                    os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1") or "1"
+                )
             except Exception:
                 engine_gop = 1
             _optimize_mp4_for_editor_in_place(
@@ -3184,13 +3269,23 @@ def run_frame_interpolation(
         except (ValueError, AttributeError):
             # Fallback if path conversion fails
             preview_url = None
-        
+
         send_update(
             1.0,
             "Complete",
-            {"status": "complete", "result_path": final_out_path, "preview_url": preview_url, "type": "video"},
+            {
+                "status": "complete",
+                "result_path": final_out_path,
+                "preview_url": preview_url,
+                "type": "video",
+            },
         )
-        return {"status": "complete", "result_path": final_out_path, "type": "video", "preview_url": preview_url}
+        return {
+            "status": "complete",
+            "result_path": final_out_path,
+            "type": "video",
+            "preview_url": preview_url,
+        }
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(tb)

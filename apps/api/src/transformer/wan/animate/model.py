@@ -844,15 +844,22 @@ class WanTransformerBlock(nn.Module):
         self._ff_chunk_dim: int = 1
 
         # Chunked norms (disabled by default). These mainly mitigate FP32LayerNorm fp32-copy spikes.
-        self._mod_norm_chunk_size: Optional[int] = None  # used for modulated norms (norm1/norm3 + modulation)
-        self._norm_chunk_size: Optional[int] = None  # used for plain norms (e.g., norm2)
+        self._mod_norm_chunk_size: Optional[int] = (
+            None  # used for modulated norms (norm1/norm3 + modulation)
+        )
+        self._norm_chunk_size: Optional[int] = (
+            None  # used for plain norms (e.g., norm2)
+        )
 
     def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
         self._ff_chunk_size = chunk_size
         self._ff_chunk_dim = dim
 
     def set_chunk_norms(
-        self, *, modulated_norm_chunk_size: Optional[int] = None, norm_chunk_size: Optional[int] = None
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
     ) -> None:
         """
         Enable/disable chunking for norm operations inside the block.
@@ -879,8 +886,10 @@ class WanTransformerBlock(nn.Module):
         if temb.ndim == 4:
             # temb: batch_size, seq_len, 6, inner_dim (wan2.2 ti2v)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-                self.scale_shift_table.unsqueeze(0) + temb.float()
-            ).to(hs_dtype).chunk(6, dim=2)
+                (self.scale_shift_table.unsqueeze(0) + temb.float())
+                .to(hs_dtype)
+                .chunk(6, dim=2)
+            )
             # batch_size, seq_len, 1, inner_dim
             shift_msa = shift_msa.squeeze(2)
             scale_msa = scale_msa.squeeze(2)
@@ -891,8 +900,8 @@ class WanTransformerBlock(nn.Module):
         else:
             # temb: batch_size, 6, inner_dim (wan2.1/wan2.2 14B)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-                self.scale_shift_table + temb.float()
-            ).to(hs_dtype).chunk(6, dim=1)
+                (self.scale_shift_table + temb.float()).to(hs_dtype).chunk(6, dim=1)
+            )
 
         # 1. Self-attention
         norm_hidden_states = _chunked_modulated_norm(
@@ -1190,7 +1199,9 @@ class WanAnimateTransformer3DModel(
 
         p = self._CHUNKING_PROFILES[profile_name]
         self._chunking_profile_name = profile_name
-        self._out_modulated_norm_chunk_size = p.get("out_modulated_norm_chunk_size", None)
+        self._out_modulated_norm_chunk_size = p.get(
+            "out_modulated_norm_chunk_size", None
+        )
 
         # Apply to blocks.
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
@@ -1332,7 +1343,6 @@ class WanAnimateTransformer3DModel(
         pad_face = torch.zeros_like(motion_vec[:, :1])
         motion_vec = torch.cat([pad_face, motion_vec], dim=1)
 
-
         for block_idx, block in enumerate(self.blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(
@@ -1366,8 +1376,10 @@ class WanAnimateTransformer3DModel(
         # Compute scale/shift in fp32 for numerical stability, then cast to hidden_states dtype.
         hs_dtype = hidden_states.dtype
         shift, scale = (
-            self.scale_shift_table.to(temb.device) + temb.unsqueeze(1)
-        ).to(hs_dtype).chunk(2, dim=1)
+            (self.scale_shift_table.to(temb.device) + temb.unsqueeze(1))
+            .to(hs_dtype)
+            .chunk(2, dim=1)
+        )
 
         # Move the shift and scale tensors to the same device as hidden_states.
         # When using multi-GPU inference via accelerate these will be on the

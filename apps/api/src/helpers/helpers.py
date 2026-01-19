@@ -7,7 +7,6 @@ from loguru import logger
 from src.register import ClassRegister
 from src.helpers.base import BaseHelper
 
-
 helpers = ClassRegister()
 
 

@@ -15,7 +15,7 @@ import warnings
 import torch
 from torch.utils.checkpoint import checkpoint
 import math
-import numpy as np 
+import numpy as np
 import importlib.util
 import os
 
@@ -59,6 +59,7 @@ except ImportError:
 
 try:
     from torch.nn.attention.flex_attention import flex_attention
+
     # IMPORTANT: compiling at import-time can be unstable on some backends (notably MPS).
     # Keep this opt-in / CUDA-only.
     if torch.cuda.is_available():
@@ -85,7 +86,6 @@ _HAS_KERNELS = importlib.util.find_spec("kernels") is not None
 _HAS_MPS = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
 _metal_flash_sdpa = None
 _metal_flash_sdpa_load_error = None
-
 
 
 def _get_metal_flash_sdpa():
@@ -207,7 +207,9 @@ def sdpa_streaming(
             # Accept [B, S_q, S_k] or [1, S_q, S_k]
             m = m.unsqueeze(1)  # [B,1,S_q,S_k]
         elif m.ndim != 4:
-            raise ValueError(f"Unsupported attn_mask shape: {getattr(m, 'shape', None)}")
+            raise ValueError(
+                f"Unsupported attn_mask shape: {getattr(m, 'shape', None)}"
+            )
 
         Bm, Hm, Smq, Smk = m.shape
         if (Smq, Smk) != (S_q, S_k):
@@ -312,12 +314,22 @@ def sdpa_streaming(
             m_new_finite = torch.isfinite(m_new)
             alpha = torch.where(
                 m_new_finite,
-                torch.exp(torch.where(torch.isfinite(m_i), m_i - m_new, torch.full_like(m_i, float("-inf")))),
+                torch.exp(
+                    torch.where(
+                        torch.isfinite(m_i),
+                        m_i - m_new,
+                        torch.full_like(m_i, float("-inf")),
+                    )
+                ),
                 torch.zeros_like(m_i),
             )
             beta = torch.where(
                 m_new_finite,
-                torch.exp(torch.where(valid, m_ij - m_new, torch.full_like(m_ij, float("-inf")))),
+                torch.exp(
+                    torch.where(
+                        valid, m_ij - m_new, torch.full_like(m_ij, float("-inf"))
+                    )
+                ),
                 torch.zeros_like(m_ij),
             )
 
@@ -363,9 +375,7 @@ def sdpa(
     capability = _cuda_capability(q.device)
     if attn_mask is None and q.is_cuda and capability >= (8, 0):
         with torch.backends.cuda.sdp_kernel(
-            enable_flash=True, 
-            enable_math=False, 
-            enable_mem_efficient=True
+            enable_flash=True, enable_math=False, enable_mem_efficient=True
         ):
             return F.scaled_dot_product_attention(
                 q,
@@ -432,7 +442,7 @@ def metal_flash(
     Bq, Hq, Sq, Dq = q.shape
     Bk, Hk, Sk, Dk = k.shape
     Bv, Hv, Sv, Dv = v.shape
-    
+
     # Supported head dimensions for Metal Flash SDPA kernel
     _METAL_FLASH_SUPPORTED_HEAD_DIMS = {32, 64, 72, 80, 96, 128, 256}
     if Dq not in _METAL_FLASH_SUPPORTED_HEAD_DIMS:
@@ -442,7 +452,7 @@ def metal_flash(
             stacklevel=2,
         )
         return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
-    
+
     if not (Dq == Dk == Dv):
         raise ValueError("Head dimensions must match across q/k/v")
     if not (Bk == Bv and Sk == Sv and Hk == Hv):
@@ -471,8 +481,7 @@ def metal_flash(
     v_flat = v.permute(0, 2, 1, 3).reshape(Bk * Sk, Hk, Dq)
 
     # MPS stability: sync is opt-in/heuristic (Metal aborts cannot be caught).
-    #torch.mps.synchronize()
-    
+    # torch.mps.synchronize()
 
     out_flat = kernel.flash_attn_varlen_func(
         q=q_flat,
@@ -535,7 +544,9 @@ def metal_flash_varlen(
         raise ValueError("metal_flash-varlen backend requires MPS tensors.")
 
     if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
-        raise ValueError("metal_flash-varlen expects packed inputs with shape (T, H, D)")
+        raise ValueError(
+            "metal_flash-varlen expects packed inputs with shape (T, H, D)"
+        )
 
     Tq, Hq, Dq = q.shape
     Tk, Hk, Dk = k.shape
@@ -552,7 +563,9 @@ def metal_flash_varlen(
             stacklevel=2,
         )
         return sdpa_varlen(
-            q, k, v,
+            q,
+            k,
+            v,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
             max_seqlen_q=max_seqlen_q,
@@ -563,7 +576,9 @@ def metal_flash_varlen(
         )
 
     if (cu_seqlens_q is None) ^ (cu_seqlens_k is None):
-        raise ValueError("cu_seqlens_q and cu_seqlens_k must be provided together, or both omitted.")
+        raise ValueError(
+            "cu_seqlens_q and cu_seqlens_k must be provided together, or both omitted."
+        )
     if cu_seqlens_q is None and cu_seqlens_k is None:
         cu_seqlens_q = torch.tensor([0, int(Tq)], device=q.device, dtype=torch.int32)
         cu_seqlens_k = torch.tensor([0, int(Tk)], device=q.device, dtype=torch.int32)
@@ -926,7 +941,9 @@ def flash_attention_turing(
     if softmax_scale is not None:
         ref = 1.0 / math.sqrt(Dq)
         if abs(float(softmax_scale) - float(ref)) > 1e-6:
-            return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
+            return sdpa(
+                q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs
+            )
 
     start_dtype = q.dtype
 
@@ -945,7 +962,7 @@ def flash_attention_turing(
         # The kernel returns a tuple; first element is the output.
         if not torch.is_tensor(out):
             out = out[0]
-        
+
     except Exception:
         # Kernel is fragile; fall back safely.
         return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
@@ -1117,7 +1134,10 @@ def flash_attention_varlen(
 
 @attention_register(
     "flash",
-    available=(flash_attn_func is not None or (flash_attn_turing_fwd is not None and _is_turing_cuda())),
+    available=(
+        flash_attn_func is not None
+        or (flash_attn_turing_fwd is not None and _is_turing_cuda())
+    ),
 )
 def flash_attention(
     q,
@@ -1150,13 +1170,17 @@ def flash_attention(
                 **kwargs,
             )
         else:
-            return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
+            return sdpa(
+                q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs
+            )
 
     # Non-Turing / unsupported shapes -> existing flash-attn2 paths when installed.
     if cu_seqlens_q is None or cu_seqlens_k is None:
         if flash_attn_func is None:
             # Fall back gracefully when flash-attn2 is unavailable.
-            return sdpa(q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs)
+            return sdpa(
+                q, k, v, is_causal=is_causal, softmax_scale=softmax_scale, **kwargs
+            )
         return flash_attention_padded(
             q,
             k,
@@ -1476,12 +1500,16 @@ def xformers_attention(
         attention_bias = kwargs.get("attn_bias", None)
     attention_bias = _coerce_to_xformers_attention_bias(attention_bias)
     if attention_bias is not None:
-        attn_bias = attention_bias if attn_bias is None else (attn_bias & attention_bias)
+        attn_bias = (
+            attention_bias if attn_bias is None else (attn_bias & attention_bias)
+        )
 
     # Apply attention mask (try to convert tensor masks into AttentionBias when possible).
     attn_mask_bias = _coerce_to_xformers_attention_bias(attn_mask)
     if attn_mask_bias is not None:
-        attn_bias = attn_mask_bias if attn_bias is None else (attn_bias & attn_mask_bias)
+        attn_bias = (
+            attn_mask_bias if attn_bias is None else (attn_bias & attn_mask_bias)
+        )
 
     output = xformers.ops.memory_efficient_attention(
         q, k, v, attn_bias=attn_bias, p=dropout_p, scale=softmax_scale
@@ -1491,14 +1519,13 @@ def xformers_attention(
     return output.transpose(1, 2)
 
 
-
-
-
 def dynamic_slice(x, starts, sizes):
     # start_indices[i] = clamp(start_indices[i], 0, operand.dimension_size[i] - size_indices[i])
     starts = [np.clip(starts[i], 0, x.shape[i] - sizes[i]) for i in range(len(starts))]
     for i, (start, size) in enumerate(zip(starts, sizes)):
-        x = torch.index_select(x, i, torch.tensor(range(start, start + size), device=x.device))
+        x = torch.index_select(
+            x, i, torch.tensor(range(start, start + size), device=x.device)
+        )
     return x
 
 
@@ -1517,12 +1544,20 @@ def scan(f, init, xs, length=None):
         ys.append(y)
     return carry, torch.stack(ys)
 
-def _query_chunk_attention(query_idx, query, key, value,
-                           mask, bias, key_chunk_size=4096,
-                           mask_calc_fn=None,
-                           bias_calc_fn=None,
-                           weights_calc_fn=None,
-                           calc_fn_data=None):
+
+def _query_chunk_attention(
+    query_idx,
+    query,
+    key,
+    value,
+    mask,
+    bias,
+    key_chunk_size=4096,
+    mask_calc_fn=None,
+    bias_calc_fn=None,
+    weights_calc_fn=None,
+    calc_fn_data=None,
+):
     num_kv, num_heads, k_features = key.shape[-3:]
     v_features = value.shape[-1]
     num_q = query.shape[-3]
@@ -1530,58 +1565,87 @@ def _query_chunk_attention(query_idx, query, key, value,
     query = query / math.sqrt(k_features)
 
     def summarize_chunk(key_idx, query, key, value, mask, bias):
-        attn_weights = torch.einsum('...qhd,...khd->...qhk', query, key)
+        attn_weights = torch.einsum("...qhd,...khd->...qhk", query, key)
         if bias_calc_fn is not None:
             bias = bias_calc_fn(query_idx, key_idx, bias, attn_weights, calc_fn_data)
         if bias is not None:
-            bias = torch.einsum('...hqk->...qhk', bias)
+            bias = torch.einsum("...hqk->...qhk", bias)
             attn_weights = attn_weights + bias
         if mask_calc_fn is not None:
             mask = mask_calc_fn(query_idx, key_idx, mask, attn_weights, calc_fn_data)
         if mask is not None:
             big_neg = torch.finfo(attn_weights.dtype).min
             big_neg = torch.tensor(big_neg, device=mask.device, dtype=torch.float32)
-            mask = torch.einsum('...hqk->...qhk', mask)
+            mask = torch.einsum("...hqk->...qhk", mask)
             attn_weights = torch.where(mask, attn_weights, big_neg)
         if weights_calc_fn is not None:
-            attn_weights = weights_calc_fn(query_idx, key_idx, attn_weights, calc_fn_data)
+            attn_weights = weights_calc_fn(
+                query_idx, key_idx, attn_weights, calc_fn_data
+            )
         max_score, _ = torch.max(attn_weights, -1, keepdim=True)
         max_score = max_score.detach()
         exp_weights = torch.exp(attn_weights - max_score)
-        exp_values = torch.einsum('...vhf,...qhv->...qhf', value, exp_weights)
-        max_score = torch.einsum('...qhk->...qh', max_score)
+        exp_values = torch.einsum("...vhf,...qhv->...qhf", value, exp_weights)
+        max_score = torch.einsum("...qhk->...qh", max_score)
         return exp_values, exp_weights.sum(dim=-1), max_score
 
     def chunk_scanner(chunk_idx):
-        key_chunk = dynamic_slice(key, tuple([0] * (key.ndim - 3)) + (chunk_idx, 0, 0),
-                                  tuple(key.shape[:-3]) + (key_chunk_size, num_heads, k_features))
-        value_chunk = dynamic_slice(value, tuple([0] * (value.ndim - 3)) + (chunk_idx, 0, 0),
-                                    tuple(value.shape[:-3]) + (key_chunk_size, num_heads, v_features))
+        key_chunk = dynamic_slice(
+            key,
+            tuple([0] * (key.ndim - 3)) + (chunk_idx, 0, 0),
+            tuple(key.shape[:-3]) + (key_chunk_size, num_heads, k_features),
+        )
+        value_chunk = dynamic_slice(
+            value,
+            tuple([0] * (value.ndim - 3)) + (chunk_idx, 0, 0),
+            tuple(value.shape[:-3]) + (key_chunk_size, num_heads, v_features),
+        )
 
         if bias is None:
             bias_chunk = None
         elif bias.shape[-1] == 1:
             bias_chunk = bias
         elif bias.shape[-1] == num_kv:
-            bias_chunk = dynamic_slice(bias, tuple([0] * (bias.ndim - 3)) + (0, 0, chunk_idx),
-                                       tuple(bias.shape[:-3]) + (bias.shape[-3], bias.shape[-2], key_chunk_size))
+            bias_chunk = dynamic_slice(
+                bias,
+                tuple([0] * (bias.ndim - 3)) + (0, 0, chunk_idx),
+                tuple(bias.shape[:-3])
+                + (bias.shape[-3], bias.shape[-2], key_chunk_size),
+            )
         else:
-            raise TypeError(f'bias.shape[-1] == {bias.shape[-1]} must broadcast with key.shape[-3] == {num_kv}')
+            raise TypeError(
+                f"bias.shape[-1] == {bias.shape[-1]} must broadcast with key.shape[-3] == {num_kv}"
+            )
 
         if mask is None:
             mask_chunk = None
         elif mask.shape[-1] == 1:
             mask_chunk = mask
         elif mask.shape[-1] == num_kv:
-            mask_chunk = dynamic_slice(mask, tuple([0] * (mask.ndim - 3)) + (0, 0, chunk_idx),
-                                       tuple(mask.shape[:-3]) + (mask.shape[-3], mask.shape[-2], key_chunk_size))
+            mask_chunk = dynamic_slice(
+                mask,
+                tuple([0] * (mask.ndim - 3)) + (0, 0, chunk_idx),
+                tuple(mask.shape[:-3])
+                + (mask.shape[-3], mask.shape[-2], key_chunk_size),
+            )
         else:
-            raise TypeError(f'bias.shape[-1] == {bias.shape[-1]} must broadcast with key.shape[-3] == {num_kv}')
+            raise TypeError(
+                f"bias.shape[-1] == {bias.shape[-1]} must broadcast with key.shape[-3] == {num_kv}"
+            )
 
-        return checkpoint(summarize_chunk, chunk_idx, query, key_chunk, value_chunk, mask_chunk, bias_chunk)
+        return checkpoint(
+            summarize_chunk,
+            chunk_idx,
+            query,
+            key_chunk,
+            value_chunk,
+            mask_chunk,
+            bias_chunk,
+        )
 
     chunk_values, chunk_weights, chunk_max = map_pt(
-        chunk_scanner, xs=torch.arange(0, num_kv, key_chunk_size))
+        chunk_scanner, xs=torch.arange(0, num_kv, key_chunk_size)
+    )
 
     global_max, _ = torch.max(chunk_max, 0, keepdim=True)
     max_diffs = torch.exp(chunk_max - global_max)
@@ -1594,56 +1658,61 @@ def _query_chunk_attention(query_idx, query, key, value,
 
 
 @attention_register("efficient_dot_product_attention", available=True)
-def efficient_dot_product_attention(query, key, value,
-                                    mask=None, bias=None,
-                                    query_chunk_size=1024,
-                                    key_chunk_size=4096,
-                                    bias_calc_fn=None,
-                                    mask_calc_fn=None,
-                                    weights_calc_fn=None,
-                                    calc_fn_data=None):
+def efficient_dot_product_attention(
+    query,
+    key,
+    value,
+    mask=None,
+    bias=None,
+    query_chunk_size=1024,
+    key_chunk_size=4096,
+    bias_calc_fn=None,
+    mask_calc_fn=None,
+    weights_calc_fn=None,
+    calc_fn_data=None,
+):
     """Computes efficient dot-product attention given query, key, and value.
-      This is efficient version of attention presented in
-      https://arxiv.org/abs/2112.05682v2 which comes with O(sqrt(n)) memory requirements.
-      Note: query, key, value needn't have any batch dimensions.
-      Args:
-        query: queries for calculating attention with shape of
-          `[batch..., q_length, num_heads, qk_depth_per_head]`.
-        key: keys for calculating attention with shape of
-          `[batch..., kv_length, num_heads, qk_depth_per_head]`.
-        value: values to be used in attention with shape of
-          `[batch..., kv_length, num_heads, v_depth_per_head]`.
-        bias: bias for the attention weights. This should be broadcastable to the
-          shape `[batch..., num_heads, q_length, kv_length]`.
-          This can be used for incorporating padding masks, proximity bias, etc.
-        mask: mask for the attention weights. This should be broadcastable to the
-          shape `[batch..., num_heads, q_length, kv_length]`.
-          Attention weights are masked out if their corresponding mask value
-          is `False`.
-        query_chunk_size: int: query chunks size
-        key_chunk_size: int: key chunks size
-        bias_calc_fn: a bias calculation callback for each chunk, of form
-          `(q_offset, k_offset, bias_chunk, attn_weights, calc_fn_data) -> bias`.
-          This can be used for incorporating causal masks, padding masks,
-          proximity bias, etc.
-        mask_calc_fn: a mask calculation callback for each chunk, of form
-          `(q_offset, k_offset, mask_chunk, attn_weights, calc_fn_data) -> mask`.
-          This can be used for incorporating causal or other large masks.
-          Attention weights are masked out if their corresponding mask value
-          is `False`.
-        weights_calc_fn: a general attn_weights callback for each chunk, of form
-          `(q_offset, k_offset, attn_weights, calc_fn_data) -> attn_weights`.
-          attn_weights has shape of
-          `[batch..., q_chunk_size, num_heads, k_chunk_size]`.
-          This can be used to implement complex weights processing in a memory
-          efficient way.
-        calc_fn_data: optional pure data to pass to each per-chunk call of
-          bias_calc_fn, mask_calc_fn, and weights_calc_fn.
-        weights_calc_data: pure_data to pass with each call to weights_calc_fn
-      Returns:
-        Output of shape `[batch..., q_length, num_heads, v_depth_per_head]`.
-      """
-    # transpose 
+    This is efficient version of attention presented in
+    https://arxiv.org/abs/2112.05682v2 which comes with O(sqrt(n)) memory requirements.
+    Note: query, key, value needn't have any batch dimensions.
+    Args:
+      query: queries for calculating attention with shape of
+        `[batch..., q_length, num_heads, qk_depth_per_head]`.
+      key: keys for calculating attention with shape of
+        `[batch..., kv_length, num_heads, qk_depth_per_head]`.
+      value: values to be used in attention with shape of
+        `[batch..., kv_length, num_heads, v_depth_per_head]`.
+      bias: bias for the attention weights. This should be broadcastable to the
+        shape `[batch..., num_heads, q_length, kv_length]`.
+        This can be used for incorporating padding masks, proximity bias, etc.
+      mask: mask for the attention weights. This should be broadcastable to the
+        shape `[batch..., num_heads, q_length, kv_length]`.
+        Attention weights are masked out if their corresponding mask value
+        is `False`.
+      query_chunk_size: int: query chunks size
+      key_chunk_size: int: key chunks size
+      bias_calc_fn: a bias calculation callback for each chunk, of form
+        `(q_offset, k_offset, bias_chunk, attn_weights, calc_fn_data) -> bias`.
+        This can be used for incorporating causal masks, padding masks,
+        proximity bias, etc.
+      mask_calc_fn: a mask calculation callback for each chunk, of form
+        `(q_offset, k_offset, mask_chunk, attn_weights, calc_fn_data) -> mask`.
+        This can be used for incorporating causal or other large masks.
+        Attention weights are masked out if their corresponding mask value
+        is `False`.
+      weights_calc_fn: a general attn_weights callback for each chunk, of form
+        `(q_offset, k_offset, attn_weights, calc_fn_data) -> attn_weights`.
+        attn_weights has shape of
+        `[batch..., q_chunk_size, num_heads, k_chunk_size]`.
+        This can be used to implement complex weights processing in a memory
+        efficient way.
+      calc_fn_data: optional pure data to pass to each per-chunk call of
+        bias_calc_fn, mask_calc_fn, and weights_calc_fn.
+      weights_calc_data: pure_data to pass with each call to weights_calc_fn
+    Returns:
+      Output of shape `[batch..., q_length, num_heads, v_depth_per_head]`.
+    """
+    # transpose
     query = query.transpose(1, 2)
     key = key.transpose(1, 2)
     value = value.transpose(1, 2)
@@ -1651,34 +1720,64 @@ def efficient_dot_product_attention(query, key, value,
     num_kv = key.shape[-3]
 
     def chunk_scanner(chunk_idx, _):
-        query_chunk = dynamic_slice(query, tuple([0] * (query.ndim - 3)) + (chunk_idx, 0, 0),
-                                    tuple(query.shape[:-3]) + (min(query_chunk_size, num_q), num_heads, q_features))
+        query_chunk = dynamic_slice(
+            query,
+            tuple([0] * (query.ndim - 3)) + (chunk_idx, 0, 0),
+            tuple(query.shape[:-3])
+            + (min(query_chunk_size, num_q), num_heads, q_features),
+        )
 
         if mask is None:
             mask_chunk = None
         elif mask.shape[-2] == 1:
             mask_chunk = mask
         elif mask.shape[-2] == num_q:
-            mask_chunk = dynamic_slice(mask, tuple([0] * (mask.ndim - 3)) + (0, chunk_idx, 0),
-                                       tuple(mask.shape[:-3]) + (mask.shape[-3], min(query_chunk_size, num_q), mask.shape[-1]))
+            mask_chunk = dynamic_slice(
+                mask,
+                tuple([0] * (mask.ndim - 3)) + (0, chunk_idx, 0),
+                tuple(mask.shape[:-3])
+                + (mask.shape[-3], min(query_chunk_size, num_q), mask.shape[-1]),
+            )
         else:
-            raise TypeError(f'mask.shape[-2] == {mask.shape[-2]} must broadcast with query.shape[-3] == {num_q}')
+            raise TypeError(
+                f"mask.shape[-2] == {mask.shape[-2]} must broadcast with query.shape[-3] == {num_q}"
+            )
 
         if bias is None:
             bias_chunk = None
         elif bias.shape[-2] == 1:
             bias_chunk = bias
         elif bias.shape[-2] == num_q:
-            bias_chunk = dynamic_slice(bias, tuple([0] * (bias.ndim - 3)) + (0, chunk_idx, 0),
-                                       tuple(bias.shape[:-3]) + (bias.shape[-3], min(query_chunk_size, num_q), bias.shape[-1]))
+            bias_chunk = dynamic_slice(
+                bias,
+                tuple([0] * (bias.ndim - 3)) + (0, chunk_idx, 0),
+                tuple(bias.shape[:-3])
+                + (bias.shape[-3], min(query_chunk_size, num_q), bias.shape[-1]),
+            )
         else:
-            raise TypeError(f'bias.shape[-2] == {bias.shape[-2]} must broadcast with query.shape[-3] == {num_q}')
-        return (chunk_idx + query_chunk_size,
-                _query_chunk_attention(chunk_idx, query_chunk, key, value, mask_chunk, bias_chunk, key_chunk_size=key_chunk_size,
-                                       bias_calc_fn=bias_calc_fn, mask_calc_fn=mask_calc_fn,
-                                       weights_calc_fn=weights_calc_fn, calc_fn_data=calc_fn_data))
+            raise TypeError(
+                f"bias.shape[-2] == {bias.shape[-2]} must broadcast with query.shape[-3] == {num_q}"
+            )
+        return (
+            chunk_idx + query_chunk_size,
+            _query_chunk_attention(
+                chunk_idx,
+                query_chunk,
+                key,
+                value,
+                mask_chunk,
+                bias_chunk,
+                key_chunk_size=key_chunk_size,
+                bias_calc_fn=bias_calc_fn,
+                mask_calc_fn=mask_calc_fn,
+                weights_calc_fn=weights_calc_fn,
+                calc_fn_data=calc_fn_data,
+            ),
+        )
 
-    _, res = scan(chunk_scanner, init=0, xs=None, length=math.ceil(num_q / query_chunk_size))
+    _, res = scan(
+        chunk_scanner, init=0, xs=None, length=math.ceil(num_q / query_chunk_size)
+    )
     rl = [res[i] for i in range(res.shape[0])]
     return torch.cat(rl, dim=-3).transpose(1, 2)
 
@@ -1727,7 +1826,9 @@ def _attention_env_fingerprint() -> dict:
 
     mps_available = False
     try:
-        mps_available = bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
+        mps_available = bool(
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
     except Exception:
         mps_available = False
 
@@ -1764,7 +1865,9 @@ def _load_attention_cache() -> dict | None:
 
     # Legacy list cache: consider stale; force re-verify so we can compute failed + fingerprint.
     if isinstance(data, list):
-        logger.info("Found legacy attention backend cache format; re-verifying backends.")
+        logger.info(
+            "Found legacy attention backend cache format; re-verifying backends."
+        )
         return None
 
     if not isinstance(data, dict):
@@ -1775,7 +1878,9 @@ def _load_attention_cache() -> dict | None:
         return None
 
     if fp != _attention_env_fingerprint():
-        logger.info("Attention backend cache fingerprint mismatch; re-verifying backends.")
+        logger.info(
+            "Attention backend cache fingerprint mismatch; re-verifying backends."
+        )
         return None
 
     working = data.get("working")
@@ -1805,7 +1910,9 @@ def _save_attention_cache(*, working: list[str], failed: list[str]) -> None:
         logger.error(f"Failed to save attention cache: {e}")
 
 
-def _apply_verified_backends_to_registry(*, working: list[str], failed: list[str]) -> None:
+def _apply_verified_backends_to_registry(
+    *, working: list[str], failed: list[str]
+) -> None:
     """
     Make failed backends impossible to select at runtime by marking them unavailable.
     """
@@ -1888,14 +1995,18 @@ def _pip_uninstall(distributions: set[str]) -> None:
     try:
         proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
         if proc.returncode == 0:
-            logger.warning(f"Auto-uninstalled failing attention backend packages: {sorted(distributions)}")
+            logger.warning(
+                f"Auto-uninstalled failing attention backend packages: {sorted(distributions)}"
+            )
         else:
             logger.warning(
                 "Attempted to auto-uninstall failing attention backend packages but pip returned "
                 f"{proc.returncode}. stderr: {proc.stderr.strip()[:500]}"
             )
     except Exception as e:
-        logger.warning(f"Failed to run pip uninstall for attention backend cleanup: {e}")
+        logger.warning(
+            f"Failed to run pip uninstall for attention backend cleanup: {e}"
+        )
 
 
 def _maybe_remove_failed_backends_from_machine(failed: list[str]) -> None:
@@ -1934,7 +2045,7 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
     """
     try:
         import torch
-        
+
         # Re-resolve the function from the register (which is populated at import time)
         # Note: We assume this module is imported in the worker process.
         func = attention_register.get(backend_name)
@@ -1961,9 +2072,16 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
                 queue.put(False)
                 return
             # Allow `key="flash"` on Turing if the turing kernel is available.
-            if backend_name == "flash" and capability == (7, 5) and flash_attn_turing_fwd is not None:
+            if (
+                backend_name == "flash"
+                and capability == (7, 5)
+                and flash_attn_turing_fwd is not None
+            ):
                 pass
-            elif ("flash" in backend_name or "sage" in backend_name) and capability < (8, 0):
+            elif ("flash" in backend_name or "sage" in backend_name) and capability < (
+                8,
+                0,
+            ):
                 queue.put(False)
                 return
 
@@ -1981,7 +2099,7 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
 
         # Run verification
         success = False
-        
+
         # 1. Try Standard
         if "varlen" not in backend_name:
             try:
@@ -1993,14 +2111,18 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
                 success = True
             except Exception:
                 pass
-        
+
         # 2. Try Varlen
         if not success:
             try:
                 _ = func(
-                    q_var, k_var, v_var, 
-                    cu_seqlens_q=cu_seqlens, cu_seqlens_k=cu_seqlens,
-                    max_seqlen_q=max_seqlen, max_seqlen_k=max_seqlen
+                    q_var,
+                    k_var,
+                    v_var,
+                    cu_seqlens_q=cu_seqlens,
+                    cu_seqlens_k=cu_seqlens,
+                    max_seqlen_q=max_seqlen,
+                    max_seqlen_k=max_seqlen,
                 )
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
@@ -2013,10 +2135,10 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
 
         queue.put(success)
 
-
     except Exception as e:
         import traceback
-        traceback.print_exc()   
+
+        traceback.print_exc()
         # Catch-all for any import/runtime errors in the worker
         queue.put(False)
 
@@ -2039,15 +2161,17 @@ def verify_attention_backends() -> List[str]:
         failed = cache.get("failed", [])
         _WORKING_ATTENTIONS = working
         _apply_verified_backends_to_registry(working=working, failed=failed)
-        logger.info(f"Loaded verified attention backends from cache: {_WORKING_ATTENTIONS}")
+        logger.info(
+            f"Loaded verified attention backends from cache: {_WORKING_ATTENTIONS}"
+        )
         _maybe_remove_failed_backends_from_machine(failed)
         return _WORKING_ATTENTIONS
 
     logger.info("Verifying attention backends (running once)...")
     working = []
     candidates = attention_register.all_available()
-    
-    # We use 'spawn' to ensure a clean process state if supported/default, 
+
+    # We use 'spawn' to ensure a clean process state if supported/default,
     # but strictly rely on the isolation process to catch crashes.
     ctx = multiprocessing.get_context("spawn")
 
@@ -2056,13 +2180,13 @@ def verify_attention_backends() -> List[str]:
     # timeout for the first backend (covers CUDA init overhead) and shorter for subsequent
     # ones (CUDA driver caching may help, but still need buffer for torch imports).
     first_backend_timeout = 15  # seconds - covers CUDA initialization
-    subsequent_timeout = 10      # seconds - still generous for torch imports
-    
+    subsequent_timeout = 10  # seconds - still generous for torch imports
+
     for idx, name in enumerate(candidates.keys()):
         queue = ctx.Queue()
         p = ctx.Process(target=_verify_backend_worker, args=(name, queue))
         p.start()
-        
+
         # Wait for result with timeout - first backend gets extra time for CUDA init
         timeout = first_backend_timeout if idx == 0 else subsequent_timeout
         try:

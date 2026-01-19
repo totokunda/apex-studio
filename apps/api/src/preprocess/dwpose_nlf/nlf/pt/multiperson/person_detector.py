@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.ops
 
+
 class PersonDetector(nn.Module):
     def __init__(self, model_path: str):
         super().__init__()
@@ -32,7 +33,9 @@ class PersonDetector(nn.Module):
                 providers = ["CPUExecutionProvider"]
 
             sess_options = ort.SessionOptions()
-            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            sess_options.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            )
 
             self._ort_session = ort.InferenceSession(
                 model_path, sess_options=sess_options, providers=providers
@@ -51,8 +54,8 @@ class PersonDetector(nn.Module):
                 )
             self._ts_model = torch.jit.load(model_path).eval()
             self._backend = "torchscript"
-        
-        self.person_class_id = '0'
+
+        self.person_class_id = "0"
 
     def forward(
         self,
@@ -72,9 +75,13 @@ class PersonDetector(nn.Module):
         if extrinsic_matrix is None:
             extrinsic_matrix = torch.eye(4, device=device).unsqueeze(0)
         if len(extrinsic_matrix) == 1:
-            extrinsic_matrix = torch.repeat_interleave(extrinsic_matrix, len(images), dim=0)
+            extrinsic_matrix = torch.repeat_interleave(
+                extrinsic_matrix, len(images), dim=0
+            )
         if world_up_vector is None:
-            world_up_vector = torch.tensor([0, -1, 0], device=device, dtype=torch.float32)
+            world_up_vector = torch.tensor(
+                [0, -1, 0], device=device, dtype=torch.float32
+            )
 
         images, x_factor, y_factor, half_pad_h_float, half_pad_w_float = resize_and_pad(
             images, self.input_size
@@ -104,11 +111,11 @@ class PersonDetector(nn.Module):
         )
 
         # Filter scores by person class id
-        if self.person_class_id == '0':
+        if self.person_class_id == "0":
             scores = scores[..., 0].to(device)
         else:
             class_ids = torch.tensor(
-                [int(x) for x in self.person_class_id.split(',')], device=device
+                [int(x) for x in self.person_class_id.split(",")], device=device
             )
             scores = scores[:, class_ids].sum(dim=-1)
 
@@ -178,10 +185,13 @@ class PersonDetector(nn.Module):
         boxes, scores = self.call_model(net_input)
         padded_width = images.shape[3]
         padded_height = images.shape[2]
-        boxes_normal, boxes_flipped_horiz, boxes_flipped_vert = torch.chunk(boxes, 3, dim=0)
+        boxes_normal, boxes_flipped_horiz, boxes_flipped_vert = torch.chunk(
+            boxes, 3, dim=0
+        )
         # Horizontal backflip
         boxes_backflipped_horiz = torch.cat(
-            [padded_width - boxes_flipped_horiz[..., :1], boxes_flipped_horiz[..., 1:]], dim=-1
+            [padded_width - boxes_flipped_horiz[..., :1], boxes_flipped_horiz[..., 1:]],
+            dim=-1,
         ).to(device)
         # Vertical backflip
         boxes_backflipped_vert = torch.cat(
@@ -368,7 +378,9 @@ def resize_and_pad(images: torch.Tensor, input_size: int):
     #    images, (target_h, target_w), antialias=factor < 1)
     images **= 1 / 2.2
     images = F.pad(
-        images, (half_pad_w, pad_w - half_pad_w, half_pad_h, pad_h - half_pad_h), value=0.5
+        images,
+        (half_pad_w, pad_w - half_pad_w, half_pad_h, pad_h - half_pad_h),
+        value=0.5,
     )
     return images, x_factor, y_factor, half_pad_h_float, half_pad_w_float
 
@@ -385,7 +397,10 @@ def scale_boxes(
 ):
     midpoints = (boxes[:, :2] + boxes[:, 2:]) / 2
     midpoints = (
-        matvec(rotmat2d(k.to(torch.float32) * (torch.pi / 2)), midpoints - (input_size - 1) / 2)
+        matvec(
+            rotmat2d(k.to(torch.float32) * (torch.pi / 2)),
+            midpoints - (input_size - 1) / 2,
+        )
         + (input_size - 1) / 2
     )
 
@@ -433,7 +448,10 @@ def inv_scale_boxes(
         sizes = torch.flip(sizes, [1])
 
     midpoints = (
-        matvec(rotmat2d(-k.to(torch.float32) * (torch.pi / 2)), midpoints - (input_size - 1) / 2)
+        matvec(
+            rotmat2d(-k.to(torch.float32) * (torch.pi / 2)),
+            midpoints - (input_size - 1) / 2,
+        )
         + (input_size - 1) / 2
     )
 

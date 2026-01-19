@@ -11,7 +11,9 @@ def test_zimage_converter_maps_prefixed_embedder_keys():
         "model.diffusion_model.x_embedder.bias": torch.zeros(1),
         "model.diffusion_model.final_layer.linear.weight": torch.zeros(1, 1),
         "model.diffusion_model.final_layer.linear.bias": torch.zeros(1),
-        "model.diffusion_model.final_layer.adaLN_modulation.1.weight": torch.zeros(1, 1),
+        "model.diffusion_model.final_layer.adaLN_modulation.1.weight": torch.zeros(
+            1, 1
+        ),
         "model.diffusion_model.final_layer.adaLN_modulation.1.bias": torch.zeros(1),
     }
 
@@ -35,4 +37,3 @@ def test_zimage_converter_maps_prefixed_embedder_keys():
 
     assert "model.diffusion_model.x_embedder.weight" not in state_dict
     assert "model.diffusion_model.final_layer.linear.weight" not in state_dict
-

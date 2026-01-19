@@ -31,7 +31,9 @@ def candidate_asset_roots() -> list[Path]:
     """
     roots: list[Path] = []
 
-    env_assets = os.environ.get("APEX_ASSETS_DIR") or os.environ.get("APEX_ENGINE_ASSETS_DIR")
+    env_assets = os.environ.get("APEX_ASSETS_DIR") or os.environ.get(
+        "APEX_ENGINE_ASSETS_DIR"
+    )
     if env_assets:
         roots.append(Path(env_assets))
 
@@ -41,8 +43,7 @@ def candidate_asset_roots() -> list[Path]:
         roots.append(here.parents[3] / "assets")
     except Exception:
         pass
-    
-    
+
     # look in api/assets
     roots.append(Path(__file__).parents[2] / "assets")
 
@@ -85,5 +86,3 @@ def get_asset_path(*relative_parts: str, must_exist: bool = True) -> str:
         )
     # Best-effort fallback (may not exist)
     return str((candidate_asset_roots()[0] / rel) if candidate_asset_roots() else rel)
-
-

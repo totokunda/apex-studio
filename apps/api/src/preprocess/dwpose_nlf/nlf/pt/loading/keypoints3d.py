@@ -32,7 +32,7 @@ def load_kp(ex, joint_info, learning_phase, rng):
 
     world_coords = ex.world_coords
 
-    if 'sailvos' in ex.image_path.lower():
+    if "sailvos" in ex.image_path.lower():
         # This is needed in order not to lose precision in later operations.
         # Background: In the Sailvos dataset (GTA V), some world coordinates
         # are crazy large (several kilometers, i.e. millions of millimeters, which becomes
@@ -46,22 +46,22 @@ def load_kp(ex, joint_info, learning_phase, rng):
     orig_cam = ex.camera
     bbox = ex.bbox
     single_person_ds_names = [
-        'h36m_',
-        '3doh_down',
-        'aist_',
-        'aspset_',
-        'gpa_',
-        '3dpeople',
-        'bml_movi',
-        'mads_down',
-        'bmhad_down',
-        '3dhp_full_down',
-        'totalcapture',
-        'ikea_down',
-        'human4d',
-        'fit3d_',
-        'freeman_',
-        'dna_rendering',
+        "h36m_",
+        "3doh_down",
+        "aist_",
+        "aspset_",
+        "gpa_",
+        "3dpeople",
+        "bml_movi",
+        "mads_down",
+        "bmhad_down",
+        "3dhp_full_down",
+        "totalcapture",
+        "ikea_down",
+        "human4d",
+        "fit3d_",
+        "freeman_",
+        "dna_rendering",
     ]
     is_single_person_example = any(
         ex.image_path.startswith(name) for name in single_person_ds_names
@@ -71,14 +71,19 @@ def load_kp(ex, joint_info, learning_phase, rng):
         and partial_visi_rng.random() < FLAGS.partial_visibility_prob
         and is_single_person_example
     ):
-        bbox = boxlib.random_partial_subbox(boxlib.expand_to_square(bbox), partial_visi_rng)
+        bbox = boxlib.random_partial_subbox(
+            boxlib.expand_to_square(bbox), partial_visi_rng
+        )
 
     center_point = boxlib.center(bbox)
     if (learning_phase == TRAIN and FLAGS.geom_aug) or (
         learning_phase != TRAIN and FLAGS.test_aug and FLAGS.geom_aug
     ):
         center_point += (
-            util.random_uniform_disc(geom_rng) * FLAGS.shift_aug / 100 * np.max(bbox[2:])
+            util.random_uniform_disc(geom_rng)
+            * FLAGS.shift_aug
+            / 100
+            * np.max(bbox[2:])
         )
 
     bbox = boxlib.box_around(center_point, bbox[2:])
@@ -112,8 +117,10 @@ def load_kp(ex, joint_info, learning_phase, rng):
         if learning_phase == TRAIN
         else FLAGS.image_interpolation_test
     )
-    antialias = FLAGS.antialias_train if learning_phase == TRAIN else FLAGS.antialias_test
-    interp = getattr(cv2, 'INTER_' + interp_str.upper())
+    antialias = (
+        FLAGS.antialias_train if learning_phase == TRAIN else FLAGS.antialias_test
+    )
+    interp = getattr(cv2, "INTER_" + interp_str.upper())
 
     im = cameralib.reproject_image(
         im,
@@ -126,18 +133,26 @@ def load_kp(ex, joint_info, learning_phase, rng):
     )
 
     # Color adjustment
-    if re.match('.*mupots/TS[1-5]/.+', ex.image_path):
+    if re.match(".*mupots/TS[1-5]/.+", ex.image_path):
         im = improc.adjust_gamma(im, 0.67, inplace=True)
-    elif '3dhp' in ex.image_path and re.match('.+/(TS[1-4])/', ex.image_path):
+    elif "3dhp" in ex.image_path and re.match(".+/(TS[1-4])/", ex.image_path):
         im = improc.adjust_gamma(im, 0.67, inplace=True)
         im = improc.white_balance(im, 110, 145)
-    elif 'panoptic' in ex.image_path.lower():
+    elif "panoptic" in ex.image_path.lower():
         im = improc.white_balance(im, 120, 138)
 
     # Background augmentation
-    if hasattr(ex, 'mask') and ex.mask is not None:
+    if hasattr(ex, "mask") and ex.mask is not None:
         im = augment_background(
-            ex, im, orig_cam, cam, imshape, learning_phase, antialias, interp, background_rng
+            ex,
+            im,
+            orig_cam,
+            cam,
+            imshape,
+            learning_phase,
+            antialias,
+            interp,
+            background_rng,
         )
 
     # Occlusion and color augmentation
@@ -154,7 +169,12 @@ def load_kp(ex, joint_info, learning_phase, rng):
     n_unused_point_slots = FLAGS.num_points - n_labeled_points
 
     root_index = next(
-        (i for i, j in enumerate(i_valid_coords) if joint_info.names[j].startswith('pelv')), -1
+        (
+            i
+            for i, j in enumerate(i_valid_coords)
+            if joint_info.names[j].startswith("pelv")
+        ),
+        -1,
     )
     camcoords = camcoords[i_valid_coords]
     canonical_points, interp_weights = random_canonical_points(
@@ -163,10 +183,12 @@ def load_kp(ex, joint_info, learning_phase, rng):
         rng=point_sampler_rng,
     )
 
-    if 'mark_also3d' in FLAGS.custom:
-        start = FLAGS.proc_side // 2 -7
+    if "mark_also3d" in FLAGS.custom:
+        start = FLAGS.proc_side // 2 - 7
         end = start + 14
-        im[start:end, start:end, :] = (make_marker(14).astype(np.float32) / 255.0)[..., ::-1]
+        im[start:end, start:end, :] = (make_marker(14).astype(np.float32) / 255.0)[
+            ..., ::-1
+        ]
 
     return dict(
         kp3d=dict(

@@ -40,7 +40,6 @@ from diffusers.utils.torch_utils import maybe_allow_in_graph
 from torch import nn
 from src.transformer.base import TRANSFORMERS_REGISTRY
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 

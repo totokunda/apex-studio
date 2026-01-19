@@ -106,4 +106,3 @@ def run(ctx: SmokeContext) -> None:
                 p.kill()
             except Exception:
                 pass
-

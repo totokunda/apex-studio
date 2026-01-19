@@ -49,7 +49,6 @@ from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbedding
 from safetensors import safe_open
 from src.transformer.ltx.base.model import LTXVideoAttention as Attention
 
-
 PER_CHANNEL_STATISTICS_PREFIX = "per_channel_statistics."
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 

@@ -1,4 +1,3 @@
-
 import torch
 from typing import Union, List, Tuple, Optional, Sequence
 
@@ -34,7 +33,7 @@ def reduce_mean_masked(
     dim: Optional[List[int]] = None,
     keepdim: bool = False,
 ):
-    #d: List[int] = [] if dim is None else ([dim] if isinstance(dim, int) else list(dim))
+    # d: List[int] = [] if dim is None else ([dim] if isinstance(dim, int) else list(dim))
     d: List[int] = [] if dim is None else dim
 
     if is_valid is None:
@@ -76,17 +75,19 @@ def softmax(target: torch.Tensor, dim: List[int] = (-1,)):
     softmaxed_flattened = torch.softmax(target_flattened, dim=dim_min)
     return softmaxed_flattened.reshape(target.shape)
 
-    #max_along_axis = torch.amax(target, dim=dim, keepdim=True)
-    #exponentiated = torch.exp(target - max_along_axis)
-    #denominator = torch.sum(exponentiated, dim=dim, keepdim=True)
-    #return exponentiated / denominator
+    # max_along_axis = torch.amax(target, dim=dim, keepdim=True)
+    # exponentiated = torch.exp(target - max_along_axis)
+    # denominator = torch.sum(exponentiated, dim=dim, keepdim=True)
+    # return exponentiated / denominator
 
 
 def soft_argmax(inp: torch.Tensor, dim: List[int] = (-1,)):
     return decode_heatmap(softmax(inp, dim=dim), dim=dim)
 
 
-def decode_heatmap(inp: torch.Tensor, dim: List[int] = (-1,), output_coord_dim: int = -1):
+def decode_heatmap(
+    inp: torch.Tensor, dim: List[int] = (-1,), output_coord_dim: int = -1
+):
     result = []
     dim = [d if d >= 0 else d + inp.ndim for d in dim]
     for d in dim:
@@ -94,11 +95,19 @@ def decode_heatmap(inp: torch.Tensor, dim: List[int] = (-1,), output_coord_dim: 
         # Do NOT replace this with a list comprehension with an if-clause:
         other_heatmap_dims = list(dim)
         other_heatmap_dims.remove(d)
-        summed_over_other_heatmap_axes = torch.sum(inp, dim=other_heatmap_dims, keepdim=True)
-        coords = linspace(
-            0.0, 1.0, inp.shape[d], dtype=inp.dtype, device=summed_over_other_heatmap_axes.device
+        summed_over_other_heatmap_axes = torch.sum(
+            inp, dim=other_heatmap_dims, keepdim=True
         )
-        decoded = torch.tensordot(summed_over_other_heatmap_axes, coords, dims=([d], [0]))
+        coords = linspace(
+            0.0,
+            1.0,
+            inp.shape[d],
+            dtype=inp.dtype,
+            device=summed_over_other_heatmap_axes.device,
+        )
+        decoded = torch.tensordot(
+            summed_over_other_heatmap_axes, coords, dims=([d], [0])
+        )
         x = torch.unsqueeze(decoded, d)
         # sorted(x, reverse=True) is not supported in TorchScript.
         for hd in sorted(dim)[::-1]:
@@ -132,7 +141,10 @@ def linspace(
 
 
 def dynamic_partition(x: torch.Tensor, partitions: torch.Tensor, num_partitions: int):
-    return [x[partitions == i] for i in torch.arange(num_partitions, device=partitions.device)]
+    return [
+        x[partitions == i]
+        for i in torch.arange(num_partitions, device=partitions.device)
+    ]
 
 
 def dynamic_stitch(index_lists: List[torch.Tensor], value_lists: List[torch.Tensor]):
@@ -142,7 +154,9 @@ def dynamic_stitch(index_lists: List[torch.Tensor], value_lists: List[torch.Tens
     return values[inv_permutation]
 
 
-def charbonnier(x: torch.Tensor, epsilon: float = 1e-3, dim: int = -1, keepdim: bool = False):
+def charbonnier(
+    x: torch.Tensor, epsilon: float = 1e-3, dim: int = -1, keepdim: bool = False
+):
     if epsilon == 0:
         assert dim == -1
         return torch.linalg.norm(x, dim=-1, keepdim=keepdim) / x.shape[-1]

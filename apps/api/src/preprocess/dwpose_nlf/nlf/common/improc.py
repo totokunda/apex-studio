@@ -31,7 +31,6 @@ def get_structuring_element(shape, ksize, anchor=None):
     return cv2.getStructuringElement(shape, ksize, anchor)
 
 
-
 def image_extents(filepath):
     """Returns the image (width, height) as a numpy array, without loading the pixel data."""
 
@@ -42,13 +41,13 @@ def image_extents(filepath):
 def video_extents(filepath):
     """Returns the video (width, height) as a numpy array, without loading the pixel data."""
 
-    with imageio.get_reader(filepath, 'ffmpeg') as reader:
-        return np.asarray(reader.get_meta_data()['source_size'])
+    with imageio.get_reader(filepath, "ffmpeg") as reader:
+        return np.asarray(reader.get_meta_data()["source_size"])
 
 
 def video_fps(filepath):
     with imageio.get_reader(filepath) as reader:
-        return reader.get_meta_data()['fps']
+        return reader.get_meta_data()["fps"]
 
 
 def rectangle(im, pt1, pt2, color, thickness):
@@ -57,12 +56,12 @@ def rectangle(im, pt1, pt2, color, thickness):
 
 def line(im, p1, p2, *args, **kwargs):
     if np.asarray(p1).shape[-1] != 2 or np.asarray(p2).shape[-1] != 2:
-        raise Exception('Wrong dimensionality of point in line drawing')
+        raise Exception("Wrong dimensionality of point in line drawing")
 
     try:
         cv2.line(im, rounded_int_tuple(p1), rounded_int_tuple(p2), *args, **kwargs)
     except OverflowError:
-        logger.warning('Overflow in rounded_int_tuple!')
+        logger.warning("Overflow in rounded_int_tuple!")
 
 
 def draw_box(im, box, color=(255, 0, 0), thickness=5):
@@ -71,7 +70,9 @@ def draw_box(im, box, color=(255, 0, 0), thickness=5):
 
 
 def circle(im, center, radius, *args, **kwargs):
-    cv2.circle(im, rounded_int_tuple(center), np.round(radius).astype(int), *args, **kwargs)
+    cv2.circle(
+        im, rounded_int_tuple(center), np.round(radius).astype(int), *args, **kwargs
+    )
 
 
 def draw_stick_figure(
@@ -100,7 +101,10 @@ def draw_stick_figure(
 
     for color, (i_joint1, i_joint2) in zip(colors, joint_info.stick_figure_edges):
         relevant_coords = coords[[i_joint1, i_joint2]]
-        if not np.isnan(relevant_coords).any() and not np.isclose(0, relevant_coords).any():
+        if (
+            not np.isnan(relevant_coords).any()
+            and not np.isclose(0, relevant_coords).any()
+        ):
             line(
                 result_image,
                 coords[i_joint1],
@@ -146,12 +150,12 @@ if use_libjpeg_turbo:
 
     def _imread(path, dst=None):
         lower = path.lower()
-        if not (lower.endswith('.jpg') or lower.endswith('.jpeg')):
+        if not (lower.endswith(".jpg") or lower.endswith(".jpeg")):
             return cv2.imread(path)[..., ::-1]
         try:
             return jpeg4py.JPEG(path).decode(dst)
         except jpeg4py.JPEGRuntimeError:
-            logger.error(f'Could not load image at {path}, JPEG error.')
+            logger.error(f"Could not load image at {path}, JPEG error.")
             raise
 
 else:
@@ -163,15 +167,17 @@ else:
 
 def imread(path, dst=None):
     if isinstance(path, bytes):
-        path = path.decode('utf8')
-    if path.startswith('/work/sarandi/data/'):
-        path = osp.relpath(path, '/work/sarandi/data')
+        path = path.decode("utf8")
+    if path.startswith("/work/sarandi/data/"):
+        path = osp.relpath(path, "/work/sarandi/data")
 
     path = util.ensure_absolute_path(path)
 
     if path.startswith(DATA_ROOT) and FLAGS.image_barecat_path is not None:
         try:
-            return ds3d.get_cached_reader(FLAGS.image_barecat_path)[osp.relpath(path, DATA_ROOT)]
+            return ds3d.get_cached_reader(FLAGS.image_barecat_path)[
+                osp.relpath(path, DATA_ROOT)
+            ]
         except Exception:
             pass
     return _imread(path, dst)[..., :3]
@@ -224,7 +230,10 @@ def paste_over(im_src, im_dst, alpha, center, inplace=False):
                 x_dst = x + start_dst[0] - start_src[0]
                 for c in range(3):
                     current_dst_float = np.float32(result[y_dst, x_dst, c])
-                    new_val = current_dst_float + (im_src[y, x, c] - current_dst_float) * alpha_val
+                    new_val = (
+                        current_dst_float
+                        + (im_src[y, x, c] - current_dst_float) * alpha_val
+                    )
                     if new_val < 0.0:
                         new_val = 0.0
                     elif new_val > 255.0:
@@ -232,6 +241,7 @@ def paste_over(im_src, im_dst, alpha, center, inplace=False):
                     result[y_dst, x_dst, c] = np.uint8(new_val)
 
     return result
+
 
 def adjust_gamma(image, gamma, inplace=False):
     if inplace:
@@ -279,6 +289,7 @@ def _white_balance_lab(result, avg_a, avg_b):
             result[y, x, 2] -= np.uint8(l_float * factor_b)
     return result
 
+
 def white_balance(img, a=None, b=None):
     result = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
     avg_a = a if a is not None else np.mean(result[..., 1], dtype=np.float32)
@@ -290,7 +301,9 @@ def white_balance(img, a=None, b=None):
 
 def largest_connected_component(mask):
     mask = mask.astype(np.uint8)
-    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 4, cv2.CV_32S)
+    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        mask, 4, cv2.CV_32S
+    )
     areas = stats[1:, -1]
     if len(areas) < 1:
         return mask, np.array([0, 0, 0, 0])
@@ -312,10 +325,7 @@ def dilate(mask, kernel_size, iterations=1):
     return cv2.morphologyEx(mask, cv2.MORPH_DILATE, elem, iterations=iterations)
 
 
-
 def get_inline(mask, d1=1, d2=3):
     if mask.dtype == bool:
         return get_inline(mask.astype(np.uint8), d1, d2).astype(bool)
     return erode(mask, d1) - erode(mask, d2)
-
-

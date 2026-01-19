@@ -56,7 +56,9 @@ def is_pose_consistent_with_box(pose2d, box):
 
     intersection_start = torch.maximum(box_start, posebox_start)
     intersection_end = torch.minimum(box_end, posebox_end)
-    intersection_area = torch.prod(torch.relu(intersection_end - intersection_start), dim=-1)
+    intersection_area = torch.prod(
+        torch.relu(intersection_end - intersection_start), dim=-1
+    )
     return intersection_area > 0.25 * box_area
 
 
@@ -68,7 +70,9 @@ def scale_align(poses):
 
 def point_stdev(poses, item_dim, coord_dim):
     coordwise_variance = torch.var(poses, dim=item_dim, keepdim=True)
-    average_stdev = torch.sqrt(torch.sum(coordwise_variance, dim=coord_dim, keepdim=True))
+    average_stdev = torch.sqrt(
+        torch.sum(coordwise_variance, dim=coord_dim, keepdim=True)
+    )
     return torch.squeeze(average_stdev, (item_dim, coord_dim))
 
 

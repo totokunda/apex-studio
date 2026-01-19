@@ -13,12 +13,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 from src.utils.defaults import get_cache_path, get_config_store_path, DEFAULT_HEADERS
-from src.utils.config_store import config_store_lock, read_json_dict, write_json_dict_atomic
+from src.utils.config_store import (
+    config_store_lock,
+    read_json_dict,
+    write_json_dict_atomic,
+)
 
 
 def _now_iso() -> str:
     # ISO-ish without timezone for simple human readability.
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
 
 def read_persisted_config() -> dict:
     p = Path(get_config_store_path())
@@ -86,7 +91,11 @@ def get_auto_update_config() -> AutoUpdateConfig:
     )
 
     # Global kill switch (env) for emergency.
-    if os.environ.get("APEX_DISABLE_AUTO_UPDATE", "").strip().lower() in {"1", "true", "yes"}:
+    if os.environ.get("APEX_DISABLE_AUTO_UPDATE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
         enabled = False
 
     return AutoUpdateConfig(
@@ -223,7 +232,7 @@ def _parse_python_code_asset(asset_name: str) -> Optional[dict]:
         return None
     if not name.lower().startswith("python-code-"):
         return None
-    core = name[:-len(".tar.zst")]
+    core = name[: -len(".tar.zst")]
     parts = core.split("-")
     # parts: ["python", "code", <version>, <platform>, <arch>, <device>, <pythonTag>, ...extras]
     if len(parts) < 7:
@@ -266,7 +275,9 @@ def _hf_json(url: str) -> Any:
 
 
 def _hf_list_tree(cfg: AutoUpdateConfig, path: str | None = None) -> list[dict]:
-    base = f"https://huggingface.co/api/models/{cfg.repo_owner}/{cfg.repo_name}/tree/main"
+    base = (
+        f"https://huggingface.co/api/models/{cfg.repo_owner}/{cfg.repo_name}/tree/main"
+    )
     url = f"{base}/{_encode_hf_path(path)}" if path else base
     data = _hf_json(url)
     return data if isinstance(data, list) else []
@@ -386,11 +397,15 @@ def _run_apply_code_update(archive_path: Path, target_root: Path) -> tuple[int, 
     script = target_root / "scripts" / "apply_code_update.py"
     if not script.exists():
         # Dev fallback: repo layout (apps/api/scripts)
-        repo_script = Path(__file__).resolve().parents[3] / "scripts" / "apply_code_update.py"
+        repo_script = (
+            Path(__file__).resolve().parents[3] / "scripts" / "apply_code_update.py"
+        )
         if repo_script.exists():
             script = repo_script
     if not script.exists():
-        raise RuntimeError(f"apply_code_update.py not found under {target_root}/scripts")
+        raise RuntimeError(
+            f"apply_code_update.py not found under {target_root}/scripts"
+        )
 
     import subprocess as _subprocess
 
@@ -417,7 +432,11 @@ def _safe_to_update(root: Path) -> bool:
     if (root / "apex-engine-manifest.json").exists():
         return True
     # If env explicitly allows, allow.
-    if os.environ.get("APEX_ALLOW_DEV_AUTO_UPDATE", "").strip().lower() in {"1", "true", "yes"}:
+    if os.environ.get("APEX_ALLOW_DEV_AUTO_UPDATE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
         return True
     return False
 
@@ -537,7 +556,9 @@ def auto_update_once() -> None:
         )
         # Restart immediately if we're idle; otherwise, defer to the loop to retry.
         if not _has_active_jobs():
-            _request_self_restart(reason=f"Auto-update applied {candidate.asset_version}")
+            _request_self_restart(
+                reason=f"Auto-update applied {candidate.asset_version}"
+            )
     else:
         update_persisted_config(
             auto_update_last_apply_finished_at=_now_iso(),
@@ -567,9 +588,9 @@ async def auto_update_loop() -> None:
         except Exception as e:
             # Keep the loop alive; next cycle will retry.
             try:
-                update_persisted_config(auto_update_last_error=repr(e), auto_update_last_error_at=_now_iso())
+                update_persisted_config(
+                    auto_update_last_error=repr(e), auto_update_last_error_at=_now_iso()
+                )
             except Exception:
                 pass
             await asyncio.sleep(60)
-
-

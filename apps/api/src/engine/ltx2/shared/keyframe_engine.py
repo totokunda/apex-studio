@@ -62,26 +62,44 @@ class LTX2KeyframeConditioningMixin:
           - clean_latents_tokens: [B, S_total, D] (used to re-impose hard conditioning if desired)
           - base_token_count: number of tokens that belong to the *base* video latent (before appended keyframe tokens)
         """
-        latent_num_frames = (pixel_num_frames - 1) // int(self.vae_temporal_compression_ratio) + 1
+        latent_num_frames = (pixel_num_frames - 1) // int(
+            self.vae_temporal_compression_ratio
+        ) + 1
         latent_height = pixel_height // int(self.vae_spatial_compression_ratio)
         latent_width = pixel_width // int(self.vae_spatial_compression_ratio)
 
-        base_token_count = self._base_video_token_count(latent_num_frames, latent_height, latent_width)
+        base_token_count = self._base_video_token_count(
+            latent_num_frames, latent_height, latent_width
+        )
 
         # --- Base latents (tokens) ---
         if base_latents is not None:
             latents_tokens = base_latents.to(device=device, dtype=dtype)
             if latents_tokens.ndim != 3:
-                raise ValueError(f"`base_latents` must be a packed [B, S, D] tensor, got shape {latents_tokens.shape}.")
+                raise ValueError(
+                    f"`base_latents` must be a packed [B, S, D] tensor, got shape {latents_tokens.shape}."
+                )
         else:
-            shape = (batch_size, num_channels_latents, latent_num_frames, latent_height, latent_width)
-            noise_grid = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+            shape = (
+                batch_size,
+                num_channels_latents,
+                latent_num_frames,
+                latent_height,
+                latent_width,
+            )
+            noise_grid = randn_tensor(
+                shape, generator=generator, device=device, dtype=dtype
+            )
             latents_tokens = self._pack_latents(
-                noise_grid, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+                noise_grid,
+                self.transformer_spatial_patch_size,
+                self.transformer_temporal_patch_size,
             )
 
         if latents_tokens.shape[0] != batch_size:
-            raise ValueError(f"Packed base latents batch {latents_tokens.shape[0]} != batch_size {batch_size}.")
+            raise ValueError(
+                f"Packed base latents batch {latents_tokens.shape[0]} != batch_size {batch_size}."
+            )
         if latents_tokens.shape[1] != base_token_count:
             # If caller passed in latents with conditioning tokens, they should pass only the base tokens.
             raise ValueError(
@@ -100,30 +118,51 @@ class LTX2KeyframeConditioningMixin:
         # --- Normalize conditioning strengths and frame indices ---
         num_conds = len(cond_latent_inputs)
         if num_conds == 0:
-            return latents_tokens, denoise_mask_tokens, video_coords, clean_latents_tokens, base_token_count
+            return (
+                latents_tokens,
+                denoise_mask_tokens,
+                video_coords,
+                clean_latents_tokens,
+                base_token_count,
+            )
 
         if cond_strengths is None:
-            strengths_t = torch.full((num_conds,), 1.0, device=device, dtype=torch.float32)
+            strengths_t = torch.full(
+                (num_conds,), 1.0, device=device, dtype=torch.float32
+            )
         elif isinstance(cond_strengths, (int, float)):
-            strengths_t = torch.full((num_conds,), float(cond_strengths), device=device, dtype=torch.float32)
+            strengths_t = torch.full(
+                (num_conds,), float(cond_strengths), device=device, dtype=torch.float32
+            )
         else:
             if len(cond_strengths) != num_conds:
                 raise ValueError(
                     f"`cond_strengths` length {len(cond_strengths)} must match number of conditionings {num_conds}."
                 )
-            strengths_t = torch.tensor([float(s) for s in cond_strengths], device=device, dtype=torch.float32)
+            strengths_t = torch.tensor(
+                [float(s) for s in cond_strengths], device=device, dtype=torch.float32
+            )
         strengths_t = strengths_t.clamp(0.0, 1.0).to(dtype=dtype)
 
         if cond_pixel_frame_indices is None:
             pixel_idx_t = torch.zeros((num_conds,), device=device, dtype=torch.long)
         elif isinstance(cond_pixel_frame_indices, int):
-            pixel_idx_t = torch.full((num_conds,), int(cond_pixel_frame_indices), device=device, dtype=torch.long)
+            pixel_idx_t = torch.full(
+                (num_conds,),
+                int(cond_pixel_frame_indices),
+                device=device,
+                dtype=torch.long,
+            )
         else:
             if len(cond_pixel_frame_indices) != num_conds:
                 raise ValueError(
                     f"`cond_pixel_frame_indices` length {len(cond_pixel_frame_indices)} must match number of conditionings {num_conds}."
                 )
-            pixel_idx_t = torch.tensor([int(i) for i in cond_pixel_frame_indices], device=device, dtype=torch.long)
+            pixel_idx_t = torch.tensor(
+                [int(i) for i in cond_pixel_frame_indices],
+                device=device,
+                dtype=torch.long,
+            )
 
         if pixel_idx_t.min().item() < 0 or pixel_idx_t.max().item() >= pixel_num_frames:
             raise ValueError(
@@ -132,7 +171,11 @@ class LTX2KeyframeConditioningMixin:
             )
 
         # --- Append each conditioning as keyframe tokens ---
-        encode_generator = generator[0] if isinstance(generator, list) and len(generator) > 0 else generator
+        encode_generator = (
+            generator[0]
+            if isinstance(generator, list) and len(generator) > 0
+            else generator
+        )
         for k, latent_in in enumerate(cond_latent_inputs):
             # latent_in is expected to be pixel-space preprocessed tensor:
             # - image: [1, 3, H, W]
@@ -140,7 +183,9 @@ class LTX2KeyframeConditioningMixin:
             if latent_in.ndim == 4:
                 latent_in = latent_in.unsqueeze(2)  # [1, 3, 1, H, W]
             if latent_in.ndim != 5:
-                raise ValueError(f"Conditioning input must be [1,3,H,W] or [1,3,F,H,W], got {latent_in.shape}")
+                raise ValueError(
+                    f"Conditioning input must be [1,3,H,W] or [1,3,F,H,W], got {latent_in.shape}"
+                )
 
             encoded = self.vae_encode(
                 latent_in,
@@ -158,13 +203,20 @@ class LTX2KeyframeConditioningMixin:
 
             encoded = encoded.repeat(batch_size, 1, 1, 1, 1)  # broadcast across batch
             cond_tokens = self._pack_latents(
-                encoded, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+                encoded,
+                self.transformer_spatial_patch_size,
+                self.transformer_temporal_patch_size,
             )
 
             # Build coords for the conditioning tokens and shift time by pixel_frame_idx/fps (keyframe index).
             cond_lat_frames = int(encoded.shape[2])
             cond_coords = self.transformer.rope.prepare_video_coords(
-                batch_size, cond_lat_frames, latent_height, latent_width, device, fps=fps
+                batch_size,
+                cond_lat_frames,
+                latent_height,
+                latent_width,
+                device,
+                fps=fps,
             )
             time_shift_s = float(pixel_idx_t[k].item()) / float(fps)
             cond_coords[:, 0, :, :] = cond_coords[:, 0, :, :] + time_shift_s
@@ -186,15 +238,21 @@ class LTX2KeyframeConditioningMixin:
                 device=device,
                 dtype=dtype,
             )
-            cond_latents_init = cond_noise * cond_denoise_mask.unsqueeze(-1) + cond_tokens * (
-                1.0 - cond_denoise_mask.unsqueeze(-1)
-            )
+            cond_latents_init = cond_noise * cond_denoise_mask.unsqueeze(
+                -1
+            ) + cond_tokens * (1.0 - cond_denoise_mask.unsqueeze(-1))
 
             latents_tokens = torch.cat([latents_tokens, cond_latents_init], dim=1)
             clean_latents_tokens = torch.cat([clean_latents_tokens, cond_tokens], dim=1)
-            denoise_mask_tokens = torch.cat([denoise_mask_tokens, cond_denoise_mask], dim=1)
+            denoise_mask_tokens = torch.cat(
+                [denoise_mask_tokens, cond_denoise_mask], dim=1
+            )
             video_coords = torch.cat([video_coords, cond_coords], dim=2)
 
-        return latents_tokens, denoise_mask_tokens, video_coords, clean_latents_tokens, base_token_count
-
-
+        return (
+            latents_tokens,
+            denoise_mask_tokens,
+            video_coords,
+            clean_latents_tokens,
+            base_token_count,
+        )

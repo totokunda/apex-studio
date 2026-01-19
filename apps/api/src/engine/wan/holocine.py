@@ -625,7 +625,7 @@ class WanHoloCineEngine(WanShared):
                         )
 
                         self.load_component_by_name("high_noise_transformer")
-                        
+
                         comp = (
                             self.get_component_by_name("high_noise_transformer") or {}
                         )
@@ -663,7 +663,7 @@ class WanHoloCineEngine(WanShared):
                             "Loading alternate transformer",
                         )
                         self.load_component_by_name("low_noise_transformer")
-                        
+
                         self.check_sparse_self_attn("low_noise_transformer")
                         safe_emit_progress(
                             denoise_progress_callback,

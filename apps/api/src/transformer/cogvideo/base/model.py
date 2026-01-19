@@ -44,7 +44,6 @@ from .attention import (
 )
 from src.transformer.base import TRANSFORMERS_REGISTRY
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 

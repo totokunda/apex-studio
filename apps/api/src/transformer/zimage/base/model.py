@@ -124,15 +124,12 @@ class ZSingleStreamAttnProcessor:
             query = apply_rotary_emb(query, freqs_cis)
             key = apply_rotary_emb(key, freqs_cis)
 
-
         query, key = query.to(dtype), key.to(dtype)
         value = value.to(dtype)
 
         # From [batch, seq_len] to [batch, 1, 1, seq_len] -> broadcast to [batch, heads, seq_len, seq_len]
         if attention_mask is not None and attention_mask.ndim == 2:
             attention_mask = attention_mask[:, None, None, :]
-            
-        
 
         # Compute joint attention
         hidden_states = attention_register.call(
@@ -148,7 +145,7 @@ class ZSingleStreamAttnProcessor:
         # Reshape back
         hidden_states = hidden_states.flatten(2, 3)
         hidden_states = hidden_states.to(dtype)
-        
+
         output = attn.to_out[0](hidden_states)
         if len(attn.to_out) > 1:  # dropout
             output = attn.to_out[1](output)
@@ -236,7 +233,6 @@ class ZImageTransformerBlock(nn.Module):
                 attention_mask=attn_mask,
                 freqs_cis=freqs_cis,
             )
-
 
             x = x + gate_msa * self.attention_norm2(attn_out)
             # FFN block
@@ -604,8 +600,6 @@ class ZImageTransformer2DModel(
         device = x[0].device
         t = t * self.t_scale
         t = self.t_embedder(t)
-        
-
 
         (
             x,
@@ -616,7 +610,6 @@ class ZImageTransformer2DModel(
             x_inner_pad_mask,
             cap_inner_pad_mask,
         ) = self.patchify_and_embed(x, cap_feats, patch_size, f_patch_size)
-
 
         # x embed & refine
         x_item_seqlens = [len(_) for _ in x]
@@ -656,7 +649,6 @@ class ZImageTransformer2DModel(
         )
         for i, seq_len in enumerate(x_item_seqlens):
             x_attn_mask[i, :seq_len] = 1
-        
 
         if torch.is_grad_enabled() and self.gradient_checkpointing:
             for layer in self.noise_refiner:
@@ -666,9 +658,6 @@ class ZImageTransformer2DModel(
         else:
             for layer in self.noise_refiner:
                 x = layer(x, x_attn_mask, x_freqs_cis, adaln_input)
-                
-        
-
 
         # cap embed & refine
         cap_item_seqlens = [len(_) for _ in cap_feats]
@@ -736,9 +725,7 @@ class ZImageTransformer2DModel(
         )
         for i, seq_len in enumerate(unified_item_seqlens):
             unified_attn_mask[i, :seq_len] = 1
-            
 
-        
         if torch.is_grad_enabled() and self.gradient_checkpointing:
             for layer in self.layers:
                 unified = self._gradient_checkpointing_func(

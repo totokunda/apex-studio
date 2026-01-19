@@ -328,7 +328,7 @@ class WanS2VEngine(WanShared):
         attention_kwargs: Dict[str, Any] = {},
         render_on_step_interval: int = 3,
         num_chunks: Optional[int] = None,
-        chunking_profile: str = "none", 
+        chunking_profile: str = "none",
         **kwargs,
     ):
         safe_emit_progress(progress_callback, 0.0, "Starting s2v pipeline")

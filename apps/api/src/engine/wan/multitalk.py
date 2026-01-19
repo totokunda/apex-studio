@@ -158,7 +158,7 @@ class WanMultitalkEngine(WanShared):
             bbox=bbox,
             face_scale=face_scale,
         )
-        
+
         if offload:
             del preprocessor
             self._offload("wan.multitalk")
@@ -231,7 +231,6 @@ class WanMultitalkEngine(WanShared):
             self._offload("text_encoder")
         safe_emit_progress(progress_callback, 0.21, "Text encoder offloaded")
 
-    
         using_video_input = input_video is not None
 
         # Estimate total frame budget for monotonic progress across multiple clips
@@ -276,7 +275,7 @@ class WanMultitalkEngine(WanShared):
             clip_decode_progress = make_mapped_progress(
                 decode_progress, clip_start, clip_end
             )
-            
+
             if not hasattr(self, "transformer") or not self.transformer:
                 safe_emit_progress(progress_callback, 0.22, "Loading transformer")
                 self.load_component_by_type("transformer")
@@ -617,7 +616,7 @@ class WanMultitalkEngine(WanShared):
                 self.logger.info("Denoising completed.")
                 if offload:
                     self._offload("transformer", offload_type="cpu")
-                
+
             safe_emit_progress(
                 clip_denoise_progress, 1.0, f"Denoising completed (clip {clip_idx})"
             )
@@ -705,7 +704,6 @@ class WanMultitalkEngine(WanShared):
 
             if max_num_frames <= num_frames:
                 break
-
 
         if offload:
             safe_emit_progress(progress_callback, 0.985, "Offloading transformer")

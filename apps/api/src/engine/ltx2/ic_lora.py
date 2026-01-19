@@ -88,5 +88,3 @@ class LTX2ICLoraEngine(LTX2KeyframeVideoBaseEngine):
             return_latents=return_latents,
             upsample=upsample,
         )
-
-

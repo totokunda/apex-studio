@@ -22,4 +22,3 @@ def __getattr__(name: str):
     val = getattr(mod, name)
     globals()[name] = val
     return val
-

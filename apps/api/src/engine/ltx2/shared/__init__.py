@@ -12,45 +12,65 @@ import numpy as np
 from PIL import Image
 from src.utils.ffmpeg import get_ffmpeg_path
 
+
 class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     """LTX2 Shared Engine Implementation"""
 
     def __init__(self, yaml_path: str, **kwargs):
         super().__init__(yaml_path, **kwargs)
-        
+
         self.vae_spatial_compression_ratio = (
-            self.vae.spatial_compression_ratio if getattr(self, "vae", None) is not None else 32
+            self.vae.spatial_compression_ratio
+            if getattr(self, "vae", None) is not None
+            else 32
         )
         self.vae_temporal_compression_ratio = (
-            self.vae.temporal_compression_ratio if getattr(self, "vae", None) is not None else 8
+            self.vae.temporal_compression_ratio
+            if getattr(self, "vae", None) is not None
+            else 8
         )
         # TODO: check whether the MEL compression ratio logic here is corrct
         self.audio_vae_mel_compression_ratio = (
-            self.audio_vae.mel_compression_ratio if getattr(self, "audio_vae", None) is not None else 4
+            self.audio_vae.mel_compression_ratio
+            if getattr(self, "audio_vae", None) is not None
+            else 4
         )
         self.audio_vae_temporal_compression_ratio = (
-            self.audio_vae.temporal_compression_ratio if getattr(self, "audio_vae", None) is not None else 4
+            self.audio_vae.temporal_compression_ratio
+            if getattr(self, "audio_vae", None) is not None
+            else 4
         )
         self.transformer_spatial_patch_size = (
-            self.transformer.config.patch_size if getattr(self, "transformer", None) is not None else 1
+            self.transformer.config.patch_size
+            if getattr(self, "transformer", None) is not None
+            else 1
         )
         self.transformer_temporal_patch_size = (
-            self.transformer.config.patch_size_t if getattr(self, "transformer") is not None else 1
+            self.transformer.config.patch_size_t
+            if getattr(self, "transformer") is not None
+            else 1
         )
 
         self.audio_sampling_rate = (
-            self.audio_vae.config.sample_rate if getattr(self, "audio_vae", None) is not None else 16000
+            self.audio_vae.config.sample_rate
+            if getattr(self, "audio_vae", None) is not None
+            else 16000
         )
         self.audio_hop_length = (
-            self.audio_vae.config.mel_hop_length if getattr(self, "audio_vae", None) is not None else 160
+            self.audio_vae.config.mel_hop_length
+            if getattr(self, "audio_vae", None) is not None
+            else 160
         )
 
-        self.video_processor = VideoProcessor(vae_scale_factor=self.vae_spatial_compression_ratio)
-        self.tokenizer_max_length = (
-            self.tokenizer.model_max_length if getattr(self, "tokenizer", None) is not None else 1024
+        self.video_processor = VideoProcessor(
+            vae_scale_factor=self.vae_spatial_compression_ratio
         )
-        
-    
+        self.tokenizer_max_length = (
+            self.tokenizer.model_max_length
+            if getattr(self, "tokenizer", None) is not None
+            else 1024
+        )
+
     @staticmethod
     def _pack_text_embeds(
         text_hidden_states: torch.Tensor,
@@ -94,20 +114,32 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             start_indices = seq_len - sequence_lengths[:, None]  # [batch_size, 1]
             mask = token_indices >= start_indices  # [B, T]
         else:
-            raise ValueError(f"padding_side must be 'left' or 'right', got {padding_side}")
-        mask = mask[:, :, None, None]  # [batch_size, seq_len] --> [batch_size, seq_len, 1, 1]
+            raise ValueError(
+                f"padding_side must be 'left' or 'right', got {padding_side}"
+            )
+        mask = mask[
+            :, :, None, None
+        ]  # [batch_size, seq_len] --> [batch_size, seq_len, 1, 1]
 
         # Compute masked mean over non-padding positions of shape (batch_size, 1, 1, seq_len)
         masked_text_hidden_states = text_hidden_states.masked_fill(~mask, 0.0)
         num_valid_positions = (sequence_lengths * hidden_dim).view(batch_size, 1, 1, 1)
-        masked_mean = masked_text_hidden_states.sum(dim=(1, 2), keepdim=True) / (num_valid_positions + eps)
+        masked_mean = masked_text_hidden_states.sum(dim=(1, 2), keepdim=True) / (
+            num_valid_positions + eps
+        )
 
         # Compute min/max over non-padding positions of shape (batch_size, 1, 1 seq_len)
-        x_min = text_hidden_states.masked_fill(~mask, float("inf")).amin(dim=(1, 2), keepdim=True)
-        x_max = text_hidden_states.masked_fill(~mask, float("-inf")).amax(dim=(1, 2), keepdim=True)
+        x_min = text_hidden_states.masked_fill(~mask, float("inf")).amin(
+            dim=(1, 2), keepdim=True
+        )
+        x_max = text_hidden_states.masked_fill(~mask, float("-inf")).amax(
+            dim=(1, 2), keepdim=True
+        )
 
         # Normalization
-        normalized_hidden_states = (text_hidden_states - masked_mean) / (x_max - x_min + eps)
+        normalized_hidden_states = (text_hidden_states - masked_mean) / (
+            x_max - x_min + eps
+        )
         normalized_hidden_states = normalized_hidden_states * scale_factor
 
         # Pack the hidden states to a 3D tensor (batch_size, seq_len, hidden_dim * num_layers)
@@ -143,20 +175,22 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
         batch_size = len(prompt)
-        
+
         if not self.text_encoder:
             self.load_component_by_type("text_encoder")
-        
+
         self.to_device(self.text_encoder)
 
         if getattr(self.text_encoder, "tokenizer", None) is not None:
             # Gemma expects left padding for chat-style prompts
             self.text_encoder.tokenizer.padding_side = "left"
             if self.text_encoder.tokenizer.pad_token is None:
-                self.text_encoder.tokenizer.pad_token = self.text_encoder.tokenizer.eos_token
+                self.text_encoder.tokenizer.pad_token = (
+                    self.text_encoder.tokenizer.eos_token
+                )
 
         prompt = [p.strip() for p in prompt]
-        
+
         text_encoder_hidden_states, prompt_attention_mask = self.text_encoder.encode(
             prompt,
             pad_to_max_length=False,
@@ -170,7 +204,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             hidden_states_all_stack_dim=-1,
             return_attention_mask=True,
         )
-        
+
         text_encoder_hidden_states = text_encoder_hidden_states.to(device)
         prompt_attention_mask = prompt_attention_mask.to(device)
 
@@ -190,10 +224,11 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             # prompt_attention_mask: [B, S] -> pad S on the left
             prompt_attention_mask = F.pad(prompt_attention_mask, (pad_len, 0), value=0)
         elif seq_len > target_seq_len:
-            text_encoder_hidden_states = text_encoder_hidden_states[:, -target_seq_len:, ...]
+            text_encoder_hidden_states = text_encoder_hidden_states[
+                :, -target_seq_len:, ...
+            ]
             prompt_attention_mask = prompt_attention_mask[:, -target_seq_len:]
-    
-    
+
         sequence_lengths = prompt_attention_mask.sum(dim=-1)
         prompt_embeds = self._pack_text_embeds(
             text_encoder_hidden_states,
@@ -208,7 +243,9 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         _, seq_len, _ = prompt_embeds.shape
         prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+        prompt_embeds = prompt_embeds.view(
+            batch_size * num_videos_per_prompt, seq_len, -1
+        )
 
         prompt_attention_mask = prompt_attention_mask.view(batch_size, -1)
         prompt_attention_mask = prompt_attention_mask.repeat(num_videos_per_prompt, 1)
@@ -269,9 +306,10 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             return int(psutil.virtual_memory().available)
         except Exception:
             return None
-        
 
-    def preprocess(self, img: Image.Image, crf: int = 33, preset: str = "veryfast") -> Image.Image:
+    def preprocess(
+        self, img: Image.Image, crf: int = 33, preset: str = "veryfast"
+    ) -> Image.Image:
         """
         Apply a video-codec CRF compression/decompression round-trip to a PIL image.
 
@@ -306,20 +344,34 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         # Use a fragmented MP4 so it can be streamed to a pipe.
         encode_cmd = [
             get_ffmpeg_path(),
-            "-hide_banner", "-loglevel", "error",
-            "-f", "rawvideo",
-            "-pix_fmt", "rgb24",
-            "-s:v", f"{w}x{h}",
-            "-r", "1",
-            "-i", "pipe:0",
-            "-frames:v", "1",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s:v",
+            f"{w}x{h}",
+            "-r",
+            "1",
+            "-i",
+            "pipe:0",
+            "-frames:v",
+            "1",
             "-an",
-            "-c:v", "libx264",
-            "-preset", preset,
-            "-crf", str(crf),
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-            "-f", "mp4",
+            "-c:v",
+            "libx264",
+            "-preset",
+            preset,
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+frag_keyframe+empty_moov+default_base_moof",
+            "-f",
+            "mp4",
             "pipe:1",
         ]
 
@@ -340,11 +392,17 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         # Decode back to raw RGB
         decode_cmd = [
             get_ffmpeg_path(),
-            "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0",
-            "-frames:v", "1",
-            "-f", "rawvideo",
-            "-pix_fmt", "rgb24",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
             "pipe:1",
         ]
 
@@ -363,11 +421,12 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         raw_out = dec.stdout
         expected = h * w * 3
         if len(raw_out) != expected:
-            raise RuntimeError(f"Decoded frame size mismatch: got {len(raw_out)} bytes, expected {expected}")
+            raise RuntimeError(
+                f"Decoded frame size mismatch: got {len(raw_out)} bytes, expected {expected}"
+            )
 
         out_frame = np.frombuffer(raw_out, dtype=np.uint8).reshape(h, w, 3)
         return Image.fromarray(out_frame, mode="RGB")
-
 
     def maybe_offload_transformer_for_upsample(
         self,
@@ -426,7 +485,9 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             * out_w
             * elem_size
         )
-        required_vram = int(max(min_vram_bytes, vram_multiplier * est_out_latents_bytes))
+        required_vram = int(
+            max(min_vram_bytes, vram_multiplier * est_out_latents_bytes)
+        )
 
         free_vram = self._get_cuda_free_vram_bytes(device)
         if (not force) and (free_vram is None or free_vram >= required_vram):
@@ -447,17 +508,21 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             else None
         )
         can_cpu_offload = (
-            (free_ram is not None)
-            and (need_ram is not None)
-            and (free_ram >= need_ram)
+            (free_ram is not None) and (need_ram is not None) and (free_ram >= need_ram)
         )
         offload_type = "cpu" if can_cpu_offload else "discard"
 
         # Log with best-effort memory figures.
         try:
-            free_vram_gib = f"{(free_vram or 0)/1024**3:.2f}GiB" if free_vram is not None else "unknown"
+            free_vram_gib = (
+                f"{(free_vram or 0)/1024**3:.2f}GiB"
+                if free_vram is not None
+                else "unknown"
+            )
             req_vram_gib = f"{required_vram/1024**3:.2f}GiB"
-            free_ram_gib = f"{free_ram/1024**3:.2f}GiB" if free_ram is not None else "unknown"
+            free_ram_gib = (
+                f"{free_ram/1024**3:.2f}GiB" if free_ram is not None else "unknown"
+            )
             tr_gib = f"{transformer_bytes/1024**3:.2f}GiB"
             self.logger.info(
                 f"Offloading transformer for {reason}: offload_type={offload_type} "
@@ -539,7 +604,11 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
 
         if do_classifier_free_guidance and negative_prompt_embeds is None:
             negative_prompt = negative_prompt or ""
-            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+            negative_prompt = (
+                batch_size * [negative_prompt]
+                if isinstance(negative_prompt, str)
+                else negative_prompt
+            )
 
             if prompt is not None and type(prompt) is not type(negative_prompt):
                 raise TypeError(
@@ -553,24 +622,32 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
                     " the batch size of `prompt`."
                 )
 
-            negative_prompt_embeds, negative_prompt_attention_mask = self._get_gemma_prompt_embeds(
-                prompt=negative_prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-                scale_factor=scale_factor,
-                device=device,
-                dtype=dtype,
+            negative_prompt_embeds, negative_prompt_attention_mask = (
+                self._get_gemma_prompt_embeds(
+                    prompt=negative_prompt,
+                    num_videos_per_prompt=num_videos_per_prompt,
+                    max_sequence_length=max_sequence_length,
+                    scale_factor=scale_factor,
+                    device=device,
+                    dtype=dtype,
+                )
             )
-            
+
         if offload:
             # Keep VRAM headroom for connectors/transformer; text encoder can be reloaded on demand.
             self._offload("text_encoder", offload_type="cpu")
 
-        return prompt_embeds, prompt_attention_mask, negative_prompt_embeds, negative_prompt_attention_mask
-    
-    
+        return (
+            prompt_embeds,
+            prompt_attention_mask,
+            negative_prompt_embeds,
+            negative_prompt_attention_mask,
+        )
+
     @staticmethod
-    def _pack_latents(latents: torch.Tensor, patch_size: int = 1, patch_size_t: int = 1) -> torch.Tensor:
+    def _pack_latents(
+        latents: torch.Tensor, patch_size: int = 1, patch_size_t: int = 1
+    ) -> torch.Tensor:
         # Unpacked latents of shape are [B, C, F, H, W] are patched into tokens of shape [B, C, F // p_t, p_t, H // p, p, W // p, p].
         # The patch dimensions are then permuted and collapsed into the channel dimension of shape:
         # [B, F // p_t * H // p * W // p, C * p_t * p * p] (an ndim=3 tensor).
@@ -594,19 +671,40 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
 
     @staticmethod
     def _unpack_latents(
-        latents: torch.Tensor, num_frames: int, height: int, width: int, patch_size: int = 1, patch_size_t: int = 1
+        latents: torch.Tensor,
+        num_frames: int,
+        height: int,
+        width: int,
+        patch_size: int = 1,
+        patch_size_t: int = 1,
     ) -> torch.Tensor:
         # Packed latents of shape [B, S, D] (S is the effective video sequence length, D is the effective feature dimensions)
         # are unpacked and reshaped into a video tensor of shape [B, C, F, H, W]. This is the inverse operation of
         # what happens in the `_pack_latents` method.
         batch_size = latents.size(0)
-        latents = latents.reshape(batch_size, num_frames, height, width, -1, patch_size_t, patch_size, patch_size)
-        latents = latents.permute(0, 4, 1, 5, 2, 6, 3, 7).flatten(6, 7).flatten(4, 5).flatten(2, 3)
+        latents = latents.reshape(
+            batch_size,
+            num_frames,
+            height,
+            width,
+            -1,
+            patch_size_t,
+            patch_size,
+            patch_size,
+        )
+        latents = (
+            latents.permute(0, 4, 1, 5, 2, 6, 3, 7)
+            .flatten(6, 7)
+            .flatten(4, 5)
+            .flatten(2, 3)
+        )
         return latents
-    
+
     @staticmethod
     def _pack_audio_latents(
-        latents: torch.Tensor, patch_size: Optional[int] = None, patch_size_t: Optional[int] = None
+        latents: torch.Tensor,
+        patch_size: Optional[int] = None,
+        patch_size_t: Optional[int] = None,
     ) -> torch.Tensor:
         # Audio latents shape: [B, C, L, M], where L is the latent audio length and M is the number of mel bins
         if patch_size is not None and patch_size_t is not None:
@@ -616,13 +714,20 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             post_patch_latent_length = latent_length / patch_size_t
             post_patch_mel_bins = latent_mel_bins / patch_size
             latents = latents.reshape(
-                batch_size, -1, post_patch_latent_length, patch_size_t, post_patch_mel_bins, patch_size
+                batch_size,
+                -1,
+                post_patch_latent_length,
+                patch_size_t,
+                post_patch_mel_bins,
+                patch_size,
             )
             latents = latents.permute(0, 2, 4, 1, 3, 5).flatten(3, 5).flatten(1, 2)
         else:
             # Packs the latents into a patch sequence of shape [B, L, C * M]. This implicitly assumes a (mel)
             # patch_size of M (all mel bins constitutes a single patch) and a patch_size_t of 1.
-            latents = latents.transpose(1, 2).flatten(2, 3)  # [B, C, L, M] --> [B, L, C * M]
+            latents = latents.transpose(1, 2).flatten(
+                2, 3
+            )  # [B, C, L, M] --> [B, L, C * M]
         return latents
 
     @staticmethod
@@ -637,14 +742,14 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         # where L is the latent audio length and M is the number of mel bins.
         if patch_size is not None and patch_size_t is not None:
             batch_size = latents.size(0)
-            latents = latents.reshape(batch_size, latent_length, num_mel_bins, -1, patch_size_t, patch_size)
+            latents = latents.reshape(
+                batch_size, latent_length, num_mel_bins, -1, patch_size_t, patch_size
+            )
             latents = latents.permute(0, 3, 1, 4, 2, 5).flatten(4, 5).flatten(2, 3)
         else:
             # Assume [B, S, D] = [B, L, C * M], which implies that patch_size = M and patch_size_t = 1.
             latents = latents.unflatten(2, (-1, num_mel_bins)).transpose(1, 2)
         return latents
-
-    
 
     def rescale_noise_cfg(self, noise_cfg, noise_pred_text, guidance_rescale=0.0):
         r"""
@@ -663,12 +768,16 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         Returns:
             noise_cfg (`torch.Tensor`): The rescaled noise prediction tensor.
         """
-        std_text = noise_pred_text.std(dim=list(range(1, noise_pred_text.ndim)), keepdim=True)
+        std_text = noise_pred_text.std(
+            dim=list(range(1, noise_pred_text.ndim)), keepdim=True
+        )
         std_cfg = noise_cfg.std(dim=list(range(1, noise_cfg.ndim)), keepdim=True)
         # rescale the results from guidance (fixes overexposure)
         noise_pred_rescaled = noise_cfg * (std_text / std_cfg)
         # mix with the original results from guidance by factor guidance_rescale to avoid "plain looking" images
-        noise_cfg = guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_cfg
+        noise_cfg = (
+            guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_cfg
+        )
         return noise_cfg
 
     @property
@@ -698,48 +807,50 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     @property
     def interrupt(self):
         return self._interrupt
-    
+
     @property
     def distilled_stage_1_sigma_values(self):
-        return self.config.get("distilled_sigma_values", [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0])
-    
+        return self.config.get(
+            "distilled_sigma_values",
+            [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0],
+        )
+
     @property
     def distilled_stage_2_sigma_values(self):
-        return self.config.get("distilled_stage_2_sigma_values", [0.909375, 0.725, 0.421875, 0.0])
-    
+        return self.config.get(
+            "distilled_stage_2_sigma_values", [0.909375, 0.725, 0.421875, 0.0]
+        )
+
     @staticmethod
     def _convert_to_uint8(frames: torch.Tensor) -> torch.Tensor:
         frames = (((frames + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
         frames = rearrange(frames[0], "c f h w -> f h w c")
         return frames
-    
-    def _render_step(self, latents:torch.Tensor, render_on_step_callback:Callable):
-        
+
+    def _render_step(self, latents: torch.Tensor, render_on_step_callback: Callable):
+
         latent_num_frames = self._latent_num_frames
         latent_height = self._latent_height
         latent_width = self._latent_width
         latents = self._unpack_latents(
-                latents,
-                latent_num_frames,
-                latent_height,
-                latent_width,
-                self.transformer_spatial_patch_size,
-                self.transformer_temporal_patch_size,
-            )
-        
-        
+            latents,
+            latent_num_frames,
+            latent_height,
+            latent_width,
+            self.transformer_spatial_patch_size,
+            self.transformer_temporal_patch_size,
+        )
+
         if not getattr(self, "video_vae", None):
             self.load_component_by_name("video_vae")
         device = self.device
         self.to_device(self.video_vae)
-        
-        latents = self.video_vae.denormalize_latents(
-            latents
-        )
+
+        latents = self.video_vae.denormalize_latents(latents)
         self.video_vae.enable_tiling()
         batch_size = latents.shape[0]
         latents = latents.to(self.video_vae.dtype)
-    
+
         if not self.video_vae.config.timestep_conditioning:
             timestep = None
         else:
@@ -751,30 +862,32 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             elif not isinstance(decode_noise_scale, list):
                 decode_noise_scale = [decode_noise_scale] * batch_size
             timestep = torch.tensor(decode_timestep, device=device, dtype=latents.dtype)
-            decode_noise_scale = torch.tensor(decode_noise_scale, device=device, dtype=latents.dtype)[
-                :, None, None, None, None
-            ]
+            decode_noise_scale = torch.tensor(
+                decode_noise_scale, device=device, dtype=latents.dtype
+            )[:, None, None, None, None]
             latents = (1 - decode_noise_scale) * latents + decode_noise_scale * noise
         video = self.video_vae.decode(latents, timestep, return_dict=False)[0]
         self._offload("video_vae", offload_type="cpu")
-        
+
         if not getattr(self, "audio_vae", None):
             self.load_component_by_name("audio_vae")
-            
+
         self.to_device(self.audio_vae)
         audio_latents = audio_latents.to(self.audio_vae.dtype)
-        audio_latents = self.audio_vae.denormalize_latents(
-            audio_latents
-        )
-        
+        audio_latents = self.audio_vae.denormalize_latents(audio_latents)
+
         audio_num_frames = self._audio_num_frames
         latent_mel_bins = self._latent_mel_bins
 
-        audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
+        audio_latents = self._unpack_audio_latents(
+            audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins
+        )
         # enable tiling
-        generated_mel_spectrograms = self.audio_vae.decode(audio_latents, return_dict=False)[0]
+        generated_mel_spectrograms = self.audio_vae.decode(
+            audio_latents, return_dict=False
+        )[0]
         self._offload("audio_vae", offload_type="cpu")
-            
+
         # load vocoder
         vocoder = self.helpers["vocoder"]
         self.to_device(vocoder)
@@ -782,8 +895,8 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         audio = vocoder(generated_mel_spectrograms)
 
         self._offload("vocoder", offload_type="cpu")
-        
+
         video = self._convert_to_uint8(video).cpu()
         audio = audio.squeeze(0).cpu().float()
-        
+
         return video, audio

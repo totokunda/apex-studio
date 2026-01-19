@@ -5,16 +5,17 @@ import numpy as np
 import copy
 from diffusers.utils.torch_utils import randn_tensor
 from src.helpers.ltx2.upsampler import upsample_video
-from src.types import InputImage, InputAudio      
+from src.types import InputImage, InputAudio
 from src.utils.cache import empty_cache
 from src.utils.progress import safe_emit_progress, make_mapped_progress
+
 
 class LTX2TI2VEngine(LTX2Shared):
     """LTX2 Text-to-Image-to-Video Engine Implementation"""
 
     def __init__(self, yaml_path: str, **kwargs):
         super().__init__(yaml_path, **kwargs)
-        
+
     def prepare_latents(
         self,
         batch_size: int = 1,
@@ -33,11 +34,13 @@ class LTX2TI2VEngine(LTX2Shared):
         height = height // self.vae_spatial_compression_ratio
         width = width // self.vae_spatial_compression_ratio
         num_frames = (num_frames - 1) // self.vae_temporal_compression_ratio + 1
-        
+
         shape = (batch_size, num_channels_latents, num_frames, height, width)
 
         if latents is None:
-            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+            latents = randn_tensor(
+                shape, generator=generator, device=device, dtype=dtype
+            )
 
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
@@ -49,11 +52,12 @@ class LTX2TI2VEngine(LTX2Shared):
         noise = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
         latents = noise * denoise_mask + latents * (1 - denoise_mask)
         latents = self._pack_latents(
-            latents, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+            latents,
+            self.transformer_spatial_patch_size,
+            self.transformer_temporal_patch_size,
         )
         return latents, None
-    
-    
+
     def prepare_latents_image_conditioning(
         self,
         image: Optional[torch.Tensor] = None,
@@ -102,28 +106,40 @@ class LTX2TI2VEngine(LTX2Shared):
 
         # Normalize strengths to per-conditioning list/tensor.
         if strengths is None:
-            strengths_t = torch.full((num_conds,), 1.0, device=device, dtype=torch.float32)
+            strengths_t = torch.full(
+                (num_conds,), 1.0, device=device, dtype=torch.float32
+            )
         elif isinstance(strengths, (int, float)):
-            strengths_t = torch.full((num_conds,), float(strengths), device=device, dtype=torch.float32)
+            strengths_t = torch.full(
+                (num_conds,), float(strengths), device=device, dtype=torch.float32
+            )
         else:
             if len(strengths) != num_conds:
                 raise ValueError(
                     f"Provided `strengths` has length {len(strengths)}, but expected length {num_conds}."
                 )
-            strengths_t = torch.tensor([float(s) for s in strengths], device=device, dtype=torch.float32)
+            strengths_t = torch.tensor(
+                [float(s) for s in strengths], device=device, dtype=torch.float32
+            )
         strengths_t = strengths_t.clamp(0.0, 1.0).to(dtype=dtype)
 
         # Normalize frame indices to per-conditioning list/tensor (pixel frame indices).
         if pixel_frame_indices is None:
-            pixel_frame_indices_t = torch.zeros((num_conds,), device=device, dtype=torch.long)
+            pixel_frame_indices_t = torch.zeros(
+                (num_conds,), device=device, dtype=torch.long
+            )
         elif isinstance(pixel_frame_indices, int):
-            pixel_frame_indices_t = torch.full((num_conds,), int(pixel_frame_indices), device=device, dtype=torch.long)
+            pixel_frame_indices_t = torch.full(
+                (num_conds,), int(pixel_frame_indices), device=device, dtype=torch.long
+            )
         else:
             if len(pixel_frame_indices) != num_conds:
                 raise ValueError(
                     f"Provided `pixel_frame_indices` has length {len(pixel_frame_indices)}, but expected length {num_conds}."
                 )
-            pixel_frame_indices_t = torch.tensor([int(i) for i in pixel_frame_indices], device=device, dtype=torch.long)
+            pixel_frame_indices_t = torch.tensor(
+                [int(i) for i in pixel_frame_indices], device=device, dtype=torch.long
+            )
 
         if pixel_frame_indices_t.min().item() < 0:
             raise ValueError(
@@ -139,7 +155,9 @@ class LTX2TI2VEngine(LTX2Shared):
                     f"All `pixel_frame_indices` must be in [0, {pixel_num_frames - 1}] (pixel/video frames). "
                     f"Got min={pixel_frame_indices_t.min().item()} max={pixel_frame_indices_t.max().item()}."
                 )
-            frame_indices_t = pixel_frame_indices_t // int(self.vae_temporal_compression_ratio)
+            frame_indices_t = pixel_frame_indices_t // int(
+                self.vae_temporal_compression_ratio
+            )
 
         if frame_indices_t.max().item() >= latent_num_frames:
             raise ValueError(
@@ -150,10 +168,14 @@ class LTX2TI2VEngine(LTX2Shared):
         # Build denoise_mask in latent grid space [B, 1, F, H, W]
         denoise_mask_grid = torch.ones(mask_shape, device=device, dtype=dtype)
         for k in range(num_conds):
-            denoise_mask_grid[:, :, int(frame_indices_t[k].item())] = 1.0 - strengths_t[k]
+            denoise_mask_grid[:, :, int(frame_indices_t[k].item())] = (
+                1.0 - strengths_t[k]
+            )
 
         denoise_mask_tokens = self._pack_latents(
-            denoise_mask_grid, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+            denoise_mask_grid,
+            self.transformer_spatial_patch_size,
+            self.transformer_temporal_patch_size,
         ).mean(dim=-1)
 
         # Start from initial latent grid if provided, otherwise an empty (zero) grid.
@@ -191,17 +213,25 @@ class LTX2TI2VEngine(LTX2Shared):
             scaled_mask = denoise_mask_grid * float(noise_scale)
             latents_grid = noise * scaled_mask + base_latent_grid * (1.0 - scaled_mask)
             latents_tokens = self._pack_latents(
-                latents_grid, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+                latents_grid,
+                self.transformer_spatial_patch_size,
+                self.transformer_temporal_patch_size,
             )
             clean_latents_tokens = self._pack_latents(
-                base_latent_grid, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+                base_latent_grid,
+                self.transformer_spatial_patch_size,
+                self.transformer_temporal_patch_size,
             )
             return latents_tokens, denoise_mask_tokens, clean_latents_tokens
 
         # Inject each conditioning into the base latent grid at its frame index (replace semantics, like ltx-pipelines).
 
         # If generator is a list (per-batch), pick the first for deterministic VAE-encode (sample_mode='mode' usually ignores it anyway).
-        encode_generator = generator[0] if isinstance(generator, list) and len(generator) > 0 else generator
+        encode_generator = (
+            generator[0]
+            if isinstance(generator, list) and len(generator) > 0
+            else generator
+        )
 
         for k in range(num_conds):
             img = image[k]
@@ -217,7 +247,9 @@ class LTX2TI2VEngine(LTX2Shared):
             base_latent_grid[:, :, f_idx : f_idx + 1] = encoded
 
         clean_latents_tokens = self._pack_latents(
-            base_latent_grid, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+            base_latent_grid,
+            self.transformer_spatial_patch_size,
+            self.transformer_temporal_patch_size,
         )
 
         noise = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
@@ -226,7 +258,9 @@ class LTX2TI2VEngine(LTX2Shared):
         latents_grid = noise * scaled_mask + base_latent_grid * (1.0 - scaled_mask)
 
         latents_tokens = self._pack_latents(
-            latents_grid, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+            latents_grid,
+            self.transformer_spatial_patch_size,
+            self.transformer_temporal_patch_size,
         )
 
         return latents_tokens, denoise_mask_tokens, clean_latents_tokens
@@ -252,7 +286,9 @@ class LTX2TI2VEngine(LTX2Shared):
     ) -> tuple[torch.Tensor, int, torch.Tensor, Optional[torch.Tensor]]:
         duration_s = num_frames / frame_rate
         latents_per_second = (
-            float(sampling_rate) / float(hop_length) / float(self.audio_vae_temporal_compression_ratio)
+            float(sampling_rate)
+            / float(hop_length)
+            / float(self.audio_vae_temporal_compression_ratio)
         )
         latent_length = round(duration_s * latents_per_second)
         # TODO: confirm whether this logic is correct
@@ -270,12 +306,19 @@ class LTX2TI2VEngine(LTX2Shared):
         # Base *clean* tokens: either from provided latents or empty (zeros).
         if latents is not None:
             if latents.ndim == 4:
-                expected_grid = (batch_size, num_channels_latents, latent_length, latent_mel_bins)
+                expected_grid = (
+                    batch_size,
+                    num_channels_latents,
+                    latent_length,
+                    latent_mel_bins,
+                )
                 if tuple(latents.shape) != expected_grid:
                     raise ValueError(
                         f"Provided `latents` grid has shape {tuple(latents.shape)}, but expected {expected_grid}."
                     )
-                clean_latents_tokens = self._pack_audio_latents(latents.to(device=device, dtype=dtype))
+                clean_latents_tokens = self._pack_audio_latents(
+                    latents.to(device=device, dtype=dtype)
+                )
             elif latents.ndim == 3:
                 if tuple(latents.shape) != tokens_shape:
                     raise ValueError(
@@ -291,16 +334,25 @@ class LTX2TI2VEngine(LTX2Shared):
             clean_latents_tokens = torch.zeros(tokens_shape, device=device, dtype=dtype)
 
         # Start with a full-denoise mask (1.0) in token space: [B, L]
-        denoise_mask_tokens = torch.ones((batch_size, latent_length), device=device, dtype=dtype)
+        denoise_mask_tokens = torch.ones(
+            (batch_size, latent_length), device=device, dtype=dtype
+        )
 
         # If no audio provided, just return noisy version of current clean tokens (with mask applied).
         if audio is None:
-            noise_tokens = randn_tensor(tokens_shape, generator=generator, device=device, dtype=dtype)
-            scaled_mask_tokens = denoise_mask_tokens * float(noise_scale)
-            latents_tokens = noise_tokens * scaled_mask_tokens.unsqueeze(-1) + clean_latents_tokens * (
-                1.0 - scaled_mask_tokens.unsqueeze(-1)
+            noise_tokens = randn_tensor(
+                tokens_shape, generator=generator, device=device, dtype=dtype
             )
-            return latents_tokens, latent_length, denoise_mask_tokens, clean_latents_tokens
+            scaled_mask_tokens = denoise_mask_tokens * float(noise_scale)
+            latents_tokens = noise_tokens * scaled_mask_tokens.unsqueeze(
+                -1
+            ) + clean_latents_tokens * (1.0 - scaled_mask_tokens.unsqueeze(-1))
+            return (
+                latents_tokens,
+                latent_length,
+                denoise_mask_tokens,
+                clean_latents_tokens,
+            )
 
         # Normalize to list of audio conditionings.
         audio_list = audio if isinstance(audio, list) else [audio]
@@ -308,15 +360,21 @@ class LTX2TI2VEngine(LTX2Shared):
 
         # Normalize strengths to per-conditioning list/tensor.
         if strengths is None:
-            strengths_t = torch.full((num_conds,), 1.0, device=device, dtype=torch.float32)
+            strengths_t = torch.full(
+                (num_conds,), 1.0, device=device, dtype=torch.float32
+            )
         elif isinstance(strengths, (int, float)):
-            strengths_t = torch.full((num_conds,), float(strengths), device=device, dtype=torch.float32)
+            strengths_t = torch.full(
+                (num_conds,), float(strengths), device=device, dtype=torch.float32
+            )
         else:
             if len(strengths) != num_conds:
                 raise ValueError(
                     f"Provided `strengths` has length {len(strengths)}, but expected length {num_conds}."
                 )
-            strengths_t = torch.tensor([float(s) for s in strengths], device=device, dtype=torch.float32)
+            strengths_t = torch.tensor(
+                [float(s) for s in strengths], device=device, dtype=torch.float32
+            )
         strengths_t = strengths_t.clamp(0.0, 1.0).to(dtype=dtype)
 
         # Normalize range indices: list of (start, end) in *audio latent index* space.
@@ -331,7 +389,9 @@ class LTX2TI2VEngine(LTX2Shared):
                     ranges.append((latent_length, latent_length))
                     continue
                 # We'll decide range length after encoding (based on the audio's encoded latent length).
-                ranges.append((cursor, latent_length))  # provisional end; fixed per-item below
+                ranges.append(
+                    (cursor, latent_length)
+                )  # provisional end; fixed per-item below
                 cursor = latent_length  # sentinel; corrected later
         elif isinstance(range_indices, tuple):
             if num_conds != 1:
@@ -351,7 +411,11 @@ class LTX2TI2VEngine(LTX2Shared):
         if not getattr(self, "audio_vae", None):
             self.load_component_by_name("audio_vae")
         self.to_device(self.audio_vae)
-        encode_generator = generator[0] if isinstance(generator, list) and len(generator) > 0 else generator
+        encode_generator = (
+            generator[0]
+            if isinstance(generator, list) and len(generator) > 0
+            else generator
+        )
 
         for k in range(num_conds):
             aud_grid = self.encode_audio_latents_grid_(
@@ -369,14 +433,20 @@ class LTX2TI2VEngine(LTX2Shared):
                     start = 0
                 else:
                     start = ranges[k - 1][1]
-                seg_len = int(min(int(aud_grid.shape[2]), max(0, latent_length - start)))
+                seg_len = int(
+                    min(int(aud_grid.shape[2]), max(0, latent_length - start))
+                )
                 end = start + seg_len
                 ranges[k] = (start, end)
             else:
                 if start < 0 or end < 0:
-                    raise ValueError(f"All `range_indices` must be >= 0. Got ({start}, {end}).")
+                    raise ValueError(
+                        f"All `range_indices` must be >= 0. Got ({start}, {end})."
+                    )
                 if start > end:
-                    raise ValueError(f"`range_indices` must be (start <= end). Got ({start}, {end}).")
+                    raise ValueError(
+                        f"`range_indices` must be (start <= end). Got ({start}, {end})."
+                    )
                 if start > latent_length or end > latent_length:
                     raise ValueError(
                         f"`range_indices` must be within [0, {latent_length}]. Got ({start}, {end})."
@@ -410,9 +480,9 @@ class LTX2TI2VEngine(LTX2Shared):
             # Patchify to tokens and normalize (matches `prepare_audio_latents_` behavior).
             cond_tokens = self._pack_audio_latents(aud_grid)  # [1, seg_len, token_dim]
             cond_tokens = self.audio_vae.normalize_latents(cond_tokens)
-            cond_tokens = cond_tokens.repeat(batch_size, 1, 1)  # [B, seg_len, token_dim]
-            
-
+            cond_tokens = cond_tokens.repeat(
+                batch_size, 1, 1
+            )  # [B, seg_len, token_dim]
 
             # Replace clean latents + denoise mask over the selected range.
             clean_latents_tokens[:, start:end] = cond_tokens
@@ -423,11 +493,13 @@ class LTX2TI2VEngine(LTX2Shared):
             # preserve VRAM headroom for the transformer and video VAE.
             self._offload("audio_vae", offload_type="cpu")
 
-        noise_tokens = randn_tensor(tokens_shape, generator=generator, device=device, dtype=dtype)
-        scaled_mask_tokens = denoise_mask_tokens * float(noise_scale)
-        latents_tokens = noise_tokens * scaled_mask_tokens.unsqueeze(-1) + clean_latents_tokens * (
-            1.0 - scaled_mask_tokens.unsqueeze(-1)
+        noise_tokens = randn_tensor(
+            tokens_shape, generator=generator, device=device, dtype=dtype
         )
+        scaled_mask_tokens = denoise_mask_tokens * float(noise_scale)
+        latents_tokens = noise_tokens * scaled_mask_tokens.unsqueeze(
+            -1
+        ) + clean_latents_tokens * (1.0 - scaled_mask_tokens.unsqueeze(-1))
 
         return latents_tokens, latent_length, denoise_mask_tokens, clean_latents_tokens
 
@@ -457,7 +529,9 @@ class LTX2TI2VEngine(LTX2Shared):
         latents: Optional[torch.Tensor] = None,
         audio_latents: Optional[torch.Tensor] = None,
         audio_strengths: Optional[Union[float, List[float]]] = None,
-        audio_range_indices: Optional[Union[tuple[int, int], List[tuple[int, int]]]] = None,
+        audio_range_indices: Optional[
+            Union[tuple[int, int], List[tuple[int, int]]]
+        ] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         prompt_attention_mask: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
@@ -493,30 +567,40 @@ class LTX2TI2VEngine(LTX2Shared):
         progress_callback: Optional[Callable[[float, str], None]] = None,
         **kwargs,
     ):
-        
 
         # Progress mapping:
         # - If `upsample=True` (stage-1 + stage-2 refinement), map stage-1 to [0.00, 0.90] and stage-2 to [0.90, 1.00]
         #   so progress doesn't "reset" mid-run.
         if upsample and not use_distilled_stage_2:
-            stage1_progress_callback = make_mapped_progress(progress_callback, 0.00, 0.90)
-            stage2_progress_callback = make_mapped_progress(progress_callback, 0.90, 1.00)
+            stage1_progress_callback = make_mapped_progress(
+                progress_callback, 0.00, 0.90
+            )
+            stage2_progress_callback = make_mapped_progress(
+                progress_callback, 0.90, 1.00
+            )
         else:
             stage1_progress_callback = progress_callback
             stage2_progress_callback = progress_callback
-            
-        
-        safe_emit_progress(stage1_progress_callback, 0.0, "Starting text-to-image-to-video pipeline")
+
+        safe_emit_progress(
+            stage1_progress_callback, 0.0, "Starting text-to-image-to-video pipeline"
+        )
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
 
         num_frames = self._parse_num_frames(duration, fps)
-        
+
         # Image conditioning should be applied in BOTH stages (stage-2 starts from upscaled latents but still
         # replaces latent slices + denoise mask), matching ltx-pipelines distilled behavior.
-        height = round(height / self.vae_spatial_compression_ratio) * self.vae_spatial_compression_ratio
-        width = round(width / self.vae_spatial_compression_ratio) * self.vae_spatial_compression_ratio
-        
+        height = (
+            round(height / self.vae_spatial_compression_ratio)
+            * self.vae_spatial_compression_ratio
+        )
+        width = (
+            round(width / self.vae_spatial_compression_ratio)
+            * self.vae_spatial_compression_ratio
+        )
+
         self._guidance_scale = guidance_scale
         self._guidance_rescale = guidance_rescale
         self._attention_kwargs = attention_kwargs
@@ -524,12 +608,11 @@ class LTX2TI2VEngine(LTX2Shared):
         self._current_timestep = None
         target_height = height
         target_width = width
-        
+
         if upsample:
             height = target_height // 2
             width = target_width // 2
-            
-        
+
         # --- Image conditioning inputs ---
         # Support an optional `last_image` which is appended as an additional conditioning at the end.
         input_images: List[InputImage] = []
@@ -543,9 +626,13 @@ class LTX2TI2VEngine(LTX2Shared):
         # - if max index < latent_num_frames => interpret as latent indices
         # - else                            => interpret as pixel indices
         effective_image_strengths: Optional[Union[float, List[float]]] = image_strengths
-        effective_image_pixel_frame_indices: Optional[Union[int, List[int]]] = image_pixel_frame_indices
+        effective_image_pixel_frame_indices: Optional[Union[int, List[int]]] = (
+            image_pixel_frame_indices
+        )
         if last_image is not None:
-            latent_num_frames_for_idx = (num_frames - 1) // int(self.vae_temporal_compression_ratio) + 1
+            latent_num_frames_for_idx = (num_frames - 1) // int(
+                self.vae_temporal_compression_ratio
+            ) + 1
 
             def _infer_index_space_end(
                 idxs: Optional[Union[int, List[int]]],
@@ -574,14 +661,20 @@ class LTX2TI2VEngine(LTX2Shared):
             if image_pixel_frame_indices is None:
                 effective_image_pixel_frame_indices = ([0] * base_count) + [last_idx]
             elif isinstance(image_pixel_frame_indices, int):
-                effective_image_pixel_frame_indices = ([int(image_pixel_frame_indices)] * base_count) + [last_idx]
+                effective_image_pixel_frame_indices = (
+                    [int(image_pixel_frame_indices)] * base_count
+                ) + [last_idx]
             else:
                 # If caller already provided indices for all images including last_image, keep length but force last to end.
                 if len(image_pixel_frame_indices) == len(input_images):
-                    effective_image_pixel_frame_indices = list(image_pixel_frame_indices)
+                    effective_image_pixel_frame_indices = list(
+                        image_pixel_frame_indices
+                    )
                     effective_image_pixel_frame_indices[-1] = last_idx
                 elif len(image_pixel_frame_indices) == base_count:
-                    effective_image_pixel_frame_indices = list(image_pixel_frame_indices) + [last_idx]
+                    effective_image_pixel_frame_indices = list(
+                        image_pixel_frame_indices
+                    ) + [last_idx]
                 else:
                     raise ValueError(
                         f"Provided `image_pixel_frame_indices` has length {len(image_pixel_frame_indices)}, but expected "
@@ -598,7 +691,9 @@ class LTX2TI2VEngine(LTX2Shared):
             if image_strengths is None:
                 effective_image_strengths = ([1.0] * base_count) + [last_s]
             elif isinstance(image_strengths, (int, float)):
-                effective_image_strengths = ([float(image_strengths)] * base_count) + [last_s]
+                effective_image_strengths = ([float(image_strengths)] * base_count) + [
+                    last_s
+                ]
             else:
                 if len(image_strengths) == len(input_images):
                     effective_image_strengths = list(image_strengths)
@@ -612,20 +707,35 @@ class LTX2TI2VEngine(LTX2Shared):
                     )
 
         if len(input_images) > 0:
-            safe_emit_progress(stage1_progress_callback, 0.03, "Loading and preprocessing conditioning image(s)")
+            safe_emit_progress(
+                stage1_progress_callback,
+                0.03,
+                "Loading and preprocessing conditioning image(s)",
+            )
             # Multiple images are treated as multiple conditionings for a *single* latent sequence (not batch items).
             image = [self._load_image(img) for img in input_images]
-            
-            image = [self._aspect_ratio_resize(img, max_area=height * width, mod_value=self.vae_spatial_compression_ratio)[0] for img in image]
-            preprocessed_image = [self.preprocess(img, crf=image_quality_crf) for img in image]
+
+            image = [
+                self._aspect_ratio_resize(
+                    img,
+                    max_area=height * width,
+                    mod_value=self.vae_spatial_compression_ratio,
+                )[0]
+                for img in image
+            ]
+            preprocessed_image = [
+                self.preprocess(img, crf=image_quality_crf) for img in image
+            ]
             if not use_distilled_stage_2:
                 width, height = image[0].size
-                
-            condition_images = [self.video_processor.preprocess(img, height=height, width=width) for img in preprocessed_image]
+
+            condition_images = [
+                self.video_processor.preprocess(img, height=height, width=width)
+                for img in preprocessed_image
+            ]
             condition_images = torch.cat(condition_images, dim=0)
         else:
             condition_images = None
-            
 
         # 2. Define call parameters
         if prompt is not None and isinstance(prompt, str):
@@ -654,10 +764,16 @@ class LTX2TI2VEngine(LTX2Shared):
         }
         # Used by BaseEngine.enable_vae_tiling()
         self._vae_tiling_runtime_kwargs = vae_tiling_kwargs
-        
-        if self.preloaded_loras and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras and not use_distilled_stage_2:
+
+        if (
+            self.preloaded_loras
+            and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras
+            and not use_distilled_stage_2
+        ):
             self.logger.info("Disabling LTX2 19B Distilled LoRA 384 with scale 0.0")
-            self._previous_lora_scale = self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale
+            self._previous_lora_scale = self.preloaded_loras[
+                "ltx-2-19b-distilled-lora-384"
+            ].scale
             self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale = 0.0
 
         # 3. Prepare text embeddings
@@ -681,34 +797,45 @@ class LTX2TI2VEngine(LTX2Shared):
             device=device,
             offload=offload,
         )
-        
+
         if self.do_classifier_free_guidance:
             # We still build the combined [uncond; cond] embedding stack for connectors, but optionally
             # avoid duplicating the *latents* batch during denoising by running two forward passes.
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-            prompt_attention_mask = torch.cat([negative_prompt_attention_mask, prompt_attention_mask], dim=0)
-            
+            prompt_attention_mask = torch.cat(
+                [negative_prompt_attention_mask, prompt_attention_mask], dim=0
+            )
+
         connectors = self.helpers["connectors"]
         self.to_device(connectors)
         # dtype of prompt_embeds and prompt_attention_mask should be the same
         connectors_dtype = connectors.dtype
 
-        additive_attention_mask = (1 - prompt_attention_mask.to(connectors_dtype)) * -1000000.0
+        additive_attention_mask = (
+            1 - prompt_attention_mask.to(connectors_dtype)
+        ) * -1000000.0
         safe_emit_progress(stage1_progress_callback, 0.12, "Running connector(s)")
-        connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask = connectors(
-            prompt_embeds.to(connectors_dtype), additive_attention_mask, additive_mask=True
+        (
+            connector_prompt_embeds,
+            connector_audio_prompt_embeds,
+            connector_attention_mask,
+        ) = connectors(
+            prompt_embeds.to(connectors_dtype),
+            additive_attention_mask,
+            additive_mask=True,
         )
-        # 
+        #
         connector_prompt_embeds = connector_prompt_embeds.to(prompt_embeds.dtype)
-        connector_audio_prompt_embeds = connector_audio_prompt_embeds.to(prompt_embeds.dtype)
+        connector_audio_prompt_embeds = connector_audio_prompt_embeds.to(
+            prompt_embeds.dtype
+        )
         connector_attention_mask = connector_attention_mask.to(prompt_embeds.dtype)
-        
+
         del connectors
         if offload:
             # Connectors are ~3GB; always offload when requested to prevent
             # them from staying resident across stage boundaries.
             self._offload("connectors", offload_type="cpu")
-            
 
         # 4. Prepare latent variables
         safe_emit_progress(stage1_progress_callback, 0.18, "Preparing latents")
@@ -716,45 +843,48 @@ class LTX2TI2VEngine(LTX2Shared):
         latent_height = height // self.vae_spatial_compression_ratio
         latent_width = width // self.vae_spatial_compression_ratio
         video_sequence_length = latent_num_frames * latent_height * latent_width
-        
+
         transformer_config = self.load_config_by_type("transformer")
         num_channels_latents = transformer_config.in_channels
-        
-        
+
         clean_latents = None
         freeze_latent_frame_indices: Optional[List[int]] = None
-        
+
         # Determine if we should use image conditioning logic:
         # - condition_images is provided (normal case), OR
         # - latents are provided with conditioning info (stage 2 refinement case - use upsampled latents as conditioning)
-        use_image_conditioning = (
-            condition_images is not None
-            or (
-                latents is not None
-                and (effective_image_strengths is not None or effective_image_pixel_frame_indices is not None)
+        use_image_conditioning = condition_images is not None or (
+            latents is not None
+            and (
+                effective_image_strengths is not None
+                or effective_image_pixel_frame_indices is not None
             )
         )
-        
+
         if use_image_conditioning:
-            latents, denoise_mask, clean_latents = self.prepare_latents_image_conditioning(
-                image=condition_images,
-                batch_size=batch_size * num_videos_per_prompt,
-                num_channels_latents=num_channels_latents,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                noise_scale=noise_scale,
-                dtype=torch.float32,
-                device=device,
-                generator=generator,
-                latents=latents,
-                strengths=effective_image_strengths,
-                pixel_frame_indices=effective_image_pixel_frame_indices,
-                offload=offload,
+            latents, denoise_mask, clean_latents = (
+                self.prepare_latents_image_conditioning(
+                    image=condition_images,
+                    batch_size=batch_size * num_videos_per_prompt,
+                    num_channels_latents=num_channels_latents,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    noise_scale=noise_scale,
+                    dtype=torch.float32,
+                    device=device,
+                    generator=generator,
+                    latents=latents,
+                    strengths=effective_image_strengths,
+                    pixel_frame_indices=effective_image_pixel_frame_indices,
+                    offload=offload,
+                )
             )
-            
+
             denoise_mask_model = (
-                torch.cat([denoise_mask, denoise_mask], dim=0) if self.do_classifier_free_guidance else denoise_mask
+                torch.cat([denoise_mask, denoise_mask], dim=0)
+                if self.do_classifier_free_guidance
+                else denoise_mask
             )
 
             # Build a list of latent-frame indices to freeze (i.e. never denoise), matching the "diffusers slicing"
@@ -800,7 +930,10 @@ class LTX2TI2VEngine(LTX2Shared):
                     if max(idx_list) < latent_num_frames:
                         latent_idx_list = idx_list
                     else:
-                        latent_idx_list = [i // int(self.vae_temporal_compression_ratio) for i in idx_list]
+                        latent_idx_list = [
+                            i // int(self.vae_temporal_compression_ratio)
+                            for i in idx_list
+                        ]
                 else:
                     latent_idx_list = []
 
@@ -808,10 +941,14 @@ class LTX2TI2VEngine(LTX2Shared):
                 for li, s in zip(latent_idx_list, strengths_list):
                     if s >= 0.999:  # treat ~1.0 as "fully frozen"
                         freeze.add(int(li))
-                freeze_latent_frame_indices = sorted([i for i in freeze if 0 <= i < latent_num_frames])
+                freeze_latent_frame_indices = sorted(
+                    [i for i in freeze if 0 <= i < latent_num_frames]
+                )
             except Exception as e:
                 # If anything goes wrong, fall back to mask-based re-imposition only.
-                self.logger.warning(f"Failed to compute freeze_latent_frame_indices; falling back to mask-only. Error: {e}")
+                self.logger.warning(
+                    f"Failed to compute freeze_latent_frame_indices; falling back to mask-only. Error: {e}"
+                )
                 freeze_latent_frame_indices = None
         else:
             latents, denoise_mask = self.prepare_latents(
@@ -829,29 +966,37 @@ class LTX2TI2VEngine(LTX2Shared):
             )
             denoise_mask_model = None
 
-        num_mel_bins = self.audio_vae.config.mel_bins if getattr(self, "audio_vae", None) is not None else 64
-        latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
-        
-        num_channels_latents_audio = (
-            self.audio_vae.config.latent_channels if getattr(self, "audio_vae", None) is not None else 8
+        num_mel_bins = (
+            self.audio_vae.config.mel_bins
+            if getattr(self, "audio_vae", None) is not None
+            else 64
         )
-        
-        audio_latents, audio_num_frames, audio_denoise_mask, audio_clean_latents = self.prepare_audio_latents(
-            audio=audio,
-            batch_size=batch_size * num_videos_per_prompt,
-            num_channels_latents=num_channels_latents_audio,
-            num_mel_bins=num_mel_bins,
-            num_frames=num_frames,  # Video frames, audio frames will be calculated from this
-            frame_rate=fps,
-            sampling_rate=self.audio_sampling_rate,
-            hop_length=self.audio_hop_length,
-            dtype=torch.float32,
-            device=device,
-            generator=generator,
-            latents=audio_latents,
-            noise_scale=noise_scale,
-            strengths=audio_strengths,
-            range_indices=audio_range_indices,
+        latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
+
+        num_channels_latents_audio = (
+            self.audio_vae.config.latent_channels
+            if getattr(self, "audio_vae", None) is not None
+            else 8
+        )
+
+        audio_latents, audio_num_frames, audio_denoise_mask, audio_clean_latents = (
+            self.prepare_audio_latents(
+                audio=audio,
+                batch_size=batch_size * num_videos_per_prompt,
+                num_channels_latents=num_channels_latents_audio,
+                num_mel_bins=num_mel_bins,
+                num_frames=num_frames,  # Video frames, audio frames will be calculated from this
+                frame_rate=fps,
+                sampling_rate=self.audio_sampling_rate,
+                hop_length=self.audio_hop_length,
+                dtype=torch.float32,
+                device=device,
+                generator=generator,
+                latents=audio_latents,
+                noise_scale=noise_scale,
+                strengths=audio_strengths,
+                range_indices=audio_range_indices,
+            )
         )
 
         audio_denoise_mask_model = (
@@ -875,11 +1020,11 @@ class LTX2TI2VEngine(LTX2Shared):
                 sigmas = sigmas[:-1]
         else:
             sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
-            
+
         if not self.scheduler:
             self.load_component_by_type("scheduler")
         self.to_device(self.scheduler)
-        
+
         if not use_distilled_stage_2 and not use_distilled_stage_1:
             mu = self.calculate_shift(
                 video_sequence_length,
@@ -891,7 +1036,7 @@ class LTX2TI2VEngine(LTX2Shared):
         else:
             mu = None
             self.scheduler.config.use_dynamic_shifting = False
-        
+
         self.scheduler.set_shift(1.0)  # critical: prevents the extra static shift
         self.scheduler.config.shift_terminal = None
         self.scheduler.config.use_karras_sigmas = False
@@ -918,29 +1063,41 @@ class LTX2TI2VEngine(LTX2Shared):
             sigmas=sigmas,
             mu=mu,
         )
-        
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+
+        num_warmup_steps = max(
+            len(timesteps) - num_inference_steps * self.scheduler.order, 0
+        )
         self._num_timesteps = len(timesteps)
-        
+
         if not self.transformer:
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
 
-
         if chunking_profile != "none":
             self.transformer.set_chunking_profile(chunking_profile)
-        
-        if self.preloaded_loras and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras and use_distilled_stage_2:
-            self.logger.info(f"Applying LTX2 19B Distilled LoRA 384 with scale {getattr(self, '_previous_lora_scale', 1.0)}")
+
+        if (
+            self.preloaded_loras
+            and "ltx-2-19b-distilled-lora-384" in self.preloaded_loras
+            and use_distilled_stage_2
+        ):
+            self.logger.info(
+                f"Applying LTX2 19B Distilled LoRA 384 with scale {getattr(self, '_previous_lora_scale', 1.0)}"
+            )
             lora = self.preloaded_loras["ltx-2-19b-distilled-lora-384"]
             lora.scale = getattr(self, "_previous_lora_scale", 1.0)
             self.apply_loras([(lora.source, lora.scale)], adapter_names=[lora.name])
 
         # Pre-compute video and audio positional ids as they will be the same at each step of the denoising loop
         video_coords = self.transformer.rope.prepare_video_coords(
-            latents.shape[0], latent_num_frames, latent_height, latent_width, latents.device, fps=fps
+            latents.shape[0],
+            latent_num_frames,
+            latent_height,
+            latent_width,
+            latents.device,
+            fps=fps,
         )
-        
+
         audio_coords = self.transformer.audio_rope.prepare_audio_coords(
             audio_latents.shape[0], audio_num_frames, audio_latents.device, fps=fps
         )
@@ -955,17 +1112,21 @@ class LTX2TI2VEngine(LTX2Shared):
         self._latent_width = latent_width
         self._audio_num_frames = audio_num_frames
         self._latent_mel_bins = latent_mel_bins
-        
+
         sigmas_t = getattr(self.scheduler, "sigmas", None)
         if use_gradient_estimation:
-            if getattr(getattr(self.scheduler, "config", None), "stochastic_sampling", False):
+            if getattr(
+                getattr(self.scheduler, "config", None), "stochastic_sampling", False
+            ):
                 self.logger.warning(
                     "Gradient-estimation sampling requested, but scheduler.config.stochastic_sampling=True. "
                     "Falling back to default Euler scheduler.step."
                 )
                 use_gradient_estimation = False
             elif sigmas_t is None:
-                raise ValueError("Gradient-estimation sampling requires scheduler.sigmas to be available.")
+                raise ValueError(
+                    "Gradient-estimation sampling requires scheduler.sigmas to be available."
+                )
 
         if use_gradient_estimation:
             # Ensure sigmas are on device and float32 for stable scalar math.
@@ -982,8 +1143,12 @@ class LTX2TI2VEngine(LTX2Shared):
             prev_video_velocity_grid = None
             prev_audio_velocity = None
 
-            denoise_progress_callback = make_mapped_progress(stage1_progress_callback, 0.50, 0.90)
-            safe_emit_progress(stage1_progress_callback, 0.45, "Starting denoise (gradient-estimation)")
+            denoise_progress_callback = make_mapped_progress(
+                stage1_progress_callback, 0.50, 0.90
+            )
+            safe_emit_progress(
+                stage1_progress_callback, 0.45, "Starting denoise (gradient-estimation)"
+            )
             with self._progress_bar(total=num_steps) as progress_bar:
                 for i, t in enumerate(timesteps_loop):
                     if self.interrupt:
@@ -1005,12 +1170,16 @@ class LTX2TI2VEngine(LTX2Shared):
 
                         timestep_2b = t.expand(2 * bsz)
                         if denoise_mask_model is not None:
-                            video_timestep_2b = timestep_2b.unsqueeze(-1) * denoise_mask_model
+                            video_timestep_2b = (
+                                timestep_2b.unsqueeze(-1) * denoise_mask_model
+                            )
                         else:
                             video_timestep_2b = timestep_2b
 
                         if audio_denoise_mask_model is not None:
-                            audio_timestep_2b = timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            audio_timestep_2b = (
+                                timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            )
                         else:
                             audio_timestep_2b = timestep_2b
 
@@ -1018,12 +1187,20 @@ class LTX2TI2VEngine(LTX2Shared):
                             vel_video_uncond, vel_audio_uncond = self.transformer(
                                 hidden_states=latent_model_input,
                                 audio_hidden_states=audio_latent_model_input,
-                                encoder_hidden_states=connector_prompt_embeds[uncond_idx],
-                                audio_encoder_hidden_states=connector_audio_prompt_embeds[uncond_idx],
+                                encoder_hidden_states=connector_prompt_embeds[
+                                    uncond_idx
+                                ],
+                                audio_encoder_hidden_states=connector_audio_prompt_embeds[
+                                    uncond_idx
+                                ],
                                 timestep=video_timestep_2b[uncond_idx],
                                 audio_timestep=audio_timestep_2b[uncond_idx],
-                                encoder_attention_mask=connector_attention_mask[uncond_idx],
-                                audio_encoder_attention_mask=connector_attention_mask[uncond_idx],
+                                encoder_attention_mask=connector_attention_mask[
+                                    uncond_idx
+                                ],
+                                audio_encoder_attention_mask=connector_attention_mask[
+                                    uncond_idx
+                                ],
                                 num_frames=latent_num_frames,
                                 height=latent_height,
                                 width=latent_width,
@@ -1038,11 +1215,17 @@ class LTX2TI2VEngine(LTX2Shared):
                                 hidden_states=latent_model_input,
                                 audio_hidden_states=audio_latent_model_input,
                                 encoder_hidden_states=connector_prompt_embeds[cond_idx],
-                                audio_encoder_hidden_states=connector_audio_prompt_embeds[cond_idx],
+                                audio_encoder_hidden_states=connector_audio_prompt_embeds[
+                                    cond_idx
+                                ],
                                 timestep=video_timestep_2b[cond_idx],
                                 audio_timestep=audio_timestep_2b[cond_idx],
-                                encoder_attention_mask=connector_attention_mask[cond_idx],
-                                audio_encoder_attention_mask=connector_attention_mask[cond_idx],
+                                encoder_attention_mask=connector_attention_mask[
+                                    cond_idx
+                                ],
+                                audio_encoder_attention_mask=connector_attention_mask[
+                                    cond_idx
+                                ],
                                 num_frames=latent_num_frames,
                                 height=latent_height,
                                 width=latent_width,
@@ -1054,24 +1237,40 @@ class LTX2TI2VEngine(LTX2Shared):
                                 return_dict=False,
                             )
 
-                        vel_pred_video = torch.cat([vel_video_uncond, vel_video_text], dim=0).float()
-                        vel_pred_audio = torch.cat([vel_audio_uncond, vel_audio_text], dim=0).float()
+                        vel_pred_video = torch.cat(
+                            [vel_video_uncond, vel_video_text], dim=0
+                        ).float()
+                        vel_pred_audio = torch.cat(
+                            [vel_audio_uncond, vel_audio_text], dim=0
+                        ).float()
                     else:
-                        latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                        latent_model_input = (
+                            torch.cat([latents] * 2)
+                            if self.do_classifier_free_guidance
+                            else latents
+                        )
                         latent_model_input = latent_model_input.to(prompt_embeds.dtype)
                         audio_latent_model_input = (
-                            torch.cat([audio_latents] * 2) if self.do_classifier_free_guidance else audio_latents
+                            torch.cat([audio_latents] * 2)
+                            if self.do_classifier_free_guidance
+                            else audio_latents
                         )
-                        audio_latent_model_input = audio_latent_model_input.to(prompt_embeds.dtype)
+                        audio_latent_model_input = audio_latent_model_input.to(
+                            prompt_embeds.dtype
+                        )
 
                         timestep_2b = t.expand(latent_model_input.shape[0])
                         if denoise_mask_model is not None:
-                            video_timestep_2b = timestep_2b.unsqueeze(-1) * denoise_mask_model
+                            video_timestep_2b = (
+                                timestep_2b.unsqueeze(-1) * denoise_mask_model
+                            )
                         else:
                             video_timestep_2b = timestep_2b
 
                         if audio_denoise_mask_model is not None:
-                            audio_timestep_2b = timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            audio_timestep_2b = (
+                                timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            )
                         else:
                             audio_timestep_2b = timestep_2b
 
@@ -1100,17 +1299,25 @@ class LTX2TI2VEngine(LTX2Shared):
 
                     if self.do_classifier_free_guidance:
                         vel_video_uncond, vel_video_text = vel_pred_video.chunk(2)
-                        vel_pred_video = vel_video_uncond + self.guidance_scale * (vel_video_text - vel_video_uncond)
+                        vel_pred_video = vel_video_uncond + self.guidance_scale * (
+                            vel_video_text - vel_video_uncond
+                        )
 
                         vel_audio_uncond, vel_audio_text = vel_pred_audio.chunk(2)
-                        vel_pred_audio = vel_audio_uncond + self.guidance_scale * (vel_audio_text - vel_audio_uncond)
+                        vel_pred_audio = vel_audio_uncond + self.guidance_scale * (
+                            vel_audio_text - vel_audio_uncond
+                        )
 
                         if self.guidance_rescale > 0:
                             vel_pred_video = self.rescale_noise_cfg(
-                                vel_pred_video, vel_video_text, guidance_rescale=self.guidance_rescale
+                                vel_pred_video,
+                                vel_video_text,
+                                guidance_rescale=self.guidance_rescale,
                             )
                             vel_pred_audio = self.rescale_noise_cfg(
-                                vel_pred_audio, vel_audio_text, guidance_rescale=self.guidance_rescale
+                                vel_pred_audio,
+                                vel_audio_text,
+                                guidance_rescale=self.guidance_rescale,
                             )
 
                     sigma = sigmas_t[i]
@@ -1126,15 +1333,22 @@ class LTX2TI2VEngine(LTX2Shared):
                     # denoise_mask=1 => denoise/noise; denoise_mask=0 => keep clean latent.
                     if denoise_mask is not None and clean_latents is not None:
                         m = denoise_mask.unsqueeze(-1)
-                        denoised_video = (denoised_video * m + clean_latents.float() * (1.0 - m)).to(denoised_video.dtype)
+                        denoised_video = (
+                            denoised_video * m + clean_latents.float() * (1.0 - m)
+                        ).to(denoised_video.dtype)
 
                     # Convert to velocities (v = (x - x0) / sigma) and apply gradient estimation.
                     if float(sigma.item()) == 0.0:
-                        raise ValueError("Sigma can't be 0.0 during gradient-estimation update.")
+                        raise ValueError(
+                            "Sigma can't be 0.0 during gradient-estimation update."
+                        )
 
                     # If requested, freeze fully-conditioned latent frames (diffusers slicing approach) in GE mode too.
                     # We do the video GE update in unpacked grid space so we can freeze frame indices precisely.
-                    if freeze_latent_frame_indices is not None and len(freeze_latent_frame_indices) > 0:
+                    if (
+                        freeze_latent_frame_indices is not None
+                        and len(freeze_latent_frame_indices) > 0
+                    ):
                         latents_grid = self._unpack_latents(
                             latents,
                             latent_num_frames,
@@ -1153,22 +1367,32 @@ class LTX2TI2VEngine(LTX2Shared):
                         )
 
                         freeze_set = set(int(i) for i in freeze_latent_frame_indices)
-                        freeze_idx = [fi for fi in range(latent_num_frames) if fi in freeze_set]
+                        freeze_idx = [
+                            fi for fi in range(latent_num_frames) if fi in freeze_set
+                        ]
 
                         # Ensure frozen frames never change by forcing x0 == x for those frames (=> velocity 0).
                         if len(freeze_idx) > 0:
-                            denoised_video_grid[:, :, freeze_idx] = latents_grid[:, :, freeze_idx]
+                            denoised_video_grid[:, :, freeze_idx] = latents_grid[
+                                :, :, freeze_idx
+                            ]
 
-                        cur_video_velocity_grid = (latents_grid - denoised_video_grid) / sigma
+                        cur_video_velocity_grid = (
+                            latents_grid - denoised_video_grid
+                        ) / sigma
 
                         if prev_video_velocity_grid is not None:
                             total_video_velocity_grid = (
-                                ge_gamma * (cur_video_velocity_grid - prev_video_velocity_grid) + prev_video_velocity_grid
+                                ge_gamma
+                                * (cur_video_velocity_grid - prev_video_velocity_grid)
+                                + prev_video_velocity_grid
                             )
                         else:
                             total_video_velocity_grid = cur_video_velocity_grid
 
-                        denoised_video_grid = latents_grid - sigma * total_video_velocity_grid
+                        denoised_video_grid = (
+                            latents_grid - sigma * total_video_velocity_grid
+                        )
 
                         # If this is the final sigma -> 0 transition, return x0 directly (matches ltx-pipelines behavior).
                         if float(sigma_next.item()) == 0.0:
@@ -1179,7 +1403,9 @@ class LTX2TI2VEngine(LTX2Shared):
                             ).to(latents.dtype)
                         else:
                             latents = self._pack_latents(
-                                (latents_grid + dt * total_video_velocity_grid).to(latents_grid.dtype),
+                                (latents_grid + dt * total_video_velocity_grid).to(
+                                    latents_grid.dtype
+                                ),
                                 self.transformer_spatial_patch_size,
                                 self.transformer_temporal_patch_size,
                             ).to(latents.dtype)
@@ -1192,34 +1418,56 @@ class LTX2TI2VEngine(LTX2Shared):
                         cur_video_velocity = (latents - denoised_video) / sigma
                     cur_audio_velocity = (audio_latents - denoised_audio) / sigma
 
-                    if freeze_latent_frame_indices is None or len(freeze_latent_frame_indices) == 0:
+                    if (
+                        freeze_latent_frame_indices is None
+                        or len(freeze_latent_frame_indices) == 0
+                    ):
                         if prev_video_velocity is not None:
-                            total_video_velocity = ge_gamma * (cur_video_velocity - prev_video_velocity) + prev_video_velocity
+                            total_video_velocity = (
+                                ge_gamma * (cur_video_velocity - prev_video_velocity)
+                                + prev_video_velocity
+                            )
                             denoised_video = latents - sigma * total_video_velocity
                         else:
                             total_video_velocity = cur_video_velocity
 
                     if prev_audio_velocity is not None:
-                        total_audio_velocity = ge_gamma * (cur_audio_velocity - prev_audio_velocity) + prev_audio_velocity
+                        total_audio_velocity = (
+                            ge_gamma * (cur_audio_velocity - prev_audio_velocity)
+                            + prev_audio_velocity
+                        )
                         denoised_audio = audio_latents - sigma * total_audio_velocity
                     else:
                         total_audio_velocity = cur_audio_velocity
 
                     # If this is the final sigma -> 0 transition, return x0 directly (matches ltx-pipelines behavior).
                     if float(sigma_next.item()) == 0.0:
-                        if freeze_latent_frame_indices is None or len(freeze_latent_frame_indices) == 0:
+                        if (
+                            freeze_latent_frame_indices is None
+                            or len(freeze_latent_frame_indices) == 0
+                        ):
                             latents = denoised_video.to(latents.dtype)
                         audio_latents = denoised_audio.to(audio_latents.dtype)
                         progress_bar.update()
                         break
 
                     # Euler step in sigma-space.
-                    if freeze_latent_frame_indices is None or len(freeze_latent_frame_indices) == 0:
-                        latents = (latents + dt * total_video_velocity).to(latents.dtype)
-                    audio_latents = (audio_latents + dt * total_audio_velocity).to(audio_latents.dtype)
+                    if (
+                        freeze_latent_frame_indices is None
+                        or len(freeze_latent_frame_indices) == 0
+                    ):
+                        latents = (latents + dt * total_video_velocity).to(
+                            latents.dtype
+                        )
+                    audio_latents = (audio_latents + dt * total_audio_velocity).to(
+                        audio_latents.dtype
+                    )
 
                     # Track previous velocities (use the *current* velocity, not the corrected one).
-                    if freeze_latent_frame_indices is None or len(freeze_latent_frame_indices) == 0:
+                    if (
+                        freeze_latent_frame_indices is None
+                        or len(freeze_latent_frame_indices) == 0
+                    ):
                         prev_video_velocity = cur_video_velocity
                     prev_audio_velocity = cur_audio_velocity
 
@@ -1232,7 +1480,7 @@ class LTX2TI2VEngine(LTX2Shared):
                             float(i + 1) / float(max(num_steps, 1)),
                             f"Denoising step {i + 1}/{num_steps}",
                         )
-                
+
                     if empty_cache_after_step:
                         empty_cache()
         else:
@@ -1248,7 +1496,9 @@ class LTX2TI2VEngine(LTX2Shared):
                     mu=mu,
                 )
 
-            denoise_progress_callback = make_mapped_progress(stage1_progress_callback, 0.50, 0.90)
+            denoise_progress_callback = make_mapped_progress(
+                stage1_progress_callback, 0.50, 0.90
+            )
             safe_emit_progress(stage1_progress_callback, 0.45, "Starting denoise")
             with self._progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
@@ -1272,78 +1522,117 @@ class LTX2TI2VEngine(LTX2Shared):
                         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                         timestep_2b = t.expand(2 * bsz)
                         if denoise_mask_model is not None:
-                            video_timestep_2b = timestep_2b.unsqueeze(-1) * denoise_mask_model
+                            video_timestep_2b = (
+                                timestep_2b.unsqueeze(-1) * denoise_mask_model
+                            )
                         else:
                             video_timestep_2b = timestep_2b
 
                         if audio_denoise_mask_model is not None:
-                            audio_timestep_2b = timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            audio_timestep_2b = (
+                                timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            )
                         else:
                             audio_timestep_2b = timestep_2b
-                            
-                       
+
                         with self.transformer.cache_context("cond_uncond"):
-                            noise_pred_video_uncond, noise_pred_audio_uncond = self.transformer(
-                                hidden_states=latent_model_input,
-                                audio_hidden_states=audio_latent_model_input,
-                                encoder_hidden_states=connector_prompt_embeds[uncond_idx],
-                                audio_encoder_hidden_states=connector_audio_prompt_embeds[uncond_idx],
-                                timestep=video_timestep_2b[uncond_idx],
-                                audio_timestep=audio_timestep_2b[uncond_idx],
-                                encoder_attention_mask=connector_attention_mask[uncond_idx],
-                                audio_encoder_attention_mask=connector_attention_mask[uncond_idx],
-                                num_frames=latent_num_frames,
-                                height=latent_height,
-                                width=latent_width,
-                                fps=fps,
-                                audio_num_frames=audio_num_frames,
-                                video_coords=video_coords,
-                                audio_coords=audio_coords,
-                                attention_kwargs=attention_kwargs,
-                                return_dict=False,
+                            noise_pred_video_uncond, noise_pred_audio_uncond = (
+                                self.transformer(
+                                    hidden_states=latent_model_input,
+                                    audio_hidden_states=audio_latent_model_input,
+                                    encoder_hidden_states=connector_prompt_embeds[
+                                        uncond_idx
+                                    ],
+                                    audio_encoder_hidden_states=connector_audio_prompt_embeds[
+                                        uncond_idx
+                                    ],
+                                    timestep=video_timestep_2b[uncond_idx],
+                                    audio_timestep=audio_timestep_2b[uncond_idx],
+                                    encoder_attention_mask=connector_attention_mask[
+                                        uncond_idx
+                                    ],
+                                    audio_encoder_attention_mask=connector_attention_mask[
+                                        uncond_idx
+                                    ],
+                                    num_frames=latent_num_frames,
+                                    height=latent_height,
+                                    width=latent_width,
+                                    fps=fps,
+                                    audio_num_frames=audio_num_frames,
+                                    video_coords=video_coords,
+                                    audio_coords=audio_coords,
+                                    attention_kwargs=attention_kwargs,
+                                    return_dict=False,
+                                )
                             )
-                            noise_pred_video_text, noise_pred_audio_text = self.transformer(
-                                hidden_states=latent_model_input,
-                                audio_hidden_states=audio_latent_model_input,
-                                encoder_hidden_states=connector_prompt_embeds[cond_idx],
-                                audio_encoder_hidden_states=connector_audio_prompt_embeds[cond_idx],
-                                timestep=video_timestep_2b[cond_idx],
-                                audio_timestep=audio_timestep_2b[cond_idx],
-                                encoder_attention_mask=connector_attention_mask[cond_idx],
-                                audio_encoder_attention_mask=connector_attention_mask[cond_idx],
-                                num_frames=latent_num_frames,
-                                height=latent_height,
-                                width=latent_width,
-                                fps=fps,
-                                audio_num_frames=audio_num_frames,
-                                video_coords=video_coords,
-                                audio_coords=audio_coords,
-                                attention_kwargs=attention_kwargs,
-                                return_dict=False,
+                            noise_pred_video_text, noise_pred_audio_text = (
+                                self.transformer(
+                                    hidden_states=latent_model_input,
+                                    audio_hidden_states=audio_latent_model_input,
+                                    encoder_hidden_states=connector_prompt_embeds[
+                                        cond_idx
+                                    ],
+                                    audio_encoder_hidden_states=connector_audio_prompt_embeds[
+                                        cond_idx
+                                    ],
+                                    timestep=video_timestep_2b[cond_idx],
+                                    audio_timestep=audio_timestep_2b[cond_idx],
+                                    encoder_attention_mask=connector_attention_mask[
+                                        cond_idx
+                                    ],
+                                    audio_encoder_attention_mask=connector_attention_mask[
+                                        cond_idx
+                                    ],
+                                    num_frames=latent_num_frames,
+                                    height=latent_height,
+                                    width=latent_width,
+                                    fps=fps,
+                                    audio_num_frames=audio_num_frames,
+                                    video_coords=video_coords,
+                                    audio_coords=audio_coords,
+                                    attention_kwargs=attention_kwargs,
+                                    return_dict=False,
+                                )
                             )
 
-                        noise_pred_video = torch.cat([noise_pred_video_uncond, noise_pred_video_text], dim=0).float()
-                        noise_pred_audio = torch.cat([noise_pred_audio_uncond, noise_pred_audio_text], dim=0).float()
+                        noise_pred_video = torch.cat(
+                            [noise_pred_video_uncond, noise_pred_video_text], dim=0
+                        ).float()
+                        noise_pred_audio = torch.cat(
+                            [noise_pred_audio_uncond, noise_pred_audio_text], dim=0
+                        ).float()
                     else:
-                        latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                        latent_model_input = (
+                            torch.cat([latents] * 2)
+                            if self.do_classifier_free_guidance
+                            else latents
+                        )
                         latent_model_input = latent_model_input.to(prompt_embeds.dtype)
                         audio_latent_model_input = (
-                            torch.cat([audio_latents] * 2) if self.do_classifier_free_guidance else audio_latents
+                            torch.cat([audio_latents] * 2)
+                            if self.do_classifier_free_guidance
+                            else audio_latents
                         )
-                        audio_latent_model_input = audio_latent_model_input.to(prompt_embeds.dtype)
+                        audio_latent_model_input = audio_latent_model_input.to(
+                            prompt_embeds.dtype
+                        )
 
                         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                         timestep_2b = t.expand(latent_model_input.shape[0])
                         if denoise_mask_model is not None:
-                            video_timestep_2b = timestep_2b.unsqueeze(-1) * denoise_mask_model
+                            video_timestep_2b = (
+                                timestep_2b.unsqueeze(-1) * denoise_mask_model
+                            )
                         else:
                             video_timestep_2b = timestep_2b
 
                         if audio_denoise_mask_model is not None:
-                            audio_timestep_2b = timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            audio_timestep_2b = (
+                                timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            )
                         else:
                             audio_timestep_2b = timestep_2b
-                        
+
                         with self.transformer.cache_context("cond_uncond"):
                             noise_pred_video, noise_pred_audio = self.transformer(
                                 hidden_states=latent_model_input,
@@ -1368,27 +1657,42 @@ class LTX2TI2VEngine(LTX2Shared):
                         noise_pred_audio = noise_pred_audio.float()
 
                     if self.do_classifier_free_guidance:
-                        noise_pred_video_uncond, noise_pred_video_text = noise_pred_video.chunk(2)
-                        noise_pred_video = noise_pred_video_uncond + self.guidance_scale * (
-                            noise_pred_video_text - noise_pred_video_uncond
+                        noise_pred_video_uncond, noise_pred_video_text = (
+                            noise_pred_video.chunk(2)
+                        )
+                        noise_pred_video = (
+                            noise_pred_video_uncond
+                            + self.guidance_scale
+                            * (noise_pred_video_text - noise_pred_video_uncond)
                         )
 
-                        noise_pred_audio_uncond, noise_pred_audio_text = noise_pred_audio.chunk(2)
-                        noise_pred_audio = noise_pred_audio_uncond + self.guidance_scale * (
-                            noise_pred_audio_text - noise_pred_audio_uncond
+                        noise_pred_audio_uncond, noise_pred_audio_text = (
+                            noise_pred_audio.chunk(2)
+                        )
+                        noise_pred_audio = (
+                            noise_pred_audio_uncond
+                            + self.guidance_scale
+                            * (noise_pred_audio_text - noise_pred_audio_uncond)
                         )
 
                         if self.guidance_rescale > 0:
                             # Based on 3.4. in https://huggingface.co/papers/2305.08891
                             noise_pred_video = self.rescale_noise_cfg(
-                                noise_pred_video, noise_pred_video_text, guidance_rescale=self.guidance_rescale
+                                noise_pred_video,
+                                noise_pred_video_text,
+                                guidance_rescale=self.guidance_rescale,
                             )
                             noise_pred_audio = self.rescale_noise_cfg(
-                                noise_pred_audio, noise_pred_audio_text, guidance_rescale=self.guidance_rescale
+                                noise_pred_audio,
+                                noise_pred_audio_text,
+                                guidance_rescale=self.guidance_rescale,
                             )
 
                     # compute the previous noisy sample x_t -> x_t-1
-                    if freeze_latent_frame_indices is not None and len(freeze_latent_frame_indices) > 0:
+                    if (
+                        freeze_latent_frame_indices is not None
+                        and len(freeze_latent_frame_indices) > 0
+                    ):
                         # Unpack -> step only unfrozen frames -> stitch -> repack.
                         noise_pred_video_grid = self._unpack_latents(
                             noise_pred_video,
@@ -1408,45 +1712,62 @@ class LTX2TI2VEngine(LTX2Shared):
                         )
 
                         freeze_set = set(int(i) for i in freeze_latent_frame_indices)
-                        denoise_idx = [fi for fi in range(latent_num_frames) if fi not in freeze_set]
+                        denoise_idx = [
+                            fi
+                            for fi in range(latent_num_frames)
+                            if fi not in freeze_set
+                        ]
                         if len(denoise_idx) > 0:
                             noise_pred_slice = noise_pred_video_grid[:, :, denoise_idx]
                             latents_slice = latents_grid[:, :, denoise_idx]
-                            pred_slice = self.scheduler.step(noise_pred_slice, t, latents_slice, return_dict=False)[0]
+                            pred_slice = self.scheduler.step(
+                                noise_pred_slice, t, latents_slice, return_dict=False
+                            )[0]
                             latents_grid[:, :, denoise_idx] = pred_slice
 
                         latents = self._pack_latents(
-                            latents_grid, self.transformer_spatial_patch_size, self.transformer_temporal_patch_size
+                            latents_grid,
+                            self.transformer_spatial_patch_size,
+                            self.transformer_temporal_patch_size,
                         )
                     else:
-                        latents = self.scheduler.step(noise_pred_video, t, latents, return_dict=False)[0]
+                        latents = self.scheduler.step(
+                            noise_pred_video, t, latents, return_dict=False
+                        )[0]
                     # NOTE: for now duplicate scheduler for audio latents in case self.scheduler sets internal state in
                     # the step method (such as _step_index)
-                    audio_latents = audio_scheduler.step(noise_pred_audio, t, audio_latents, return_dict=False)[0]
+                    audio_latents = audio_scheduler.step(
+                        noise_pred_audio, t, audio_latents, return_dict=False
+                    )[0]
 
                     # Re-impose hard conditioning each step (matches ltx-pipelines `post_process_latent` semantics).
                     # Without this, the conditioned frame(s) can drift immediately after the first step.
                     if denoise_mask is not None and clean_latents is not None:
                         m = denoise_mask.unsqueeze(-1)
-                        latents = (latents * m + clean_latents.float() * (1.0 - m)).to(latents.dtype)
+                        latents = (latents * m + clean_latents.float() * (1.0 - m)).to(
+                            latents.dtype
+                        )
 
                     # call the callback, if provided
                     if i == len(timesteps) - 1 or (
-                        ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0)
+                        (
+                            (i + 1) > num_warmup_steps
+                            and (i + 1) % self.scheduler.order == 0
+                        )
                     ):
                         progress_bar.update()
                         denoise_progress_callback(
                             float(i + 1) / float(max(num_inference_steps, 1)),
                             f"Denoising step {i + 1}/{num_inference_steps}",
                         )
-                    
+
                     if empty_cache_after_step:
                         empty_cache()
-        
-        
 
         if upsample:
-            safe_emit_progress(stage1_progress_callback, 0.92, "Upsampling latents (stage-2 prep)")
+            safe_emit_progress(
+                stage1_progress_callback, 0.92, "Upsampling latents (stage-2 prep)"
+            )
             upsampler = self.helpers["latent_upsampler"]
 
             self.to_device(upsampler)
@@ -1466,9 +1787,11 @@ class LTX2TI2VEngine(LTX2Shared):
                 self.transformer_spatial_patch_size,
                 self.transformer_temporal_patch_size,
             )
-            audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
+            audio_latents = self._unpack_audio_latents(
+                audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins
+            )
             latents = upsample_video(latents, self.video_vae, upsampler)
-            
+
             del upsampler
             if offload:
                 self._offload("latent_upsampler", offload_type="cpu")
@@ -1486,8 +1809,7 @@ class LTX2TI2VEngine(LTX2Shared):
                 except Exception:
                     pass
                 empty_cache()
-            
-            
+
             # call run function again with the upsampled latents
             noise_scale = self.distilled_stage_2_sigma_values[0]
             target_height = latents.shape[3] * self.vae_spatial_compression_ratio
@@ -1496,9 +1818,11 @@ class LTX2TI2VEngine(LTX2Shared):
             # Stage 2 refinement: Do NOT pass image to avoid re-encoding at wrong resolution.
             # The upsampled latents already contain the conditioning from stage 1.
             # Pass image_strengths and image_pixel_frame_indices to maintain the denoise mask and freeze mechanism.
-            safe_emit_progress(stage1_progress_callback, 0.98, "Starting stage-2 refinement")
+            safe_emit_progress(
+                stage1_progress_callback, 0.98, "Starting stage-2 refinement"
+            )
             return self.run(
-                image=image, 
+                image=image,
                 audio=audio,
                 audio_strengths=audio_strengths,
                 audio_range_indices=audio_range_indices,
@@ -1537,7 +1861,7 @@ class LTX2TI2VEngine(LTX2Shared):
                 vae_tile_sample_stride_num_frames=vae_tile_sample_stride_num_frames,
                 progress_callback=stage2_progress_callback,
             )
-        
+
         if offload:
             # Transformer is the largest VRAM resident; make offload explicit.
             self._offload("transformer", offload_type="cpu")
@@ -1545,16 +1869,16 @@ class LTX2TI2VEngine(LTX2Shared):
         if return_latents:
             safe_emit_progress(stage1_progress_callback, 1.0, "Returning latents")
             return (latents, audio_latents)
-        
+
         latents = self._unpack_latents(
-                latents,
-                latent_num_frames,
-                latent_height,
-                latent_width,
-                self.transformer_spatial_patch_size,
-                self.transformer_temporal_patch_size,
-            )
-        
+            latents,
+            latent_num_frames,
+            latent_height,
+            latent_width,
+            self.transformer_spatial_patch_size,
+            self.transformer_temporal_patch_size,
+        )
+
         if not getattr(self, "video_vae", None):
             self.load_component_by_name("video_vae")
         # VAE decode is often the peak VRAM moment (large conv3d activations).
@@ -1569,15 +1893,15 @@ class LTX2TI2VEngine(LTX2Shared):
             f"framewise_enc={'on' if vae_use_framewise_encoding else 'auto'}, "
             f"framewise_dec={'on' if vae_use_framewise_decoding else 'auto'}"
         )
-        
-        latents = self.video_vae.denormalize_latents(
-            latents
-        )
+
+        latents = self.video_vae.denormalize_latents(latents)
         latents = latents.to(prompt_embeds.dtype)
         if not self.video_vae.config.timestep_conditioning:
             timestep = None
         else:
-            noise = randn_tensor(latents.shape, generator=generator, device=device, dtype=latents.dtype)
+            noise = randn_tensor(
+                latents.shape, generator=generator, device=device, dtype=latents.dtype
+            )
             if not isinstance(decode_timestep, list):
                 decode_timestep = [decode_timestep] * batch_size
             if decode_noise_scale is None:
@@ -1585,9 +1909,9 @@ class LTX2TI2VEngine(LTX2Shared):
             elif not isinstance(decode_noise_scale, list):
                 decode_noise_scale = [decode_noise_scale] * batch_size
             timestep = torch.tensor(decode_timestep, device=device, dtype=latents.dtype)
-            decode_noise_scale = torch.tensor(decode_noise_scale, device=device, dtype=latents.dtype)[
-                :, None, None, None, None
-            ]
+            decode_noise_scale = torch.tensor(
+                decode_noise_scale, device=device, dtype=latents.dtype
+            )[:, None, None, None, None]
             latents = (1 - decode_noise_scale) * latents + decode_noise_scale * noise
         latents = latents.to(self.video_vae.dtype)
         safe_emit_progress(stage1_progress_callback, 0.94, "Decoding video latents")
@@ -1600,22 +1924,22 @@ class LTX2TI2VEngine(LTX2Shared):
             timestep=timestep,
             offload_type="cpu",
         )
-            
+
         if not getattr(self, "audio_vae", None):
             self.load_component_by_name("audio_vae")
-            
+
         # Audio decode/vocoder can also spike VRAM. Ensure headroom before moving
         # these modules to GPU.
-        
+
         self.to_device(self.audio_vae)
         audio_latents = audio_latents.to(self.audio_vae.dtype)
-        audio_latents = self.audio_vae.denormalize_latents(
-            audio_latents
-        )
+        audio_latents = self.audio_vae.denormalize_latents(audio_latents)
 
-        audio_latents = self._unpack_audio_latents(audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins)
+        audio_latents = self._unpack_audio_latents(
+            audio_latents, audio_num_frames, num_mel_bins=latent_mel_bins
+        )
         # enable tiling
-        
+
         safe_emit_progress(stage1_progress_callback, 0.96, "Decoding audio latents")
         generated_mel_spectrograms = self.vae_decode(
             audio_latents,
@@ -1624,14 +1948,14 @@ class LTX2TI2VEngine(LTX2Shared):
             denormalize_latents=False,
             offload_type="cpu",
         )
-            
+
         # load vocoder
         vocoder = self.helpers["vocoder"]
         self.to_device(vocoder)
-        
+
         safe_emit_progress(stage1_progress_callback, 0.98, "Vocoder synthesis")
         generated_mel_spectrograms = generated_mel_spectrograms.to(vocoder.dtype)
-      
+
         audio = vocoder(generated_mel_spectrograms)
 
         if offload:
@@ -1639,8 +1963,9 @@ class LTX2TI2VEngine(LTX2Shared):
 
         video = self._convert_to_uint8(video).cpu()
         audio = audio.squeeze(0).cpu().float()
-        
-        safe_emit_progress(stage1_progress_callback, 1.0, "Completed text-to-image-to-video pipeline")
-        
+
+        safe_emit_progress(
+            stage1_progress_callback, 1.0, "Completed text-to-image-to-video pipeline"
+        )
+
         return video, audio
-    
