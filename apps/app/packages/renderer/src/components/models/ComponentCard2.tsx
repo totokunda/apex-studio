@@ -814,7 +814,7 @@ const DownloadProgressSection: React.FC<{
   onCancel: () => void;
   onReset?: () => void;
   width: number;
-}> = ({ jobUpdates, onCancel, onReset, width }) => {
+}> = ({ jobUpdates, onCancel, width }) => {
   if (!jobUpdates.length) return null;
   const [isCancelling] = useState(false);
 

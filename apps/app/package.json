@@ -3,7 +3,7 @@
   "productName": "Apex Studio",
   "description": "Apex Studio",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "author": {
     "email": "totokunda@gmail.com",
@@ -15,6 +15,10 @@
   ],
   "engines": {
     "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/totokunda/apex-studio.git"
   },
   "scripts": {
     "build": "npm run build -ws --if-present",
