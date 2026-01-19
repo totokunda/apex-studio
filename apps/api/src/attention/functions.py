@@ -104,7 +104,8 @@ def _get_metal_flash_sdpa():
     try:
         from kernels import get_kernel  # type: ignore
 
-        _metal_flash_sdpa = get_kernel("kernels-community/metal_flash-sdpa")
+        # NOTE: repo id uses hyphens (not underscores).
+        _metal_flash_sdpa = get_kernel("kernels-community/metal-flash-sdpa")
         return _metal_flash_sdpa
     except Exception as e:
         _metal_flash_sdpa_load_error = e
@@ -430,7 +431,7 @@ def metal_flash(
         raise ImportError(
             "Metal Flash SDPA kernel not available. "
             "Ensure the `kernels` package is installed and "
-            "`kernels-community/metal_flash-sdpa` is accessible."
+            "`kernels-community/metal-flash-sdpa` is accessible."
         )
 
     if q.device.type != "mps":
@@ -537,7 +538,7 @@ def metal_flash_varlen(
         raise ImportError(
             "Metal Flash SDPA kernel not available. "
             "Ensure the `kernels` package is installed and "
-            "`kernels-community/metal_flash-sdpa` is accessible."
+            "`kernels-community/metal-flash-sdpa` is accessible."
         )
 
     if q.device.type != "mps":
@@ -2143,7 +2144,7 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
         queue.put(False)
 
 
-def verify_attention_backends() -> List[str]:
+def verify_attention_backends(force_refresh: bool = False) -> List[str]:
     """
     Verify attention backends.
     1. Check if cached results exist.
@@ -2151,12 +2152,12 @@ def verify_attention_backends() -> List[str]:
     3. Save results to cache.
     """
     global _WORKING_ATTENTIONS
-    if _WORKING_ATTENTIONS is not None:
+    if _WORKING_ATTENTIONS is not None and not force_refresh:
         return _WORKING_ATTENTIONS
 
     # 1. Try loading from cache
     cache = _load_attention_cache()
-    if cache is not None:
+    if cache is not None and not force_refresh:
         working = cache["working"]
         failed = cache.get("failed", [])
         _WORKING_ATTENTIONS = working
