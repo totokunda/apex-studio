@@ -5,6 +5,15 @@ export type ApiUpdateEvent =
   | { type: "available"; info: unknown }
   | { type: "not-available"; info: unknown }
   | { type: "updating" }
+  | {
+      type: "progress";
+      stage: "stopping" | "downloading" | "applying" | "restarting";
+      /**
+       * 0..100 (best-effort; may be omitted when unknown).
+       */
+      percent?: number;
+      message?: string;
+    }
   | { type: "updated"; info?: unknown }
   | { type: "error"; message: string }
   | { type: "allow-nightly-changed"; allowNightly: boolean };
@@ -22,6 +31,13 @@ export type ApiUpdateState = {
   errorMessage?: string;
   lastCheckedAt?: number;
   allowNightly: boolean;
+  /**
+   * When set and in the future, the main process requests that we do not show
+   * the API-update toast again until this timestamp (ms since epoch).
+   *
+   * This is intentionally in-memory only (cleared on app restart).
+   */
+  toastSuppressedUntil?: number;
 };
 
 const API_UPDATE_EVENT_CHANNEL = "api-update:event";
@@ -54,5 +70,11 @@ export async function checkForApiUpdates(): Promise<unknown | null> {
 
 export async function applyApiUpdate(): Promise<{ ok: boolean; message?: string }> {
   return await ipcRenderer.invoke("api-update:apply");
+}
+
+export async function suppressApiUpdateToast(
+  durationMs?: number,
+): Promise<{ ok: boolean; suppressedUntil: number }> {
+  return await ipcRenderer.invoke("api-update:suppress-toast", { durationMs });
 }
 
