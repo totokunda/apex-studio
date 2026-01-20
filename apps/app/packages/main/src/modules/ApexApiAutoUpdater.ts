@@ -12,6 +12,15 @@ type ApiUpdateEvent =
   | { type: "available"; info: unknown }
   | { type: "not-available"; info: unknown }
   | { type: "updating" }
+  | {
+      type: "progress";
+      stage: "stopping" | "downloading" | "applying" | "restarting";
+      /**
+       * 0..100 (best-effort; may be omitted when unknown).
+       */
+      percent?: number;
+      message?: string;
+    }
   | { type: "updated"; info?: unknown }
   | { type: "error"; message: string }
   | { type: "allow-nightly-changed"; allowNightly: boolean };
@@ -22,6 +31,7 @@ type ApiUpdateState = {
   errorMessage?: string;
   lastCheckedAt?: number;
   allowNightly: boolean;
+  toastSuppressedUntil?: number;
 };
 
 const API_UPDATE_EVENT_CHANNEL = "api-update:event";
@@ -31,6 +41,9 @@ let lastKnownState: ApiUpdateState = {
   status: "idle",
   allowNightly: false,
 };
+
+// In-memory toast suppression (clears on app restart).
+let toastSuppressedUntil = 0;
 
 function broadcastApiUpdateEvent(ev: ApiUpdateEvent) {
   // Best-effort broadcast to all windows. We intentionally avoid hard dependencies on WindowManager.
@@ -121,6 +134,73 @@ async function spawnCapture(opts: {
   });
 }
 
+async function spawnCaptureWithProgress(opts: {
+  cmd: string;
+  args: string[];
+  timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+  onStdoutChunk?: (chunk: string) => void;
+  onStderrChunk?: (chunk: string) => void;
+}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : 60_000;
+
+  return await new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const child = spawn(opts.cmd, opts.args, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: opts.env || process.env,
+    });
+
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            try {
+              child.kill();
+            } catch {
+              // ignore
+            }
+          }, timeoutMs)
+        : null;
+
+    child.stdout?.on("data", (b) => {
+      const chunk = b.toString("utf-8");
+      stdout += chunk;
+      try {
+        opts.onStdoutChunk?.(chunk);
+      } catch {
+        // ignore
+      }
+    });
+    child.stderr?.on("data", (b) => {
+      const chunk = b.toString("utf-8");
+      stderr += chunk;
+      try {
+        opts.onStderrChunk?.(chunk);
+      } catch {
+        // ignore
+      }
+    });
+
+    child.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+
+    child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
 function safeJsonParseFromStdout(stdout: string): unknown {
   const s = String(stdout || "").trim();
   if (!s) return null;
@@ -192,13 +272,28 @@ export class ApexApiAutoUpdater implements AppModule {
     if (ipcMain.listenerCount("api-update:get-state") > 0) return;
 
     ipcMain.handle("api-update:get-state", async () => {
-      return lastKnownState;
+      return {
+        ...lastKnownState,
+        toastSuppressedUntil: toastSuppressedUntil > 0 ? toastSuppressedUntil : undefined,
+      } satisfies ApiUpdateState;
     });
 
     ipcMain.handle("api-update:set-allow-nightly", async (_event, allowNightly: boolean) => {
       this.setAllowNightly(Boolean(allowNightly));
       return { ok: true, allowNightly: lastKnownState.allowNightly };
     });
+
+    ipcMain.handle(
+      "api-update:suppress-toast",
+      async (_event, payload?: { durationMs?: number }) => {
+        const durationMs =
+          typeof payload?.durationMs === "number" && Number.isFinite(payload.durationMs)
+            ? Math.max(0, payload.durationMs)
+            : 12 * 60 * 60 * 1000;
+        toastSuppressedUntil = Date.now() + durationMs;
+        return { ok: true, suppressedUntil: toastSuppressedUntil };
+      },
+    );
 
     ipcMain.handle("api-update:check", async () => {
       const res = await this.checkForUpdates();
@@ -324,9 +419,16 @@ export class ApexApiAutoUpdater implements AppModule {
 
       lastKnownState = { ...lastKnownState, status: "updating", errorMessage: undefined };
       broadcastApiUpdateEvent({ type: "updating" });
+      broadcastApiUpdateEvent({ type: "progress", stage: "stopping", percent: 0, message: "Stopping engine…" });
 
       let updateOutput: unknown | null = null;
+      let updateOk = false;
       try {
+        try {
+          py.setAutoRestartSuppressed(true, "api-update");
+        } catch {
+          // ignore
+        }
         // Stop the API process before applying updates.
         await py.stop();
 
@@ -341,23 +443,60 @@ export class ApexApiAutoUpdater implements AppModule {
           ...(lastKnownState.allowNightly ? ["--allow-nightly"] : []),
         ];
 
+        let rolling = "";
+        let lastPct: number | null = null;
+        const emitProgressFromText = (text: string) => {
+          rolling = (rolling + text).slice(-4096);
+
+          // Stage signals.
+          if (/Downloading:/i.test(text) || /Downloading[.…\.]/u.test(text)) {
+            broadcastApiUpdateEvent({ type: "progress", stage: "downloading", message: "Downloading update…" });
+          }
+          if (/Downloaded:/i.test(text) || /Update applied/i.test(text)) {
+            broadcastApiUpdateEvent({ type: "progress", stage: "applying", message: "Applying update…" });
+          }
+
+          // Percent signal: handles "Downloading…  12.3% ..." (uses carriage returns).
+          const m = rolling.match(/Downloading[.…\.]*\s*([0-9]{1,3}(?:\.[0-9]+)?)%/u);
+          if (m?.[1]) {
+            const pct = Number(m[1]);
+            if (Number.isFinite(pct)) {
+              const clamped = Math.max(0, Math.min(100, pct));
+              // De-noise: only emit on meaningful change.
+              if (lastPct === null || Math.abs(clamped - lastPct) >= 0.2) {
+                lastPct = clamped;
+                broadcastApiUpdateEvent({
+                  type: "progress",
+                  stage: "downloading",
+                  percent: clamped,
+                  message: `Downloading update… ${clamped.toFixed(1)}%`,
+                });
+              }
+            }
+          }
+        };
+
         const { code, stdout, stderr } = await (async () => {
           try {
-            return await spawnCapture({
+            return await spawnCaptureWithProgress({
               cmd,
               args,
               // Updates can take a while (download + extract).
               timeoutMs: 30 * 60 * 1000,
               env,
+              onStdoutChunk: emitProgressFromText,
+              onStderrChunk: emitProgressFromText,
             });
           } catch (e) {
             // Same fallback as checkForUpdates: allow older broken bundles to update themselves.
             if (cmd !== fallback.cmd) {
-              return await spawnCapture({
+              return await spawnCaptureWithProgress({
                 cmd: fallback.cmd,
                 args: [...fallback.baseArgs, ...args.slice(baseArgs.length)],
                 timeoutMs: 30 * 60 * 1000,
                 env,
+                onStdoutChunk: emitProgressFromText,
+                onStderrChunk: emitProgressFromText,
               });
             }
             throw e;
@@ -377,9 +516,7 @@ export class ApexApiAutoUpdater implements AppModule {
         } catch {
           updateOutput = { stdout };
         }
-
-        lastKnownState = { ...lastKnownState, status: "updated", updateInfo: updateOutput };
-        broadcastApiUpdateEvent({ type: "updated", ...(updateOutput ? { info: updateOutput } : {}) });
+        updateOk = true;
         return { ok: true };
       } catch (error) {
         const message =
@@ -390,12 +527,23 @@ export class ApexApiAutoUpdater implements AppModule {
       } finally {
         // Restart the API process after updates (or failed attempt).
         try {
+          broadcastApiUpdateEvent({ type: "progress", stage: "restarting", message: "Restarting engine…" });
           await py.start();
+          if (updateOk) {
+            lastKnownState = { ...lastKnownState, status: "updated", updateInfo: updateOutput ?? undefined };
+            broadcastApiUpdateEvent({ type: "updated", ...(updateOutput ? { info: updateOutput } : {}) });
+          }
         } catch (e) {
           const message =
             e instanceof Error ? e.message : "Failed to restart API after update";
           lastKnownState = { ...lastKnownState, status: "error", errorMessage: message };
           broadcastApiUpdateEvent({ type: "error", message });
+        } finally {
+          try {
+            py.setAutoRestartSuppressed(false);
+          } catch {
+            // ignore
+          }
         }
         // Refresh update state in the background.
         void this.checkForUpdates();
