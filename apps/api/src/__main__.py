@@ -825,7 +825,8 @@ def _semver_triplet_prefix(v: str) -> Optional[tuple[int, int, int]]:
     Parse an X.Y.Z semver triplet from the start of a string.
     Accepts suffixes like "1.2.3-nightly.20260119".
     """
-    m = re.match(r"^\s*(\d+)\.(\d+)\.(\d+)", (v or "").strip())
+    # Also accept a leading "v" (common in release tags / folders): "v1.2.3".
+    m = re.match(r"^\s*v?(\d+)\.(\d+)\.(\d+)", (v or "").strip(), flags=re.IGNORECASE)
     if not m:
         return None
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
@@ -863,21 +864,80 @@ def _read_json_file(path: Path) -> dict:
 
 
 def _read_installed_manifest(target_dir: Path) -> dict:
-    # Prefer full bundle manifest.
+    # Prefer the code-update manifest if present.
+    #
+    # Reason: code-only updates replace `src/` + related assets, but do NOT update the
+    # original bundle manifest. If we always prefer apex-engine-manifest.json, the
+    # updater can think it's still on the old version and keep reporting an update
+    # available even after applying it.
+    m2 = target_dir / "apex-code-update-manifest.json"
+    if m2.exists():
+        data = _read_json_file(m2)
+        v = str(data.get("version") or "").strip()
+        if _semver_triplet_prefix(v) is not None:
+            return data
+
+    # Fallback: full bundle manifest.
     m = target_dir / "apex-engine-manifest.json"
     if m.exists():
         return _read_json_file(m)
-    # Code-only marker.
-    m2 = target_dir / "apex-code-update-manifest.json"
-    if m2.exists():
-        return _read_json_file(m2)
     return {}
+
+
+@app.command()
+def version(
+    format: str = typer.Option(
+        "text",
+        "--format",
+        help="Output format: text or json.",
+        show_default=True,
+    ),
+    target_dir: Path = typer.Option(
+        None,
+        "--target-dir",
+        help="Path to the installed apex-engine directory (defaults to best-effort auto-detect).",
+    ),
+):
+    """
+    Print the installed Apex Engine version.
+
+    This is resolved from the installed manifest (prefers the code-update manifest if present).
+    """
+    target = (target_dir or _default_target_dir()).expanduser().resolve()
+    m = _read_installed_manifest(target)
+    v = _current_installed_version(target)
+
+    if format.strip().lower() == "json":
+        payload = {
+            "version": v,
+            "target_dir": str(target),
+            "manifest_kind": str(m.get("kind") or "bundle"),
+            "platform": str(m.get("platform") or ""),
+            "arch": str(m.get("arch") or ""),
+            "gpu_support": str(m.get("gpu_support") or ""),
+            "python_tag": str(m.get("python_tag") or ""),
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+
+    print(v)
 
 
 def _current_installed_version(target_dir: Path) -> str:
     m = _read_installed_manifest(target_dir)
     v = str(m.get("version") or "").strip()
-    return v if _semver_triplet_prefix(v) else "0.0.0"
+    if _semver_triplet_prefix(v):
+        return v
+
+    # Dev/checkout fallback: allow `python -m src.__main__ version` to be useful even
+    # without a bundle manifest.
+    try:
+        pv = _read_project_version(target_dir / "pyproject.toml")
+        if pv and _semver_triplet_prefix(str(pv)):
+            return str(pv)
+    except Exception:
+        pass
+    return "0.0.0"
 
 
 def _current_gpu_support(target_dir: Path) -> str:

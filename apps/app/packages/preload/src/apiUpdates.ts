@@ -31,6 +31,12 @@ export type ApiUpdateState = {
   errorMessage?: string;
   lastCheckedAt?: number;
   allowNightly: boolean;
+  updateProgress?: {
+    stage: "stopping" | "downloading" | "applying" | "restarting";
+    percent?: number;
+    message?: string;
+    updatedAt: number;
+  };
   /**
    * When set and in the future, the main process requests that we do not show
    * the API-update toast again until this timestamp (ms since epoch).

@@ -442,7 +442,19 @@ export function useUpdateToasts(): void {
 
       try {
         const st = await getApiUpdateState();
-        if (!cancelled) showApiToastFromState(st, origin);
+        if (cancelled) return;
+        // If another window already started updating, show the updating toast immediately.
+        if (st?.status === "updating") {
+          apiProgressRef.current = st.updateProgress ?? {
+            stage: "stopping",
+            percent: 0,
+            message: "Stopping engine…",
+          };
+          // Render the updating toast (single toast id) for continuity across windows.
+          showApiUpdatingToast();
+        } else {
+          showApiToastFromState(st, origin);
+        }
       } catch (e) {
       }
 
