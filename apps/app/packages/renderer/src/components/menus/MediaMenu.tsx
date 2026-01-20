@@ -190,7 +190,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
     queryKey: mediaQueryKey,
     queryFn: async () => {
       const list = await listConvertedMedia(folderUuid);
-      console.log(list)
+
       const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
       const infos = await Promise.all(infoPromises);
       const results: MediaItem[] = list.map((it, idx) => ({
