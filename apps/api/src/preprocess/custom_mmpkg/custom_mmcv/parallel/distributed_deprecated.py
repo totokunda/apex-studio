@@ -1,6 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-import torch.distributed as dist
+try:
+    import torch.distributed as dist
+except Exception:
+    from src.preprocess.custom_mmpkg.custom_mmcv._torch_distributed import (
+        patch_torch_distributed,
+    )
+
+    dist = patch_torch_distributed()
 import torch.nn as nn
 from torch._utils import _flatten_dense_tensors, _take_tensors, _unflatten_dense_tensors
 
