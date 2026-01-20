@@ -29,7 +29,14 @@ const DEFAULT_API_HOST = "127.0.0.1";
 // Keep this tight: we want near-immediate detection/restart if the backend dies.
 const HEALTH_CHECK_INTERVAL_MS = 10000;
 const HEALTH_CHECK_TIMEOUT_MS = 3000;
-const MAX_STARTUP_WAIT_MS = 60000;
+const DEFAULT_STARTUP_WAIT_MS = (() => {
+  // Allow overriding for slower machines / cold starts (e.g. after updates).
+  // Keep this conservative: startup can include heavy imports (torch) before the server binds.
+  const raw = process.env.APEX_API_STARTUP_TIMEOUT_MS;
+  const n = raw ? Number(raw) : NaN;
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  return 180_000; // 3 minutes
+})();
 // Small delay to avoid hot-looping the event loop on repeated instant exits.
 const RESTART_DELAY_MS = 500;
 // Avoid flapping: require a few consecutive failures before restarting.
@@ -719,10 +726,14 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   async start(): Promise<void> {
-    return await this.enqueue(() => this.startInternal());
+    return await this.startWithOptions();
   }
 
-  private async startInternal(): Promise<void> {
+  async startWithOptions(opts?: { startupWaitMs?: number }): Promise<void> {
+    return await this.enqueue(() => this.startInternal(opts));
+  }
+
+  private async startInternal(opts?: { startupWaitMs?: number }): Promise<void> {
     // The moment start is requested, we consider the backend "desired".
     // This allows fast auto-restart if it crashes during startup.
     this.desiredRunning = true;
@@ -774,7 +785,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     try {
       await this.spawnProcess();
-      await this.waitForHealthy();
+      await this.waitForHealthy(opts?.startupWaitMs);
       this.startHealthChecks();
 
       this.state.status = "running";
@@ -1099,17 +1110,25 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     return env;
   }
 
-  private async waitForHealthy(): Promise<void> {
+  private async waitForHealthy(startupWaitMs?: number): Promise<void> {
     const startTime = Date.now();
-    
-    while (Date.now() - startTime < MAX_STARTUP_WAIT_MS) {
+    const maxWaitMs =
+      typeof startupWaitMs === "number" && Number.isFinite(startupWaitMs)
+        ? Math.max(1, startupWaitMs)
+        : DEFAULT_STARTUP_WAIT_MS;
+
+    while (Date.now() - startTime < maxWaitMs) {
+      // If the process died during startup, fail fast instead of waiting the full timeout.
+      if (!this.process || this.state.status === "stopped") {
+        throw new Error("Python API process exited during startup");
+      }
       if (await this.checkHealth()) {
         return;
       }
       await this.sleep(500);
     }
 
-    throw new Error(`Python API did not become healthy within ${MAX_STARTUP_WAIT_MS}ms`);
+    throw new Error(`Python API did not become healthy within ${maxWaitMs}ms`);
   }
 
   private async checkHealth(): Promise<boolean> {

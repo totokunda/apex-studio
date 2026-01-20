@@ -1,7 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
 
-import torch.distributed as dist
+import torch
+try:
+    import torch.distributed as dist
+except Exception:
+    from src.preprocess.custom_mmpkg.custom_mmcv._torch_distributed import (
+        patch_torch_distributed,
+    )
+
+    dist = patch_torch_distributed()
 
 logger_initialized = {}
 

@@ -5,7 +5,14 @@ import os.path as osp
 from collections import OrderedDict
 
 import torch
-import torch.distributed as dist
+try:
+    import torch.distributed as dist
+except Exception:
+    from src.preprocess.custom_mmpkg.custom_mmcv._torch_distributed import (
+        patch_torch_distributed,
+    )
+
+    dist = patch_torch_distributed()
 
 import src.preprocess.custom_mmpkg.custom_mmcv as mmcv
 from src.preprocess.custom_mmpkg.custom_mmcv.fileio.file_client import FileClient

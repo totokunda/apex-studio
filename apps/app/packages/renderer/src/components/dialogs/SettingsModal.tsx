@@ -241,6 +241,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleCheckApiUpdate = async () => {
     setIsCheckingApiUpdate(true);
     try {
+      if (apiUpdateState?.status === "updating") {
+        toast.info("Engine update in progress", {
+          description: "Please wait for the current engine update to finish.",
+        });
+        return;
+      }
       await checkForApiUpdates();
       await refreshApiUpdate();
     } catch (e) {
@@ -255,6 +261,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleApplyApiUpdate = async () => {
     setIsApplyingApiUpdate(true);
     try {
+      if (apiUpdateState?.status === "updating") {
+        toast.info("Engine update in progress", {
+          description: "Please wait for the current engine update to finish.",
+        });
+        return;
+      }
       const res = await applyApiUpdate();
       if (!res?.ok) {
         toast.error(res?.message || "Failed to update engine.");
@@ -1276,6 +1288,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {apiUpdateState.errorMessage}
                   </div>
                 ) : null}
+                {apiUpdateState?.status === "updating" ? (
+                  <div className="text-[10px] text-brand-light/70">
+                    {apiUpdateState.updateProgress?.message ||
+                      (apiUpdateState.updateProgress?.stage === "stopping"
+                        ? "Stopping engine…"
+                        : apiUpdateState.updateProgress?.stage === "downloading"
+                          ? typeof apiUpdateState.updateProgress?.percent === "number"
+                            ? `Downloading update… ${apiUpdateState.updateProgress.percent.toFixed(1)}%`
+                            : "Downloading update…"
+                          : apiUpdateState.updateProgress?.stage === "applying"
+                            ? "Applying update…"
+                            : "Restarting engine…")}
+                  </div>
+                ) : null}
 
                 <div className="flex items-start justify-between gap-3">
                   <label
@@ -1303,7 +1329,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     variant="outline"
                     className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px] flex items-center gap-1.5"
                     onClick={() => void handleCheckApiUpdate()}
-                    disabled={isCheckingApiUpdate}
+                    disabled={isCheckingApiUpdate || apiUpdateState?.status === "updating"}
                   >
                     {isCheckingApiUpdate ? (
                       <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
