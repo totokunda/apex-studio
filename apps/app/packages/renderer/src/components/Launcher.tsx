@@ -114,7 +114,6 @@ function coverPathToAppUserDataUrl(
     version != null && String(version).length > 0
       ? `?v=${encodeURIComponent(String(version))}`
       : "";
-    console.log(`app://user-data${encodeURI(pathPart)}${v}`);
   return `app://user-data${encodeURI(pathPart)}${v}`;
 }
 
