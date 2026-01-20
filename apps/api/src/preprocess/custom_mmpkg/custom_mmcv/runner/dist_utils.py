@@ -6,7 +6,14 @@ from collections import OrderedDict
 
 import torch
 import torch.multiprocessing as mp
-from torch import distributed as dist
+try:
+    from torch import distributed as dist
+except Exception:
+    from src.preprocess.custom_mmpkg.custom_mmcv._torch_distributed import (
+        patch_torch_distributed,
+    )
+
+    dist = patch_torch_distributed()
 from torch._utils import _flatten_dense_tensors, _take_tensors, _unflatten_dense_tensors
 
 

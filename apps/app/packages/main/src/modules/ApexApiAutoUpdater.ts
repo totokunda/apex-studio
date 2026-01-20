@@ -32,6 +32,12 @@ type ApiUpdateState = {
   lastCheckedAt?: number;
   allowNightly: boolean;
   toastSuppressedUntil?: number;
+  updateProgress?: {
+    stage: "stopping" | "downloading" | "applying" | "restarting";
+    percent?: number;
+    message?: string;
+    updatedAt: number;
+  };
 };
 
 const API_UPDATE_EVENT_CHANNEL = "api-update:event";
@@ -44,8 +50,28 @@ let lastKnownState: ApiUpdateState = {
 
 // In-memory toast suppression (clears on app restart).
 let toastSuppressedUntil = 0;
+let lastKnownProgress: ApiUpdateState["updateProgress"] | null = null;
 
 function broadcastApiUpdateEvent(ev: ApiUpdateEvent) {
+  // Keep an in-memory snapshot of progress so newly opened windows can render "Updating…" immediately.
+  if (ev.type === "progress") {
+    lastKnownProgress = {
+      stage: ev.stage,
+      percent: ev.percent,
+      message: ev.message,
+      updatedAt: Date.now(),
+    };
+    lastKnownState = { ...lastKnownState, updateProgress: lastKnownProgress };
+  } else if (ev.type === "updating") {
+    if (!lastKnownProgress) {
+      lastKnownProgress = { stage: "stopping", percent: 0, message: "Stopping engine…", updatedAt: Date.now() };
+      lastKnownState = { ...lastKnownState, updateProgress: lastKnownProgress };
+    }
+  } else if (ev.type === "updated" || ev.type === "error") {
+    lastKnownProgress = null;
+    lastKnownState = { ...lastKnownState, updateProgress: undefined };
+  }
+
   // Best-effort broadcast to all windows. We intentionally avoid hard dependencies on WindowManager.
   for (const win of BrowserWindow.getAllWindows()) {
     try {
@@ -528,7 +554,9 @@ export class ApexApiAutoUpdater implements AppModule {
         // Restart the API process after updates (or failed attempt).
         try {
           broadcastApiUpdateEvent({ type: "progress", stage: "restarting", message: "Restarting engine…" });
-          await py.start();
+          // After an update, the first start can be noticeably slower (cold imports, cache rebuilds, etc).
+          // Avoid falsely reporting "update failed" just because the engine needs more than 60s to become healthy.
+          await py.startWithOptions({ startupWaitMs: 180_000 });
           if (updateOk) {
             lastKnownState = { ...lastKnownState, status: "updated", updateInfo: updateOutput ?? undefined };
             broadcastApiUpdateEvent({ type: "updated", ...(updateOutput ? { info: updateOutput } : {}) });

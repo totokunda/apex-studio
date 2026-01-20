@@ -219,6 +219,101 @@ function safeJoinWithinRoot(root: string, relative: string): string {
   return out;
 }
 
+async function safeRemovePath(p: string): Promise<void> {
+  const target = String(p || "").trim();
+  if (!target) return;
+  try {
+    await fsp.rm(target, { recursive: true, force: true });
+  } catch {}
+}
+
+async function isNonEmptyDir(p: string): Promise<boolean> {
+  try {
+    const st = await fsp.stat(p);
+    if (!st.isDirectory()) return false;
+    const entries = await fsp.readdir(p);
+    return entries.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function assertSafeInstallDir(destinationDir: string): void {
+  const dest = path.resolve(String(destinationDir || "").trim());
+  if (!dest) throw new Error("destinationDir is required");
+  const root = path.parse(dest).root;
+  if (dest === root) throw new Error(`Refusing to install into filesystem root: ${dest}`);
+  // Prevent foot-guns like installing into home dir directly.
+  const home = os.homedir();
+  if (path.resolve(dest) === path.resolve(home)) {
+    throw new Error(`Refusing to install into home directory: ${dest}`);
+  }
+}
+
+async function validateExtractedBundleOrThrow(opts: {
+  installDir: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const installDir = path.resolve(String(opts.installDir || "").trim());
+  if (!installDir) throw new Error("installDir is required");
+
+  const bundleRoot = resolveApiBundleRoot(installDir);
+  const pythonExe = resolveExtractedPythonExe(bundleRoot);
+  if (!pythonExe) {
+    throw new Error(`Could not find bundled Python executable under: ${path.join(bundleRoot, "apex-studio")}`);
+  }
+
+  // Keep this lightweight: we only need to prove the interpreter can start.
+  const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : 8000;
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const child = spawn(pythonExe, ["-c", "import sys; print(sys.version)"], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        // Avoid user/site/path pollution.
+        PYTHONNOUSERSITE: "1",
+        PYTHONDONTWRITEBYTECODE: "1",
+      },
+    });
+
+    let stdout = "";
+    let stderr = "";
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            try {
+              // Try hard to avoid hanging the installer. On some systems "killed" processes
+              // can become awkward to reap; we still force-settle the promise on timeout.
+              child.kill("SIGKILL");
+            } catch {}
+            if (settled) return;
+            settled = true;
+            reject(new Error(`Bundle validation timed out after ${timeoutMs}ms (python did not exit)`));
+          }, timeoutMs)
+        : null;
+
+    child.stdout?.on("data", (b) => (stdout += b.toString("utf-8")));
+    child.stderr?.on("data", (b) => (stderr += b.toString("utf-8")));
+
+    child.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      if (code === 0) return resolve();
+      const out = `${stdout}\n${stderr}`.trim();
+      reject(new Error(`Bundle validation failed (exit ${code}). Output:\n${out}`));
+    });
+  });
+}
+
 async function extractTarZstWithNode(opts: {
   archivePath: string;
   destinationDir: string;
@@ -380,7 +475,16 @@ async function downloadToTempFile(opts: {
     percent: 0,
     message: "Starting download…",
   });
-  await pipeline(body, ws);
+  try {
+    await pipeline(body, ws);
+  } catch (e) {
+    // If the pipeline errors mid-stream, ensure we don't leave a partial temp file behind.
+    try {
+      ws.destroy();
+    } catch {}
+    await safeRemovePath(outPath);
+    throw e;
+  }
   opts.onProgress?.({
     phase: "download",
     downloadedBytes: typeof totalBytes === "number" ? totalBytes : downloadedBytes,
@@ -612,6 +716,8 @@ export class InstallerModule implements AppModule {
     ipcMain.handle(
       "installer:extract-server-bundle",
       async (_evt, req: ExtractBundleRequest): Promise<ConfigResponse<{ extractedTo: string }>> => {
+        const tempPathsToCleanup: string[] = [];
+        let stagingDirToCleanup: string | null = null;
         try {
           const jobId = String(req?.jobId || randomUUID());
           const sendProgress = (ev: InstallerProgressEvent) => {
@@ -620,13 +726,28 @@ export class InstallerModule implements AppModule {
 
           const destinationDir = String(req?.destinationDir || "").trim();
           if (!destinationDir) throw new Error("destinationDir is required");
+          assertSafeInstallDir(destinationDir);
+          const destinationAbs = path.resolve(destinationDir);
 
           const src = req?.source;
           if (!src || (src.kind !== "local" && src.kind !== "remote")) {
             throw new Error("source is required");
           }
 
-          await fsp.mkdir(destinationDir, { recursive: true });
+          // If destination already contains an install, use a staging directory so we can
+          // validate the new bundle before swapping it into place.
+          const hasExistingInstall = await isNonEmptyDir(destinationAbs);
+          const effectiveDestinationDir = hasExistingInstall
+            ? path.join(path.dirname(destinationAbs), `.apex-install-staging-${randomUUID()}`)
+            : destinationAbs;
+          if (hasExistingInstall) {
+            stagingDirToCleanup = effectiveDestinationDir;
+            sendProgress({
+              phase: "status",
+              message: "Existing install detected; extracting into staging directory for safe reinstall…",
+            });
+          }
+          await fsp.mkdir(effectiveDestinationDir, { recursive: true });
 
           let archivePath: string;
           if (src.kind === "local") {
@@ -645,6 +766,8 @@ export class InstallerModule implements AppModule {
               assetName: src.assetName,
               onProgress: sendProgress,
             });
+            // Track temp artifacts we create so we can always delete them later.
+            tempPathsToCleanup.push(archivePath);
           }
 
           // Always use Node-based extraction so we can stream progress back to the renderer.
@@ -652,22 +775,49 @@ export class InstallerModule implements AppModule {
           sendProgress({ phase: "status", message: "Extracting bundle…" });
           await extractTarZstWithNode({
             archivePath,
-            destinationDir,
+            destinationDir: effectiveDestinationDir,
             onProgress: sendProgress,
           });
 
           // Defensive cleanup: remove AppleDouble `._*` files that can slip into archives and break runtime.
           try {
             await removeAppleDoubleFilesRecursively({
-              rootDir: destinationDir,
+              rootDir: effectiveDestinationDir,
               onStatus: (m) => sendProgress({ phase: "status", message: m }),
             });
           } catch {}
 
+          sendProgress({ phase: "status", message: "Validating extracted bundle…" });
+          await validateExtractedBundleOrThrow({ installDir: effectiveDestinationDir, timeoutMs: 10_000 });
+
+          // Safe reinstall swap:
+          // - Only now do we remove the previous install and move the staged dir into place.
+          if (hasExistingInstall) {
+            sendProgress({ phase: "status", message: "Replacing existing install…" });
+            try {
+              await fsp.rm(destinationAbs, { recursive: true, force: true });
+            } catch {}
+            // Rename is atomic when source+dest are on the same filesystem (we ensure sibling paths).
+            await fsp.rename(effectiveDestinationDir, destinationAbs);
+            stagingDirToCleanup = null; // now lives at destinationAbs
+          }
+
           sendProgress({ phase: "status", message: "Bundle extracted" });
-          return { success: true, data: { extractedTo: destinationDir } };
+          return { success: true, data: { extractedTo: destinationAbs } };
         } catch (e) {
           return { success: false, error: e instanceof Error ? e.message : "Failed to extract bundle" };
+        } finally {
+          if (stagingDirToCleanup) {
+            try {
+              await safeRemovePath(stagingDirToCleanup);
+            } catch {}
+          }
+          if (tempPathsToCleanup.length > 0) {
+            try {
+              // Best-effort cleanup: never fail the overall operation because temp cleanup failed.
+              await Promise.all(tempPathsToCleanup.map((p) => safeRemovePath(p)));
+            } catch {}
+          }
         }
       },
     );
@@ -730,6 +880,7 @@ export class InstallerModule implements AppModule {
           }
 
           const setupScript = resolveSetupScriptPath(bundleRoot);
+          console.log("setupScript", setupScript);
           if (!setupScript) {
             throw new Error(
               "Could not locate setup.py. Expected it under the extracted bundle (scripts/setup.py) or the dev repo (apps/api/scripts/setup.py).",
@@ -768,6 +919,7 @@ export class InstallerModule implements AppModule {
           try {
             await removeAppleDoublePyFiles({ pythonExe, onStatus: sendStatus });
           } catch {}
+
 
           const child = spawn(pythonExe, args, {
             cwd: bundleRoot,
@@ -831,15 +983,40 @@ export class InstallerModule implements AppModule {
 
           child.on("error", (err) => {
             sendStatus(`Setup process failed to start: ${err instanceof Error ? err.message : String(err)}`);
+            // Ensure the renderer can resolve/reject even if setup.py never emitted JSON progress.
+            sendSetupProgress({
+              progress: null,
+              status: "error",
+              message: `Setup process failed to start: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+              metadata: { task: "setup" },
+            });
           });
 
           child.on("close", (code) => {
             if (code === 0) {
               sendStatus("Setup process finished");
+              // Some reinstall / no-op paths may exit without emitting JSON progress.
+              // Always emit a final "setup complete" event so the renderer can finish.
+              sendSetupProgress({
+                progress: 1,
+                status: "complete",
+                message: "Setup complete",
+                metadata: { task: "setup", task_progress: 1 },
+              });
               return;
             }
             const suffix = stderr.trim() ? ` (stderr: ${stderr.trim().slice(0, 800)})` : "";
-            sendStatus(`Setup process exited with code ${code}${suffix}`);
+            const msg = `Setup process exited with code ${code}${suffix}`;
+            sendStatus(msg);
+            // Ensure the renderer can resolve/reject even if setup.py never emitted JSON progress.
+            sendSetupProgress({
+              progress: null,
+              status: "error",
+              message: msg,
+              metadata: { task: "setup" },
+            });
           });
           return { success: true, data: { jobId } };
         } catch (e) {
