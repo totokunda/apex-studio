@@ -14,7 +14,7 @@ import json
 import torch
 import numpy as np
 from . import util
-from .body import Body, BodyResult, Keypoint
+from .body import  BodyResult, Keypoint
 from .types import PoseResult, AnimalPoseResult
 from huggingface_hub import hf_hub_download
 from .wholebody import Wholebody

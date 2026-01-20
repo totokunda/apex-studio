@@ -1035,8 +1035,13 @@ def _is_prerelease_tag(tag: str) -> bool:
     t = (tag or "").strip().lower()
     if "nightly" in t or "prerelease" in t:
         return True
-    # Semver prerelease often has a "-" suffix.
-    return "-" in t
+    # Only treat strings that *start* with a semver triplet as candidates for
+    # semver prerelease detection. (Many non-version strings like
+    # "python-code-0.1.1-darwin-..." contain '-' but are not prerelease tags.)
+    if _semver_triplet_prefix(t) is None:
+        return False
+    # Semver prerelease is indicated by a '-' immediately after X.Y.Z.
+    return bool(re.match(r"^\s*v?\d+\.\d+\.\d+-", t, flags=re.IGNORECASE))
 
 
 def _parse_python_code_asset(asset_name: str) -> Optional[dict]:
@@ -1211,6 +1216,46 @@ def _cache_dir() -> Path:
     return Path.home().expanduser().resolve() / ".cache" / "apex-engine" / "updates"
 
 
+def _is_within_dir(path: Path, root: Path) -> bool:
+    """
+    Return True if `path` resolves under `root`.
+    """
+    try:
+        return Path(path).resolve().is_relative_to(Path(root).resolve())
+    except Exception:
+        try:
+            p = str(Path(path).resolve())
+            r = str(Path(root).resolve())
+            return p == r or p.startswith(r + os.sep)
+        except Exception:
+            return False
+
+
+def _cleanup_cached_update_archive(archive_path: Path, *, cache_root: Path, quiet: bool) -> None:
+    """
+    Delete the downloaded update archive from the cache after a successful install.
+    Only deletes if the archive lives under `cache_root` (to avoid deleting user files).
+    """
+    archive_path = Path(archive_path).expanduser().resolve()
+    cache_root = Path(cache_root).expanduser().resolve()
+    if not _is_within_dir(archive_path, cache_root):
+        return
+
+    # Also remove any leftover partial download (best-effort).
+    part = archive_path.with_suffix(archive_path.suffix + ".part")
+    for p in (archive_path, part):
+        try:
+            p.unlink(missing_ok=True)  # py3.8+
+        except TypeError:
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+    if not quiet:
+        print(f"Removed cached update archive: {archive_path}")
+
+
 def _download_to(url: str, dest: Path, *, quiet: bool) -> None:
     dest = Path(dest).resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1327,10 +1372,12 @@ def check_updates(
     current_version = _current_installed_version(target)
     current_gpu = _current_gpu_support(target)
     current_sem = _semver_triplet_prefix(current_version) or (0, 0, 0)
+    current_is_prerelease = _is_prerelease_tag(current_version)
 
     assets = _list_remote_python_code_assets(
         owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
     )
+ 
     if not any_device:
         preferred = [a for a in assets if a.device.lower() == current_gpu.lower()]
     else:
@@ -1340,9 +1387,28 @@ def check_updates(
         a_sem = _semver_triplet_prefix(a.asset_version) or (0, 0, 0)
         if a_sem > current_sem:
             return True
+        # If the user is on a prerelease/nightly of X.Y.Z, then the stable X.Y.Z
+        # should be offered in the regular (non-nightly) channel.
+        if (
+            a_sem == current_sem
+            and current_is_prerelease
+            and (not allow_nightly)
+            and (not a.prerelease)
+            and (not _is_prerelease_tag(a.asset_version))
+            and ("nightly" not in str(a.asset_version).lower())
+            and str(a.asset_version).strip() != str(current_version).strip()
+        ):
+            return True
         if allow_nightly and a_sem == current_sem:
-            # Nightly/prerelease within same base version is considered newer if the version string differs.
-            return str(a.asset_version) != str(current_version)
+            # Nightlies/prereleases within the same base version are only "newer"
+            # if the current install is ALSO a prerelease/nightly. This prevents
+            # offering e.g. 0.1.1-nightly.* as an "update" when already on stable 0.1.1.
+            a_is_pre = bool(a.prerelease) or _is_prerelease_tag(a.asset_version) or (
+                "nightly" in str(a.asset_version).lower()
+            )
+            if not current_is_prerelease and a_is_pre:
+                return False
+            return str(a.asset_version).strip() != str(current_version).strip()
         return False
 
     updates = [a for a in preferred if _is_newer(a)]
@@ -1446,8 +1512,10 @@ def update(
     target = (target_dir or _default_target_dir()).expanduser().resolve()
     _safe_to_update(target, allow_dev=allow_dev)
 
+    cache_root = (download_dir or _cache_dir()).expanduser().resolve()
     if from_tar is not None:
         _apply_code_update(from_tar, target, quiet=quiet)
+        _cleanup_cached_update_archive(from_tar, cache_root=cache_root, quiet=quiet)
         if not quiet:
             print("Update applied from local archive. Restart the app/engine to use it.")
         return
@@ -1455,6 +1523,7 @@ def update(
     current_version = _current_installed_version(target)
     current_gpu = _current_gpu_support(target)
     current_sem = _semver_triplet_prefix(current_version) or (0, 0, 0)
+    current_is_prerelease = _is_prerelease_tag(current_version)
 
     assets = _list_remote_python_code_assets(
         owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
@@ -1469,8 +1538,23 @@ def update(
         a_sem = _semver_triplet_prefix(a.asset_version) or (0, 0, 0)
         if a_sem > current_sem:
             return True
+        if (
+            a_sem == current_sem
+            and current_is_prerelease
+            and (not allow_nightly)
+            and (not a.prerelease)
+            and (not _is_prerelease_tag(a.asset_version))
+            and ("nightly" not in str(a.asset_version).lower())
+            and str(a.asset_version).strip() != str(current_version).strip()
+        ):
+            return True
         if allow_nightly and a_sem == current_sem:
-            return str(a.asset_version) != str(current_version)
+            a_is_pre = bool(a.prerelease) or _is_prerelease_tag(a.asset_version) or (
+                "nightly" in str(a.asset_version).lower()
+            )
+            if not current_is_prerelease and a_is_pre:
+                return False
+            return str(a.asset_version).strip() != str(current_version).strip()
         return False
 
     candidates = [a for a in candidates if _is_newer(a)]
@@ -1480,13 +1564,13 @@ def update(
         return
 
     chosen = candidates[0]
-    dl_dir = (download_dir or _cache_dir()).expanduser().resolve()
-    archive_path = dl_dir / chosen.asset_name
+    archive_path = cache_root / chosen.asset_name
     if not quiet:
         print(f"Updating {current_version} -> {chosen.asset_version}")
         print(f"Downloading: {chosen.asset_name}")
     _download_to(chosen.download_url, archive_path, quiet=quiet)
     _apply_code_update(archive_path, target, quiet=quiet)
+    _cleanup_cached_update_archive(archive_path, cache_root=cache_root, quiet=quiet)
     if not quiet:
         print("Update applied. Restart the app/engine to use it.")
 
