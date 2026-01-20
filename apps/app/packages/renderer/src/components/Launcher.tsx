@@ -515,6 +515,13 @@ const Launcher: React.FC = () => {
   const showBlockingCheck =
     !initialCheckDoneRef.current && (isChecking || backendStarting)
 
+  // Allow the installer to be shown even while the launcher is in its initial
+  // "blocking check" screen. This lets users recover (install/reinstall) if the
+  // backend is missing or startup is stuck.
+  if (showInstaller) {
+    return <Installer hasBackend={hasBackend} setShowInstaller={setShowInstaller} />;
+  }
+
   if (showBlockingCheck) {
     const title = backendStarting ? "Starting backend" : "Checking installation";
     const subtitle = backendStarting
@@ -633,6 +640,32 @@ const Launcher: React.FC = () => {
                     {backendStarting ? "Booting…" : "Checking…"}
                   </div>
                 </div>
+              </div>
+
+              {/* Always allow install/reinstall from the blocking screen */}
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setShowInstaller(true);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-md border border-brand-light/15 bg-brand-background-light px-4 py-2 text-[12px] font-semibold text-brand-light hover:bg-brand-light/10 transition-colors"
+                >
+                  <LuRotateCcw className="h-4 w-4" />
+                  {hasBackend ? "Reinstall" : "Install"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    void refreshLauncherStatus({ showBlocking: true });
+                  }}
+                  className="inline-flex items-center gap-2 rounded-md bg-brand-accent-two-shade text-brand-light px-4 py-2 text-[12px] font-semibold hover:bg-brand-accent-shade transition-colors"
+                >
+                  <LuRotateCcw className="h-4 w-4" />
+                  Retry check
+                </button>
               </div>
 
               {error ? (

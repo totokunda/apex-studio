@@ -13,6 +13,7 @@ import {
   setMaskModelSetting,
   setRenderImageStepsSetting,
   setRenderVideoStepsSetting,
+  getPythonStatus,
   startPythonApi,
   stopPythonApi,
 } from "@app/preload";
@@ -100,16 +101,25 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
 
 
   useEffect(() => {
-    // stop the backend
+    // If an existing installation is running (python API running), stop it.
     (async () => {
-      const res = await stopPythonApi();
-      if (res?.success) {
-        console.log("Backend stopped");
-      } else {
-        console.error("Failed to stop backend:", res?.error);
+      try {
+        if (!hasBackend) return;
+        const st = await getPythonStatus();
+        if (!st?.success || !st.data) return;
+        if (st.data.status !== "running" && st.data.status !== "starting") return;
+
+        const res = await stopPythonApi();
+        if (res?.success) {
+          console.log("Backend stopped");
+        } else {
+          console.error("Failed to stop backend:", res?.error);
+        }
+      } catch (e) {
+        console.error("Failed to stop backend:", e);
       }
     })();
-  }, []);
+  }, [hasBackend]);
 
   const [availableServerBundles, setAvailableServerBundles] = useState<
     Array<{
@@ -240,6 +250,29 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     extractionPendingRef.current = [];
     extractionFilesRef.current = extractionFilesRef.current.concat(pending);
     setExtractionListVersion((v) => v + 1);
+  };
+
+  const stopPythonApiIfRunning = async (opts?: { reason?: string }) => {
+    const reason = String(opts?.reason || "").trim();
+    if (!hasBackend) return;
+    const statusRes = await getPythonStatus().catch(() => null);
+    const status = statusRes?.success ? statusRes.data?.status : null;
+
+    if (status !== "running" && status !== "starting") return;
+
+    // If an install already exists and the python API is running, we must stop it
+    // before extracting/overwriting the runtime/code on disk.
+    setInstallStatus(reason ? `Stopping backend (${reason})…` : "Stopping backend…");
+    const stopRes = await stopPythonApi().catch(() => null);
+    if (!stopRes?.success) return;
+
+    // Best-effort: wait briefly for the process to fully stop.
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const st = await getPythonStatus().catch(() => null);
+      if (st?.success && st.data?.status === "stopped") return;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+    }
   };
 
   const resetToReadyToInstall = (opts?: { keepError?: boolean }) => {
@@ -620,8 +653,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       // IMPORTANT: stop any running Python backend before modifying/installing the runtime/code.
       // Otherwise extraction/setup can fail or the app may keep using an old runtime.
       try {
-        setInstallStatus("Stopping backend…");
-        
+        await stopPythonApiIfRunning({ reason: "pre-install" });
       } catch {
         // best-effort; continue install anyway
       }
@@ -678,46 +710,42 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
         message: null,
       });
 
-      const setupRes = await runSetupScript({
-        apexHomeDir: saveLocation,
-        apiInstallDir: dest,
-        maskModelType: maskModel,
-        installRife: installRifeFrameInterpolation,
-        enableImageRenderSteps: renderImage,
-        enableVideoRenderSteps: renderVideo,
-        jobId: jobId || undefined,
-      });
-      if (!setupRes?.success) {
-        throw new Error(setupRes?.error || "Failed to start setup");
-      }
-      const setupJobId = setupRes.data?.jobId;
-      if (!setupJobId) {
-        throw new Error("Failed to start setup (missing jobId)");
-      }
-
-      // Listen to setup.py progress stream via IPC (stdout JSON), and map its task progress into our phases.
-      await new Promise<void>((resolve, reject) => {
+      // Subscribe to setup progress BEFORE starting setup.py.
+      // This fixes a reinstall edge-case where setup.py can exit quickly (no-op) and emit
+      // the final progress event before the renderer begins listening.
+      const awaitSetupCompletion = async (initialJobId: string) => {
         let done = false;
         let unsubscribeSetupProgress: (() => void) | null = null;
+
+        let resolveCompletion!: () => void;
+        let rejectCompletion!: (e: Error) => void;
+        const completion = new Promise<void>((resolve, reject) => {
+          resolveCompletion = resolve;
+          rejectCompletion = reject;
+        });
+
+        const cleanupListener = () => {
+          try {
+            if (typeof unsubscribeSetupProgress === "function") unsubscribeSetupProgress();
+          } catch {}
+          unsubscribeSetupProgress = null;
+        };
 
         const finishOk = () => {
           if (done) return;
           done = true;
-          try {
-            unsubscribeSetupProgress?.();
-          } catch {}
-          resolve();
+          cleanupListener();
+          resolveCompletion();
         };
+
         const finishErr = (err: unknown) => {
           if (done) return;
           done = true;
-          try {
-            unsubscribeSetupProgress?.();
-          } catch {}
-          reject(err instanceof Error ? err : new Error(String(err || "Setup failed")));
+          cleanupListener();
+          rejectCompletion(err instanceof Error ? err : new Error(String(err || "Setup failed")));
         };
 
-        unsubscribeSetupProgress = onInstallerSetupProgress(setupJobId, (payload) => {
+        const onPayload = (payload: any) => {
           try {
             const status = String(payload?.status || "processing");
             const message = String(payload?.message || "");
@@ -752,7 +780,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                 ...(pct !== null ? { percent: pct } : {}),
                 message: message || "Verifying attention backends…",
               });
-              // Keep a rolling log in the UI so the user can see each backend check.
               appendAttentionEvent(message || "Verifying attention backends…");
             } else if (task === "config") {
               if (activePhaseRef.current !== "update_configs") {
@@ -764,7 +791,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                 message: message || "Updating config…",
               });
             } else if (task === "setup") {
-              // Final message from setup.py
               if (status === "complete") {
                 finishOk();
                 return;
@@ -776,21 +802,54 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
               return;
             }
 
-            // Some clients only send the final "Setup complete" at task=setup.
-            // If we see it in the message, treat as done.
             if (status === "complete" && message.toLowerCase().includes("setup complete")) {
               finishOk();
             }
           } catch (e) {
             finishErr(e);
           }
-        });
+        };
+
+        const listenOnJobId = (listenJobId: string) => {
+          cleanupListener();
+          unsubscribeSetupProgress = onInstallerSetupProgress(listenJobId, onPayload);
+        };
+
+        // Start listening immediately (before setup starts).
+        listenOnJobId(initialJobId);
 
         patchPhase("download_models", {
           status: "active",
           message: "Running setup…",
         });
-      });
+
+        const setupRes = await runSetupScript({
+          apexHomeDir: saveLocation,
+          apiInstallDir: dest,
+          maskModelType: maskModel,
+          installRife: installRifeFrameInterpolation,
+          enableImageRenderSteps: renderImage,
+          enableVideoRenderSteps: renderVideo,
+          jobId: initialJobId,
+        });
+        if (!setupRes?.success) {
+          cleanupListener();
+          throw new Error(setupRes?.error || "Failed to start setup");
+        }
+        const setupJobId = setupRes.data?.jobId;
+        if (!setupJobId) {
+          cleanupListener();
+          throw new Error("Failed to start setup (missing jobId)");
+        }
+        if (setupJobId !== initialJobId) {
+          // Extremely defensive: if main chose a different jobId, switch listener.
+          listenOnJobId(setupJobId);
+        }
+
+        await completion;
+      };
+
+      await awaitSetupCompletion(jobId!);
 
       patchPhase("download_models", {
         status: "completed",
@@ -1496,7 +1555,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                         </div>
                       ) : activePhase === "download_models" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
-                          Models are being downloaded...
+                          {phaseState.download_models.message || "Running setup…"}
                         </div>
                       ) : activePhase === "verify_attention" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-3 h-full flex flex-col min-h-0">

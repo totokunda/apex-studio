@@ -6,7 +6,15 @@ import tempfile
 import time
 
 import torch
-import torch.distributed as dist
+
+try:
+    import torch.distributed as dist
+except Exception:
+    from src.preprocess.custom_mmpkg.custom_mmcv._torch_distributed import (
+        patch_torch_distributed,
+    )
+
+    dist = patch_torch_distributed()
 
 import src.preprocess.custom_mmpkg.custom_mmcv as mmcv
 from src.preprocess.custom_mmpkg.custom_mmcv.runner import get_dist_info

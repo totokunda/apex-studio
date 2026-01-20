@@ -44,6 +44,166 @@ ALLOWLIST_TOP_LEVEL = [
     "apex-code-update-manifest.json",
 ]
 
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+def _is_linux() -> bool:
+    return sys.platform.startswith("linux")
+
+
+def _best_effort_macos_sanitize_xattrs(path: Path) -> None:
+    """
+    Best-effort remove macOS attributes that can break execution after updates.
+
+    Note: on some macOS versions/filesystems, certain provenance-related attributes may
+    appear "sticky" or be re-attached; we treat this as best-effort and rely on the
+    runtime validation step below as the true gate.
+    """
+    if not _is_macos():
+        return
+    try:
+        xattr = shutil.which("xattr") or "/usr/bin/xattr"
+        if not xattr:
+            return
+        # Keep this robust: ignore failures (e.g. SIP / permission / unsupported attrs).
+        for attr in ("com.apple.quarantine", "com.apple.provenance"):
+            subprocess.run(
+                [xattr, "-dr", attr, str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        # Clear remaining xattrs (best-effort).
+        subprocess.run(
+            [xattr, "-cr", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except Exception:
+        return
+
+
+def _copy_venv_to_staging(src: Path, dst: Path, *, verbose: bool) -> None:
+    """
+    Copy the venv to a staging directory.
+
+    Goals:
+    - Fast and low-disk on macOS (APFS) via clone-on-write.
+    - Avoid copying quarantine/xattrs that can trigger AppleSystemPolicy blocks.
+    """
+    src = Path(src).resolve()
+    dst = Path(dst).resolve()
+
+    if _is_macos():
+        ditto = shutil.which("ditto") or "/usr/bin/ditto"
+        # `ditto` defaults to preserving quarantine + xattrs; explicitly disable them.
+        # `--clone` uses APFS copy-on-write when available (minimal storage until files change).
+        cmd = [
+            ditto,
+            "--noextattr",
+            "--noqtn",
+            "--noacl",
+            "--clone",
+            str(src),
+            str(dst),
+        ]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            _best_effort_macos_sanitize_xattrs(dst)
+            return
+        except Exception as e:
+            if verbose:
+                msg = ""
+                try:
+                    msg = getattr(e, "stderr", b"") or b""
+                    msg = msg.decode("utf-8", errors="replace").strip()
+                except Exception:
+                    msg = ""
+                print(
+                    "[update] Warning: macOS ditto clone copy failed; falling back to full copy.\n"
+                    + (f"[update] ditto error: {msg}\n" if msg else "")
+                )
+
+    if _is_linux():
+        # Best-effort low-disk copy on CoW filesystems (btrfs/xfs w/ reflink, etc).
+        # If unsupported, cp will fail and we fall back to copytree.
+        cp = shutil.which("cp")
+        if cp:
+            try:
+                dst.mkdir(parents=True, exist_ok=False)
+                # Copy *contents* of src into dst.
+                subprocess.run(
+                    [cp, "-a", "--reflink=auto", str(src) + "/.", str(dst)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            except Exception:
+                # If we created dst but copy failed, clean it up before falling back.
+                try:
+                    if dst.exists():
+                        shutil.rmtree(dst)
+                except Exception:
+                    pass
+
+    shutil.copytree(src, dst, symlinks=False)
+    _best_effort_macos_sanitize_xattrs(dst)
+
+
+def _validate_venv_python(python: Path, *, timeout_s: float = 8.0, verbose: bool) -> None:
+    """
+    Ensure the venv python is runnable *in its final installed location*.
+    This protects against "update succeeds but environment becomes unusable".
+    """
+    python = Path(python).resolve()
+    if not python.exists():
+        raise RuntimeError(f"Venv python not found for validation: {python}")
+    env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Avoid any interactive/hanging behavior.
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+
+    p = subprocess.Popen(
+        [str(python), "-c", "import sys; print(sys.version)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        stdout, stderr = p.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired as e:
+        # Try hard to stop the child without hanging the updater itself.
+        try:
+            p.terminate()
+        except Exception:
+            pass
+        try:
+            p.kill()
+        except Exception:
+            pass
+        try:
+            p.wait(timeout=1.0)
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"Venv python validation timed out after {timeout_s}s: {python}"
+        ) from e
+
+    if p.returncode != 0:
+        out = ((stdout or "") + "\n" + (stderr or "")).strip()
+        raise RuntimeError(f"Venv python validation failed. Output:\n{out}")
+
+    if verbose:
+        v = (stdout or "").strip().splitlines()[:1]
+        if v:
+            print(f"[update] venv python validated: {v[0]}")
+
 
 def _now_tag() -> str:
     return time.strftime("%Y%m%d-%H%M%S")
@@ -112,14 +272,8 @@ def _safe_extract_tar_stream(tf: tarfile.TarFile, dest: Path) -> None:
             tf.extract(m, path=str(dest), set_attrs=True)
 
 
-def _extract_tar_zst(archive_path: Path, dest_dir: Path) -> None:
-    """
-    Extract a .tar.zst into dest_dir.
 
-    Strategy:
-      - Prefer `zstd -d -c` piped into Python tarfile (safe extraction).
-      - If `zstd` is not available, try importing `zstandard` (optional dependency).
-    """
+def _extract_tar_zst(archive_path: Path, dest_dir: Path) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     zstd_bin = shutil.which("zstd")
@@ -129,31 +283,57 @@ def _extract_tar_zst(archive_path: Path, dest_dir: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        assert p.stdout is not None
+
+        if p.stdout is None or p.stderr is None:
+            # Extremely unlikely, but don't use assert.
+            try:
+                p.kill()
+            except Exception:
+                pass
+            raise RuntimeError("Failed to create pipes for zstd process")
+
         try:
             with tarfile.open(fileobj=p.stdout, mode="r|") as tf:
                 _safe_extract_tar_stream(tf, dest_dir)
-        finally:
-            # Drain stderr and wait so we can surface errors.
-            stderr = b""
+        except Exception:
+            # If extraction fails, ensure zstd isn't left running.
             try:
-                if p.stderr:
-                    stderr = p.stderr.read() or b""
+                if p.poll() is None:
+                    p.kill()
             except Exception:
+                pass
+            raise
+        finally:
+            # Close stdout so zstd can exit cleanly, then collect stderr.
+            try:
+                p.stdout.close()
+            except Exception:
+                pass
+
+            try:
+                _out, stderr = p.communicate()
+            except Exception:
+                try:
+                    if p.poll() is None:
+                        p.kill()
+                except Exception:
+                    pass
                 stderr = b""
-            code = p.wait()
-            if code != 0:
-                msg = stderr.decode("utf-8", errors="replace")
+
+            code = p.returncode
+            if code not in (0, None):
+                msg = stderr.decode("utf-8", errors="replace").strip()
                 raise RuntimeError(f"zstd failed (exit {code}): {msg}".strip())
+
         return
 
-    # Optional pure-Python fallback (requires `zstandard` installed)
+    # Pure-Python fallback
     try:
         import zstandard as zstd  # type: ignore
     except Exception as e:
         raise RuntimeError(
             "Cannot extract .tar.zst: `zstd` binary not found on PATH and Python package `zstandard` not installed.\n"
-            "Install zstd (macOS: `brew install zstd`, Linux: `apt/yum install zstd`) or `pip install zstandard`."
+            "Install zstd (macOS: `brew install zstd`, Linux: `apt/yum install zstd`) or run `pip install zstandard`."
         ) from e
 
     dctx = zstd.ZstdDecompressor()
@@ -161,7 +341,6 @@ def _extract_tar_zst(archive_path: Path, dest_dir: Path) -> None:
         with dctx.stream_reader(f) as reader:
             with tarfile.open(fileobj=reader, mode="r|") as tf:
                 _safe_extract_tar_stream(tf, dest_dir)
-
 
 def _find_update_payload_root(extracted_root: Path) -> Path:
     """
@@ -357,7 +536,7 @@ def apply_update(
                     f"[update] copying venv to staging: {new_venv_dir.name} (this may take a while)"
                 )
 
-            shutil.copytree(venv_dir, new_venv_dir, symlinks=False)
+            _copy_venv_to_staging(venv_dir, new_venv_dir, verbose=verbose)
             new_py = _venv_python_path(new_venv_dir)
             if new_py is None:
                 raise RuntimeError("Staged venv python not found after copy.")
@@ -385,6 +564,12 @@ def apply_update(
                 replaced_venv = True
             os.replace(str(new_venv_dir), str(target_dir / "apex-studio"))
             env_sync_applied = True
+            # Best-effort xattr cleanup + runtime validation in final location.
+            _best_effort_macos_sanitize_xattrs(target_dir / "apex-studio")
+            final_py = _venv_python_path(target_dir / "apex-studio")
+            if final_py is None:
+                raise RuntimeError("Venv python not found after swap.")
+            _validate_venv_python(final_py, verbose=verbose)
 
         for name in to_update:
             src = staging_root / name

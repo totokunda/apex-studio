@@ -96,7 +96,7 @@ export function useUpdateToasts(): void {
                 "div",
                 {
                   className:
-                    "mt-0.5 shrink-0  border border-white/10 bg-linear-to-br from-brand-accent-shade/30 via-brand-accent-shade/10 to-transparent p-2 text-brand-light",
+                    "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-brand-accent-shade/30 via-brand-accent-shade/10 to-transparent p-2 text-brand-light",
                 },
                 iconNode,
               ),
@@ -207,7 +207,7 @@ export function useUpdateToasts(): void {
                 "div",
                 {
                   className:
-                    "mt-0.5 shrink-0 border border-white/10 bg-linear-to-br from-brand-accent-shade/30 via-brand-accent-shade/10 to-transparent p-2 text-brand-light",
+                    "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-brand-accent-shade/30 via-brand-accent-shade/10 to-transparent p-2 text-brand-light",
                 },
                 iconNode,
               ),
@@ -315,7 +315,7 @@ export function useUpdateToasts(): void {
                 "div",
                 {
                   className:
-                    "mt-0.5 shrink-0 border border-white/10 bg-linear-to-br from-brand-accent-shade/30 via-brand-accent-shade/10 to-transparent p-2 text-brand-light",
+                    "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-brand-accent-shade/30 via-brand-accent-shade/10 to-transparent p-2 text-brand-light",
                 },
                 iconNode,
               ),
@@ -378,7 +378,7 @@ export function useUpdateToasts(): void {
                                     "div",
                                     {
                                       className:
-                                        "mt-0.5 shrink-0 border border-white/10 bg-linear-to-br from-red-500/20 via-red-500/10 to-transparent p-2 text-brand-light",
+                                        "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-red-500/20 via-red-500/10 to-transparent p-2 text-brand-light",
                                     },
                                     iconErr,
                                   ),
@@ -539,7 +539,7 @@ export function useUpdateToasts(): void {
                   "div",
                   {
                     className:
-                      "mt-0.5 shrink-0 border border-white/10 bg-linear-to-br from-emerald-500/20 via-emerald-500/10 to-transparent p-2 text-brand-light",
+                      "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-emerald-500/20 via-emerald-500/10 to-transparent p-2 text-brand-light",
                   },
                   iconOk,
                 ),
@@ -585,7 +585,7 @@ export function useUpdateToasts(): void {
                   "div",
                   {
                     className:
-                      "mt-0.5 shrink-0 border border-white/10 bg-linear-to-br from-red-500/20 via-red-500/10 to-transparent p-2 text-brand-light",
+                      "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-red-500/20 via-red-500/10 to-transparent p-2 text-brand-light",
                   },
                   iconErr,
                 ),
