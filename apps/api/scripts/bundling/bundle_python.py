@@ -43,9 +43,9 @@ class PythonBundler:
 
     # Intel macOS (x86_64): latest supported PyTorch stack.
     # These wheels are installed from PyPI (no +cpu suffix on macOS).
-    TORCH_VERSION_MACOS_INTEL = "2.2.2"
-    TORCHVISION_VERSION_MACOS_INTEL = "0.17.2"
-    TORCHAUDIO_VERSION_MACOS_INTEL = "2.2.2"
+    TORCH_WHEEL_MACOS_INTEL = "https://huggingface.co/datasets/totoku/universal-macos-torch/resolve/main/torch-2.11.0a0%2Bgit1f838e0-cp311-cp311-macosx_15_0_universal2.whl"
+    TORCHVISION_WHEEL_MACOS_INTEL = "https://huggingface.co/datasets/totoku/universal-macos-torch/resolve/main/torchvision-0.17.2%2Bc1d70fe-cp311-cp311-macosx_10_9_universal2.whl"
+    TORCHAUDIO_WHEEL_MACOS_INTEL = "https://huggingface.co/datasets/totoku/universal-macos-torch/resolve/main/torchaudio-2.11.0a0%2Be123269-cp311-cp311-macosx_10_9_universal2.whl"
 
     # PyTorch wheel indices for different platforms
     TORCH_INDICES = {
@@ -473,9 +473,9 @@ class PythonBundler:
         if self.platform_name == "darwin":
             if self._is_intel_macos():
                 return [
-                    f"torch=={self.TORCH_VERSION_MACOS_INTEL}",
-                    f"torchvision=={self.TORCHVISION_VERSION_MACOS_INTEL}",
-                    f"torchaudio=={self.TORCHAUDIO_VERSION_MACOS_INTEL}",
+                    f"torch @ {self.TORCH_WHEEL_MACOS_INTEL}",
+                    f"torchvision @ {self.TORCHVISION_WHEEL_MACOS_INTEL}",
+                    f"torchaudio @ {self.TORCHAUDIO_WHEEL_MACOS_INTEL}",
                 ]
             return [
                 f"torch=={self.TORCH_VERSION}",
@@ -549,7 +549,7 @@ class PythonBundler:
                 arch = ""
             if arch in {"x86_64", "amd64", "i386", "i686"} or arch.startswith("x86"):
                 return req_root / "cpu" / "requirements.txt"
-            return req_root / "mps" / "requirements.txt"
+            return req_root / "mps" / "requirements.txt"  
 
         # ROCm
         if gpu_type == "rocm":

@@ -554,7 +554,9 @@ export class ApexApiAutoUpdater implements AppModule {
         // Restart the API process after updates (or failed attempt).
         try {
           broadcastApiUpdateEvent({ type: "progress", stage: "restarting", message: "Restarting engine…" });
-          await py.start();
+          // After an update, the first start can be noticeably slower (cold imports, cache rebuilds, etc).
+          // Avoid falsely reporting "update failed" just because the engine needs more than 60s to become healthy.
+          await py.startWithOptions({ startupWaitMs: 180_000 });
           if (updateOk) {
             lastKnownState = { ...lastKnownState, status: "updated", updateInfo: updateOutput ?? undefined };
             broadcastApiUpdateEvent({ type: "updated", ...(updateOutput ? { info: updateOutput } : {}) });

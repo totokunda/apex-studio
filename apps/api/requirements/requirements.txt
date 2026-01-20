@@ -26,6 +26,7 @@ jsonschema==4.25.1
 librosa==0.11.0
 loguru==0.7.3
 mano==0.6.0
+zstandard==0.25.0
 matplotlib==3.10.8
 # NOTE: `mc==0.0` is not a real/published package and breaks dependency resolution.
 more_itertools==10.8.0
