@@ -133,7 +133,8 @@ def install_http_log_suppression(
     if _INSTALLED:
         return
     flt = AccessLogPathFilter()
-    for name in logger_names:
+    all_loggers = logging.root.manager.loggerDict.keys()
+    for name in all_loggers:
         try:
             logging.getLogger(name).addFilter(flt)
         except Exception:

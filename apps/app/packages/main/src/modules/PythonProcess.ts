@@ -92,6 +92,8 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   private consecutiveHealthFailures: number = 0;
   private expectedExitPid: number | null = null;
   private expectedExitUntilMs: number = 0;
+  private autoRestartSuppressed: boolean = false;
+  private autoRestartSuppressedReason: string | null = null;
   private runtimeVerifyCache:
     | { at: number; ok: boolean; reason?: string }
     | null = null;
@@ -869,7 +871,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     const env = this.buildEnvironment();
 
     this.process = spawn(cmd, args, {
-      env,
+      env: env,
       // Always run from the resolved bundle root so `-m src ...` resolves.
       cwd: this.bundledBundleRoot || undefined,
       stdio: ["ignore", "pipe", "pipe"],
@@ -1057,6 +1059,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     env.APEX_PORT = String(this.config.port);
     // Ownership: allow the server to self-terminate if the Electron parent dies.
     env.APEX_PARENT_PID = String(process.pid);
+    env.APEX_HIDE_POLLING_LOGS = "true";
 
     // Export FFmpeg location for the Python backend to use (fallback remains plain `ffmpeg`).
     // We only export if we can resolve a real on-disk binary path.
@@ -1415,6 +1418,12 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   private scheduleRestart(reason: string): void {
     if (this.isShuttingDown) return;
     if (!this.desiredRunning) return;
+    if (this.autoRestartSuppressed) {
+      this.appendSupervisorLog(
+        `[PythonProcess] Auto-restart suppressed (${this.autoRestartSuppressedReason ?? "unknown"}); ignoring: ${reason}`,
+      );
+      return;
+    }
 
     // If we're already starting, let that attempt complete.
     if (this.state.status === "starting") return;
@@ -1453,6 +1462,20 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
   getApiUrl(): string {
     return `http://${this.config.host}:${this.config.port}`;
+  }
+
+  /**
+   * Temporarily suppress watchdog restarts (health/exit) during maintenance windows
+   * like engine updates.
+   */
+  setAutoRestartSuppressed(suppressed: boolean, reason?: string): void {
+    this.autoRestartSuppressed = Boolean(suppressed);
+    this.autoRestartSuppressedReason = this.autoRestartSuppressed
+      ? (reason || "maintenance")
+      : null;
+    this.appendSupervisorLog(
+      `[PythonProcess] Auto-restart ${this.autoRestartSuppressed ? "suppressed" : "resumed"}${this.autoRestartSuppressedReason ? ` (${this.autoRestartSuppressedReason})` : ""}`,
+    );
   }
 }
 
