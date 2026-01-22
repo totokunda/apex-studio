@@ -3,6 +3,8 @@ import torch.nn.functional as F
 from diffusers.models.attention import Attention
 from typing import Optional, List
 from src.attention import attention_register
+from src.transformer.efficiency.ops import apply_wan_rope_inplace
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
 
 # Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: Apache-2.0
@@ -84,7 +86,10 @@ class WanAttnProcessor2_0:
         rotary_emb: Optional[torch.Tensor] = None,
         q_lens: List[int] = None,
         kv_lens: List[int] = None,
+        rope_chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
+        hidden_states = unwrap_single_item_list(hidden_states)
+        encoder_hidden_states = unwrap_single_item_list(encoder_hidden_states)
         encoder_hidden_states_img = None
         if attn.add_k_proj is not None:
             encoder_hidden_states_img = encoder_hidden_states[:, :257]
@@ -95,6 +100,8 @@ class WanAttnProcessor2_0:
         query = attn.to_q(hidden_states)
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
+        # Drop large refs early to reduce peak memory (q/k/v now own the activations).
+        del hidden_states, encoder_hidden_states
 
         if attn.norm_q is not None:
             query = attn.norm_q(query)
@@ -106,16 +113,12 @@ class WanAttnProcessor2_0:
         value = value.unflatten(2, (attn.heads, -1)).transpose(1, 2)
 
         if rotary_emb is not None:
-
-            def apply_rotary_emb(hidden_states: torch.Tensor, freqs: torch.Tensor):
-                x_rotated = torch.view_as_complex(
-                    hidden_states.to(torch.float64).unflatten(3, (-1, 2))
-                )
-                x_out = torch.view_as_real(x_rotated * freqs).flatten(3, 4)
-                return x_out.type_as(hidden_states)
-
-            query = apply_rotary_emb(query, rotary_emb)
-            key = apply_rotary_emb(key, rotary_emb)
+            apply_wan_rope_inplace(
+                query, rotary_emb, chunk_size=rope_chunk_size, freqs_may_be_cpu=True
+            )
+            apply_wan_rope_inplace(
+                key, rotary_emb, chunk_size=rope_chunk_size, freqs_may_be_cpu=True
+            )
 
         # I2V task
         hidden_states_img = None
@@ -123,6 +126,7 @@ class WanAttnProcessor2_0:
             key_img = attn.add_k_proj(encoder_hidden_states_img)
             key_img = attn.norm_added_k(key_img)
             value_img = attn.add_v_proj(encoder_hidden_states_img)
+            del encoder_hidden_states_img
 
             key_img = key_img.unflatten(2, (attn.heads, -1)).transpose(1, 2)
             value_img = value_img.unflatten(2, (attn.heads, -1)).transpose(1, 2)
@@ -150,9 +154,18 @@ class WanAttnProcessor2_0:
 
         hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
         hidden_states = hidden_states.type_as(query)
+        del query, key, value
 
         if hidden_states_img is not None:
-            hidden_states = hidden_states + hidden_states_img
+            if (
+                (not torch.is_grad_enabled())
+                and (not hidden_states.requires_grad)
+                and (not hidden_states_img.requires_grad)
+            ):
+                hidden_states.add_(hidden_states_img)
+            else:
+                hidden_states = hidden_states + hidden_states_img
+            del hidden_states_img
 
         hidden_states = attn.to_out[0](hidden_states)
         hidden_states = attn.to_out[1](hidden_states)

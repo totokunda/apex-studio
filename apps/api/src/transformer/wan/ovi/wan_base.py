@@ -9,6 +9,13 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from torch.utils.checkpoint import checkpoint
 from src.attention import attention_register
+from src.transformer.efficiency.ops import (
+    apply_scale_shift_inplace,
+    apply_wan_rope_inplace,
+    chunked_feed_forward_inplace,
+)
+from src.transformer.efficiency.mod import InplaceRMSNorm
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
 from .attention import flash_attention
 from .easy_cache import easycache_forward
 import types
@@ -28,12 +35,14 @@ def _chunked_modulated_norm(
     in_dtype = hidden_states.dtype
 
     if chunk_size is None:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     if S <= chunk_size:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     out = torch.empty_like(hidden_states)
     scale_per_token = scale.dim() == 3 and scale.shape[1] == S
@@ -49,34 +58,217 @@ def _chunked_modulated_norm(
             scale_chunk = scale
             shift_chunk = shift
 
-        normed = norm_layer(hs_chunk)
-        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
-        del normed
+        out[:, i:end, :].copy_(norm_layer(hs_chunk))
+        apply_scale_shift_inplace(out[:, i:end, :], scale_chunk, shift_chunk)
 
+    return out
+
+
+def _chunked_modulated_norm_from_e(
+    norm_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    e: torch.Tensor,
+    mod: torch.Tensor,
+    *,
+    scale_idx: int,
+    shift_idx: int,
+    chunk_size: Optional[int] = 2048,
+) -> torch.Tensor:
+    """
+    Modulated layer norm without materializing `mod + e` for the full [B, S, 6, D].
+
+    hidden_states: [B, S, D]
+    e:            [B, S, 6, D]
+    mod:          [1, 6, D] (tiny per-block parameter, already on the right device)
+    """
+    if hidden_states.ndim != 3:
+        raise ValueError(
+            f"Expected hidden_states [B,S,D], got {tuple(hidden_states.shape)}"
+        )
+    if e.ndim != 4 or e.shape[2] < max(scale_idx, shift_idx) + 1:
+        raise ValueError(f"Expected e [B,S,6,D], got {tuple(e.shape)}")
+
+    B, S, D = hidden_states.shape
+    in_dtype = hidden_states.dtype
+
+    # We avoid allocating full (scale, shift) tensors by reusing a single scratch
+    # buffer and applying:
+    #   out = out * (1 + scale) + shift
+    # as:
+    #   out.addcmul_(out, scale); out.add_(shift)
+    #
+    # This is safe here because our scale/shift are per-token [B,S,D] (not the
+    # per-frame special case handled in apply_scale_shift_inplace).
+    if chunk_size is None:
+        # No chunking requested: still use a single buffer (1x) instead of materializing
+        # both scale and shift (2x).
+        out = norm_layer(hidden_states).to(in_dtype)
+        tmp = torch.empty((B, S, D), device=out.device, dtype=in_dtype)
+        mod_scale = mod[:, scale_idx, :].to(dtype=in_dtype).unsqueeze(1)
+        mod_shift = mod[:, shift_idx, :].to(dtype=in_dtype).unsqueeze(1)
+
+        tmp.copy_(e[:, :, scale_idx, :]).add_(mod_scale)
+        out.addcmul_(out, tmp)
+        tmp.copy_(e[:, :, shift_idx, :]).add_(mod_shift)
+        out.add_(tmp)
+        return out
+
+    if S <= chunk_size:
+        out = norm_layer(hidden_states).to(in_dtype)
+        tmp = torch.empty((B, S, D), device=out.device, dtype=in_dtype)
+        mod_scale = mod[:, scale_idx, :].to(dtype=in_dtype).unsqueeze(1)
+        mod_shift = mod[:, shift_idx, :].to(dtype=in_dtype).unsqueeze(1)
+
+        tmp.copy_(e[:, :, scale_idx, :]).add_(mod_scale)
+        out.addcmul_(out, tmp)
+        tmp.copy_(e[:, :, shift_idx, :]).add_(mod_shift)
+        out.add_(tmp)
+        return out
+
+    out = torch.empty_like(hidden_states)
+    mod_scale = mod[:, scale_idx, :].to(dtype=in_dtype).unsqueeze(1)
+    mod_shift = mod[:, shift_idx, :].to(dtype=in_dtype).unsqueeze(1)
+    tmp = torch.empty((B, int(chunk_size), D), device=out.device, dtype=in_dtype)
+
+    for i in range(0, S, int(chunk_size)):
+        end = min(i + int(chunk_size), S)
+        out_chunk = out[:, i:end, :]
+        out_chunk.copy_(norm_layer(hidden_states[:, i:end, :]))
+
+        tmp_view = tmp[:, : end - i, :]
+        tmp_view.copy_(e[:, i:end, scale_idx, :]).add_(mod_scale)
+        out_chunk.addcmul_(out_chunk, tmp_view)
+        tmp_view.copy_(e[:, i:end, shift_idx, :]).add_(mod_shift)
+        out_chunk.add_(tmp_view)
+
+    return out
+
+
+def _add_gated_residual_from_e_(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    e: torch.Tensor,
+    mod: torch.Tensor,
+    *,
+    gate_idx: int,
+    chunk_size: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Apply gated residual `x += y * gate` where `gate = e[:,:,gate_idx,:] + mod[:,gate_idx,:]`
+    without materializing the full [B,S,D] gate for long sequences when chunking.
+
+    Uses an in-place update only when gradients are disabled; otherwise falls back to
+    the out-of-place formulation to preserve autograd correctness.
+    """
+    if gate_idx < 0:
+        raise ValueError(f"gate_idx must be non-negative, got {gate_idx}")
+    if e.ndim != 4 or e.shape[2] <= gate_idx:
+        raise ValueError(f"Expected e [B,S,6,D], got {tuple(e.shape)}")
+
+    if torch.is_grad_enabled() or x.requires_grad or y.requires_grad:
+        gate = e[:, :, gate_idx, :].to(dtype=y.dtype).add(
+            mod[:, gate_idx, :].to(dtype=y.dtype).unsqueeze(1)
+        )
+        return x + y * gate
+
+    # Inference-only: optionally update `x` in-place to avoid extra allocations.
+    # Only do this when dtypes match (in-place ops cannot change dtype, and autocast
+    # can produce `y` in bf16 while `x` stays fp16).
+    if x.dtype != y.dtype:
+        gate = e[:, :, gate_idx, :].to(dtype=y.dtype).add(
+            mod[:, gate_idx, :].to(dtype=y.dtype).unsqueeze(1)
+        )
+        return x + y * gate
+
+    B, S, D = x.shape
+    if chunk_size is None or S <= int(chunk_size):
+        gate = e[:, :, gate_idx, :].to(dtype=y.dtype).add(
+            mod[:, gate_idx, :].to(dtype=y.dtype).unsqueeze(1)
+        )
+        x.addcmul_(y, gate)
+        return x
+
+    mod_gate = mod[:, gate_idx, :].to(dtype=y.dtype).unsqueeze(1)
+    for i in range(0, S, int(chunk_size)):
+        end = min(i + int(chunk_size), S)
+        gate_chunk = e[:, i:end, gate_idx, :].to(dtype=y.dtype).add(mod_gate)
+        x[:, i:end, :].addcmul_(y[:, i:end, :], gate_chunk)
+    return x
+
+
+def _chunked_modulated_norm_from_e_2(
+    norm_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    e: torch.Tensor,
+    mod: torch.Tensor,
+    *,
+    scale_idx: int,
+    shift_idx: int,
+    chunk_size: Optional[int] = 2048,
+) -> torch.Tensor:
+    """
+    Modulated layer norm for the head, where:
+      hidden_states: [B, S, D]
+      e:            [B, S, D]
+      mod:          [1, 2, D]
+    and we interpret:
+      scale = e + mod[:, scale_idx]
+      shift = e + mod[:, shift_idx]
+
+    Avoids materializing [B,S,2,D] via `(mod + e.unsqueeze(2)).chunk(...)`.
+    """
+    if hidden_states.ndim != 3 or e.ndim != 3:
+        raise ValueError(
+            f"Expected hidden_states/e [B,S,D], got {tuple(hidden_states.shape)} and {tuple(e.shape)}"
+        )
+    B, S, D = hidden_states.shape
+    if e.shape[0] != B or e.shape[1] != S or e.shape[2] != D:
+        raise ValueError(f"Shape mismatch: hidden_states={tuple(hidden_states.shape)} e={tuple(e.shape)}")
+
+    in_dtype = hidden_states.dtype
+    mod_scale = mod[:, scale_idx, :].to(dtype=in_dtype).unsqueeze(1)
+    mod_shift = mod[:, shift_idx, :].to(dtype=in_dtype).unsqueeze(1)
+
+    if chunk_size is None:
+        out = norm_layer(hidden_states).to(in_dtype)
+        tmp = torch.empty((B, S, D), device=out.device, dtype=in_dtype)
+        tmp.copy_(e).add_(mod_scale)
+        out.addcmul_(out, tmp)
+        tmp.copy_(e).add_(mod_shift)
+        out.add_(tmp)
+        return out
+
+    if S <= chunk_size:
+        out = norm_layer(hidden_states).to(in_dtype)
+        tmp = torch.empty((B, S, D), device=out.device, dtype=in_dtype)
+        tmp.copy_(e).add_(mod_scale)
+        out.addcmul_(out, tmp)
+        tmp.copy_(e).add_(mod_shift)
+        out.add_(tmp)
+        return out
+
+    out = torch.empty_like(hidden_states)
+    tmp = torch.empty((B, int(chunk_size), D), device=out.device, dtype=in_dtype)
+    for i in range(0, S, int(chunk_size)):
+        end = min(i + int(chunk_size), S)
+        out_chunk = out[:, i:end, :]
+        out_chunk.copy_(norm_layer(hidden_states[:, i:end, :]))
+        tmp_view = tmp[:, : end - i, :]
+
+        tmp_view.copy_(e[:, i:end, :]).add_(mod_scale)
+        out_chunk.addcmul_(out_chunk, tmp_view)
+        tmp_view.copy_(e[:, i:end, :]).add_(mod_shift)
+        out_chunk.add_(tmp_view)
     return out
 
 
 def _chunked_feed_forward(
     ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
 ) -> torch.Tensor:
-    """
-    Chunked feed-forward to reduce peak memory.
-    """
-    if chunk_size is None:
-        return ff(hidden_states)
-    if chunk_size <= 0:
-        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-
-    dim_len = hidden_states.shape[chunk_dim]
-    if dim_len <= chunk_size:
-        return ff(hidden_states)
-
-    outputs = []
-    for start in range(0, dim_len, chunk_size):
-        end = min(start + chunk_size, dim_len)
-        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
-        outputs.append(ff(hs_chunk))
-    return torch.cat(outputs, dim=chunk_dim)
+    """Chunked feed-forward to reduce peak memory."""
+    return chunked_feed_forward_inplace(
+        ff, hidden_states, chunk_dim=chunk_dim, chunk_size=chunk_size
+    )
 
 
 def _chunked_norm(
@@ -207,6 +399,61 @@ def rope_apply(x, grid_sizes, freqs):
         return rope_apply_1d(x, grid_sizes, freqs)
 
 
+def rope_apply_inplace_bhtd(
+    x_bhtd: torch.Tensor,
+    grid_sizes: torch.Tensor,
+    freqs: torch.Tensor,
+    *,
+    chunk_size: int = 1024,
+) -> torch.Tensor:
+    """
+    In-place WAN RoPE for x in [B, H, T, D] layout (D even).
+
+    Matches the legacy `rope_apply` behavior by only rotating the first `freqs.shape[1]`
+    complex dimensions (i.e., the first `2 * freqs.shape[1]` last-dim features).
+    """
+    c_total = x_bhtd.shape[-1] // 2
+    c_rope = freqs.shape[1]
+    if c_rope > c_total:
+        raise ValueError(
+            f"RoPE dims cannot exceed head_dim//2: freqs={c_rope} head_dim//2={c_total}"
+        )
+
+    x_ndim = grid_sizes.shape[-1]
+    if x_ndim == 3:
+        freqs_split = freqs.split(
+            [c_rope - 2 * (c_rope // 3), c_rope // 3, c_rope // 3], dim=1
+        )
+        for i, (f, h, w) in enumerate(grid_sizes.tolist()):
+            seq_len = int(f * h * w)
+            if seq_len <= 0:
+                continue
+            freqs_i = torch.cat(
+                [
+                    freqs_split[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+                    freqs_split[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+                    freqs_split[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
+                ],
+                dim=-1,
+            ).reshape(seq_len, -1)
+            apply_wan_rope_inplace(
+                x_bhtd[i : i + 1, :, :seq_len, : 2 * c_rope],
+                freqs_i,
+                chunk_size=int(chunk_size),
+            )
+    else:
+        for i, (l,) in enumerate(grid_sizes.tolist()):
+            seq_len = int(l)
+            if seq_len <= 0:
+                continue
+            apply_wan_rope_inplace(
+                x_bhtd[i : i + 1, :, :seq_len, : 2 * c_rope],
+                freqs[:seq_len],
+                chunk_size=int(chunk_size),
+            )
+    return x_bhtd
+
+
 class ChannelLastConv1d(nn.Conv1d):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -307,13 +554,22 @@ class WanSelfAttention(nn.Module):
         self.k = nn.Linear(dim, dim)
         self.v = nn.Linear(dim, dim)
         self.o = nn.Linear(dim, dim)
-        self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_q = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
+        self.norm_k = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
         # optional sequence parallelism
         # self.world_size = get_world_size()
 
     # query, key, value function
     def qkv_fn(self, x):
+        x = unwrap_single_item_list(x)
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
 
         q = self.norm_q(self.q(x)).view(b, s, n, d)
@@ -329,12 +585,18 @@ class WanSelfAttention(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        x = unwrap_single_item_list(x)
         q, k, v = self.qkv_fn(x)
 
+        # Apply RoPE in-place on the [B, H, T, D] layout to minimize allocations.
+        q = rope_apply_inplace_bhtd(q.transpose(1, 2), grid_sizes, freqs, chunk_size=1024)
+        k = rope_apply_inplace_bhtd(k.transpose(1, 2), grid_sizes, freqs, chunk_size=1024)
+        v = v.transpose(1, 2)
+
         x = attention_register.call(
-            q=rope_apply(q, grid_sizes, freqs).transpose(1, 2),
-            k=rope_apply(k, grid_sizes, freqs).transpose(1, 2),
-            v=v.transpose(1, 2),
+            q=q,
+            k=k,
+            v=v,
             k_lens=seq_lens,
             window_size=self.window_size,
         ).transpose(1, 2)
@@ -347,6 +609,8 @@ class WanSelfAttention(nn.Module):
 
 class WanT2VCrossAttention(WanSelfAttention):
     def qkv_fn(self, x, context):
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
         b, n, d = x.size(0), self.num_heads, self.head_dim
 
         # compute query, key, value
@@ -363,6 +627,8 @@ class WanT2VCrossAttention(WanSelfAttention):
             context(Tensor): Shape [B, L2, C]
             context_lens(Tensor): Shape [B]
         """
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
         q, k, v = self.qkv_fn(x, context)
 
         # compute attention
@@ -395,10 +661,16 @@ class WanI2VCrossAttention(WanSelfAttention):
         self.k_img = nn.Linear(dim, dim)
         self.v_img = nn.Linear(dim, dim)
         # self.alpha = nn.Parameter(torch.zeros((1, )))
-        self.norm_k_img = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_k_img = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
         self.additional_emb_length = additional_emb_length
 
     def qkv_fn(self, x, context):
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
         context_img = context[:, : self.additional_emb_length]
         context = context[:, self.additional_emb_length :]
         b, n, d = x.size(0), self.num_heads, self.head_dim
@@ -419,6 +691,8 @@ class WanI2VCrossAttention(WanSelfAttention):
             context(Tensor): Shape [B, L2, C]
             context_lens(Tensor): Shape [B]
         """
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
         q, k, v, k_img, v_img = self.qkv_fn(x, context)
 
         # [B, L, H/P, C/H]
@@ -456,8 +730,23 @@ class ModulationAdd(nn.Module):
         super().__init__()
         self.modulation = nn.Parameter(torch.randn(1, num, dim) / dim**0.5)
 
+    def get_mod_bf16(self, ref: torch.Tensor) -> torch.Tensor:
+        """
+        Return the tiny modulation parameter on `ref`'s device in bfloat16.
+
+        This is used to avoid allocating `mod + e` for the full [B,S,6,D] tensor.
+        """
+        mod = self.modulation
+        if mod.device != ref.device:
+            mod = mod.to(device=ref.device)
+        return mod.to(dtype=torch.bfloat16)
+
     def forward(self, e):
-        return self.modulation.bfloat16() + e.bfloat16()
+        # Budget offloading may keep this tiny parameter on CPU; ensure device match.
+        mod = self.modulation
+        if mod.device != e.device:
+            mod = mod.to(device=e.device)
+        return mod.to(dtype=torch.bfloat16) + e.to(dtype=torch.bfloat16)
 
 
 class WanAttentionBlock(nn.Module):
@@ -575,47 +864,70 @@ class WanAttentionBlock(nn.Module):
             target_grid_sizes: Target grid sizes (fusion modes only)
             target_freqs: Target freqs (fusion modes only)
         """
-
+        inference_mode = not torch.is_grad_enabled()
+        from src.utils.step_mem import step_mem
         if mode == "modulation_self_attn":
             # Fusion mode: modulation + self-attention only
             assert (
                 len(e.shape) == 4 and e.size(2) == 6 and e.shape[1] == x.shape[1]
             ), f"{e.shape}, {x.shape}"
-            with amp.autocast("cuda", dtype=torch.bfloat16):
-                e_chunked = self.modulation(e).chunk(6, dim=2)
-            assert e_chunked[0].dtype == torch.bfloat16
-
-            norm_x = _chunked_modulated_norm(
+            # Avoid materializing `self.modulation(e)` (which duplicates a huge [B,S,6,D]).
+            # Instead, add the tiny modulation parameter per-slice/per-chunk.
+            mod = self.modulation.get_mod_bf16(e)
+            norm_x = _chunked_modulated_norm_from_e(
                 self.norm1,
                 x,
-                e_chunked[1].squeeze(2),
-                e_chunked[0].squeeze(2),
+                e,
+                mod,
+                scale_idx=1,
+                shift_idx=0,
                 chunk_size=self._mod_norm_chunk_size,
             )
-            y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
+            if inference_mode:
+                norm_x_list = [norm_x.bfloat16()]
+                norm_x = norm_x_list
+                y = self.self_attn(norm_x, seq_lens, grid_sizes, freqs)
+            else:
+                y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
+            # Drop the norm buffer as soon as attention finishes.
+            del norm_x
             with amp.autocast("cuda", dtype=torch.bfloat16):
-                x = x + y * e_chunked[2].squeeze(2)
-
-            return x, e_chunked
+                x = _add_gated_residual_from_e_(
+                    x,
+                    y,
+                    e,
+                    mod,
+                    gate_idx=2,
+                    chunk_size=self._mod_norm_chunk_size,
+                )
+            del y
+            # Return raw `e` (not chunked / not modulated); fusion stage will apply the
+            # same tiny modulation parameter lazily when needed.
+            return x, e
 
         elif mode == "fusion_cross_attn_ffn":
             # Fusion mode: cross-attention with target modality + FFN
-            # e is expected to be pre-chunked tuple from modulation_self_attn
+            # e may be:
+            # - raw tensor [B,S,6,D] (preferred, avoids allocating `mod+e`)
+            # - legacy tuple/list from older code paths (kept for compatibility)
             e_chunked = e
             b, n, d = x.size(0), self.cross_attn.num_heads, self.cross_attn.head_dim
 
             # Standard cross-attention with context
+            norm3_x = _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size)
             if hasattr(self.cross_attn, "k_img"):
                 q, k, v, k_img, v_img = self.cross_attn.qkv_fn(
-                    _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
+                    norm3_x,
                     context,
                 )
             else:
                 q, k, v = self.cross_attn.qkv_fn(
-                    _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
+                    norm3_x,
                     context,
                 )
                 k_img = v_img = None
+            # Drop the normalized buffer early (often large).
+            del norm3_x
 
             attn_out = attention_register.call(
                 q=q.transpose(1, 2),
@@ -623,6 +935,8 @@ class WanAttentionBlock(nn.Module):
                 v=v.transpose(1, 2),
                 k_lens=context_lens,
             ).transpose(1, 2)
+            # k/v no longer needed after attention.
+            del k, v
 
             if k_img is not None:
                 img_attn = attention_register.call(
@@ -631,7 +945,11 @@ class WanAttentionBlock(nn.Module):
                     v=v_img.transpose(1, 2),
                     k_lens=None,
                 ).transpose(1, 2)
-                attn_out = attn_out + img_attn
+                if (not torch.is_grad_enabled()) and attn_out.dtype == img_attn.dtype:
+                    attn_out.add_(img_attn)
+                else:
+                    attn_out = attn_out + img_attn
+                del img_attn, k_img, v_img
 
             # Fusion cross-attention with target modality
             target_seq_normed = self.cross_attn.pre_attn_norm_fusion(target_seq)
@@ -639,37 +957,88 @@ class WanAttentionBlock(nn.Module):
                 self.cross_attn.k_fusion(target_seq_normed)
             ).view(b, -1, n, d)
             v_target = self.cross_attn.v_fusion(target_seq_normed).view(b, -1, n, d)
+            del target_seq_normed
 
-            q_rope = rope_apply(q, grid_sizes, freqs)
-            k_target_rope = rope_apply(k_target, target_grid_sizes, target_freqs)
+            q_bhtd = q.transpose(1, 2)
+            q_rope = rope_apply_inplace_bhtd(q_bhtd, grid_sizes, freqs, chunk_size=1024)
+            k_target_rope = rope_apply_inplace_bhtd(
+                k_target.transpose(1, 2),
+                target_grid_sizes,
+                target_freqs,
+                chunk_size=1024,
+            )
+            # q only needed for q_rope now.
+            del q, q_bhtd
 
             target_attn = attention_register.call(
-                q=q_rope.transpose(1, 2),
-                k=k_target_rope.transpose(1, 2),
+                q=q_rope,
+                k=k_target_rope,
                 v=v_target.transpose(1, 2),
                 k_lens=target_seq_lens,
             ).transpose(1, 2)
+            del q_rope, k_target, v_target, k_target_rope
 
-            combined_attn = (attn_out + target_attn).flatten(2)
-            x = x + self.cross_attn.o(combined_attn)
+            # Avoid allocating the sum tensor when possible.
+            if (not torch.is_grad_enabled()) and attn_out.dtype == target_attn.dtype:
+                attn_out.add_(target_attn)
+                del target_attn
+                combined_attn = attn_out.flatten(2)
+            else:
+                combined_attn = (attn_out + target_attn).flatten(2)
+                del target_attn
+
+            proj = self.cross_attn.o(combined_attn)
+            if (
+                (not torch.is_grad_enabled())
+                and (not x.requires_grad)
+                and proj.dtype == x.dtype
+            ):
+                x.add_(proj)
+            else:
+                x = x + proj
+            del proj, combined_attn, attn_out
 
             # FFN
-            ffn_x = _chunked_modulated_norm(
-                self.norm2,
-                x,
-                e_chunked[4].squeeze(2),
-                e_chunked[3].squeeze(2),
-                chunk_size=self._mod_norm_chunk_size,
-            )
+            if torch.is_tensor(e_chunked) and e_chunked.ndim == 4:
+                mod = self.modulation.get_mod_bf16(e_chunked)
+                ffn_x = _chunked_modulated_norm_from_e(
+                    self.norm2,
+                    x,
+                    e_chunked,
+                    mod,
+                    scale_idx=4,
+                    shift_idx=3,
+                    chunk_size=self._mod_norm_chunk_size,
+                )
+            else:
+                # Legacy: `e_chunked` is a tuple/list of 6 tensors shaped [B,S,1,D]
+                ffn_x = _chunked_modulated_norm(
+                    self.norm2,
+                    x,
+                    e_chunked[4].squeeze(2),
+                    e_chunked[3].squeeze(2),
+                    chunk_size=self._mod_norm_chunk_size,
+                )
             if self._ff_chunk_size is not None:
                 y = _chunked_feed_forward(
                     self.ffn, ffn_x.bfloat16(), self._ff_chunk_dim, self._ff_chunk_size
                 )
             else:
                 y = self.ffn(ffn_x.bfloat16())
+            del ffn_x
             with amp.autocast("cuda", dtype=torch.bfloat16):
-                x = x + y * e_chunked[5].squeeze(2)
-
+                if torch.is_tensor(e_chunked) and e_chunked.ndim == 4:
+                    x = _add_gated_residual_from_e_(
+                        x,
+                        y,
+                        e_chunked,
+                        mod,
+                        gate_idx=5,
+                        chunk_size=self._mod_norm_chunk_size,
+                    )
+                else:
+                    x = x + y * e_chunked[5].squeeze(2)
+            del y
             return x
 
         else:
@@ -677,33 +1046,66 @@ class WanAttentionBlock(nn.Module):
             assert (
                 len(e.shape) == 4 and e.size(2) == 6 and e.shape[1] == x.shape[1]
             ), f"{e.shape}, {x.shape}"
-            with amp.autocast("cuda", dtype=torch.bfloat16):
-                e = self.modulation(e).chunk(6, dim=2)
-            assert e[0].dtype == torch.bfloat16
+            # Avoid allocating the full `mod + e` tensor.
+            mod = self.modulation.get_mod_bf16(e)
 
             # self-attention with chunked modulated norm
-            norm_x = _chunked_modulated_norm(
+            norm_x = _chunked_modulated_norm_from_e(
                 self.norm1,
                 x,
-                e[1].squeeze(2),
-                e[0].squeeze(2),
+                e,
+                mod,
+                scale_idx=1,
+                shift_idx=0,
                 chunk_size=self._mod_norm_chunk_size,
             )
-            y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
+            if inference_mode:
+                norm_x_list = [norm_x.bfloat16()]
+                norm_x = norm_x_list
+                y = self.self_attn(norm_x, seq_lens, grid_sizes, freqs)
+            else:
+                y = self.self_attn(norm_x.bfloat16(), seq_lens, grid_sizes, freqs)
+            # `norm_x` is only needed for self_attn; drop it as soon as possible.
+            del norm_x
             with amp.autocast("cuda", dtype=torch.bfloat16):
-                x = x + y * e[2].squeeze(2)
-
+                x = _add_gated_residual_from_e_(
+                    x,
+                    y,
+                    e,
+                    mod,
+                    gate_idx=2,
+                    chunk_size=self._mod_norm_chunk_size,
+                )
+            del y
+            
             # cross-attention & ffn
-            x = x + self.cross_attn(
-                _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
-                context,
-                context_lens,
-            )
-            ffn_x = _chunked_modulated_norm(
+            norm_x = _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size)
+            if inference_mode:
+                norm_x_list = [norm_x]
+                context_list = [context]
+                norm_x = norm_x_list
+                context = context_list
+            cross = self.cross_attn(norm_x, context, context_lens)
+            # Drop list wrappers / normalized buffers as soon as cross-attn finishes.
+            del norm_x
+            if inference_mode:
+                del context
+            if (
+                (not torch.is_grad_enabled())
+                and (not x.requires_grad)
+                and cross.dtype == x.dtype
+            ):
+                x.add_(cross)
+            else:
+                x = x + cross
+            del cross
+            ffn_x = _chunked_modulated_norm_from_e(
                 self.norm2,
                 x,
-                e[4].squeeze(2),
-                e[3].squeeze(2),
+                e,
+                mod,
+                scale_idx=4,
+                shift_idx=3,
                 chunk_size=self._mod_norm_chunk_size,
             )
             if self._ff_chunk_size is not None:
@@ -712,9 +1114,18 @@ class WanAttentionBlock(nn.Module):
                 )
             else:
                 y = self.ffn(ffn_x.bfloat16())
+            del ffn_x
             with amp.autocast("cuda", dtype=torch.bfloat16):
-                x = x + y * e[5].squeeze(2)
-
+                x = _add_gated_residual_from_e_(
+                    x,
+                    y,
+                    e,
+                    mod,
+                    gate_idx=5,
+                    chunk_size=self._mod_norm_chunk_size,
+                )
+            del y
+                
             return x
 
 
@@ -748,17 +1159,25 @@ class Head(nn.Module):
             e(Tensor): Shape [B, L, C]
         """
         with amp.autocast(x.device.type, dtype=torch.bfloat16):
-            e = (self.modulation.bfloat16().unsqueeze(0) + e.unsqueeze(2)).chunk(
-                2, dim=2
-            )  # 1 1 2 D, B L 1 D -> B L 2 D -> 2 * (B L 1 D)
-            norm_x = _chunked_modulated_norm(
+            # Budget offloading may keep this tiny parameter on CPU; ensure device match.
+            mod = self.modulation
+            if e.device != x.device:
+                e = e.to(device=x.device)
+            if mod.device != x.device:
+                mod = mod.to(device=x.device)
+            # Avoid materializing [B, L, 2, D] via `(mod + e.unsqueeze(2)).chunk(...)`.
+            mod = mod.to(dtype=torch.bfloat16)
+            norm_x = _chunked_modulated_norm_from_e_2(
                 self.norm,
                 x,
-                e[1].squeeze(2),
-                e[0].squeeze(2),
+                e,
+                mod,
+                scale_idx=1,
+                shift_idx=0,
                 chunk_size=self._mod_norm_chunk_size,
             )
             x = self.head(norm_x)
+            del norm_x
         return x
 
 
@@ -1094,14 +1513,27 @@ class WanModel(ModelMixin, ConfigMixin):
         clip_fea=None,
         y=None,
         first_frame_is_clean=False,
+        rope_on_cpu: bool | None = None,
     ):
 
         # params
         ## need to change!
         device = next(self.patch_embedding.parameters()).device
 
-        if self.freqs.device != device:
-            self.freqs = self.freqs.to(device)
+        # Memory optimization: optionally keep RoPE freqs on CPU (they will be moved
+        # chunk-by-chunk inside `apply_wan_rope_inplace(..., freqs_may_be_cpu=True)`).
+        #
+        # If `rope_on_cpu` is None, fall back to a model-level attribute for callers
+        # that want to set it once (Wan2GP-style).
+        if rope_on_cpu is None:
+            rope_on_cpu = bool(getattr(self, "rope_on_cpu", False))
+
+        if rope_on_cpu:
+            if self.freqs.device.type != "cpu":
+                self.freqs = self.freqs.to("cpu")
+        else:
+            if self.freqs.device != device:
+                self.freqs = self.freqs.to(device)
 
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]

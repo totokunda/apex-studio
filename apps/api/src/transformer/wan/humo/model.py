@@ -13,6 +13,13 @@ from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.configuration_utils import register_to_config
 from src.attention import attention_register
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
+from src.transformer.efficiency.ops import (
+    apply_gate_inplace,
+    apply_scale_shift_inplace,
+    chunked_feed_forward_inplace,
+)
+from src.transformer.efficiency.mod import InplaceRMSNorm
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -32,12 +39,14 @@ def _chunked_modulated_norm(
     in_dtype = hidden_states.dtype
 
     if chunk_size is None:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     if S <= chunk_size:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     out = torch.empty_like(hidden_states)
     scale_per_token = scale.dim() == 3 and scale.shape[1] == S
@@ -53,9 +62,8 @@ def _chunked_modulated_norm(
             scale_chunk = scale
             shift_chunk = shift
 
-        normed = norm_layer(hs_chunk)
-        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
-        del normed
+        out[:, i:end, :].copy_(norm_layer(hs_chunk))
+        apply_scale_shift_inplace(out[:, i:end, :], scale_chunk, shift_chunk)
 
     return out
 
@@ -63,24 +71,10 @@ def _chunked_modulated_norm(
 def _chunked_feed_forward(
     ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
 ) -> torch.Tensor:
-    """
-    Chunked feed-forward to reduce peak memory.
-    """
-    if chunk_size is None:
-        return ff(hidden_states)
-    if chunk_size <= 0:
-        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-
-    dim_len = hidden_states.shape[chunk_dim]
-    if dim_len <= chunk_size:
-        return ff(hidden_states)
-
-    outputs = []
-    for start in range(0, dim_len, chunk_size):
-        end = min(start + chunk_size, dim_len)
-        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
-        outputs.append(ff(hs_chunk))
-    return torch.cat(outputs, dim=chunk_dim)
+    """Chunked feed-forward to reduce peak memory."""
+    return chunked_feed_forward_inplace(
+        ff, hidden_states, chunk_dim=chunk_dim, chunk_size=chunk_size
+    )
 
 
 def _chunked_norm(
@@ -238,36 +232,291 @@ def rope_params(max_seq_len, dim, theta=10000):
 
 @amp.autocast(enabled=False)
 def rope_apply(x, grid_sizes, freqs):
-    n, c = x.size(2), x.size(3) // 2
+    # Backward-compatible shim (older code called `rope_apply` directly).
+    return rope_apply_video(x, grid_sizes=grid_sizes, freqs=freqs, chunk_size=None)
 
-    # split freqs
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
 
-    # loop over samples
-    output = []
-    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
-        seq_len = f * h * w
+def _rope_split_freqs(freqs: torch.Tensor, head_dim: int):
+    """
+    Split frequency table into (t, h, w) parts matching the per-head rotary layout.
 
-        # precompute multipliers
-        x_i = torch.view_as_complex(
-            x[i, :seq_len].to(torch.float32).reshape(seq_len, n, -1, 2)
+    freqs: [max_seq, head_dim/2] complex
+    """
+    if head_dim % 2 != 0:
+        raise ValueError(f"head_dim must be even for RoPE, got {head_dim}")
+    c = head_dim // 2
+    return freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+
+
+def _rope_complex_multiply_inplace(
+    x_real: torch.Tensor,
+    x_imag: torch.Tensor,
+    freqs_real: torch.Tensor,
+    freqs_imag: torch.Tensor,
+) -> None:
+    """
+    In-place complex multiply on real/imag pairs:
+      (x_real + i*x_imag) *= (freqs_real + i*freqs_imag)
+    """
+    x_real_orig = x_real.clone()
+    x_real.mul_(freqs_real).addcmul_(x_imag, freqs_imag, value=-1.0)
+    x_imag.mul_(freqs_real).addcmul_(x_real_orig, freqs_imag, value=1.0)
+
+
+@amp.autocast(enabled=False)
+def _rope_apply_3d_inplace_chunked(
+    x: torch.Tensor,
+    freqs_t: torch.Tensor,
+    freqs_h: torch.Tensor,
+    freqs_w: torch.Tensor,
+    *,
+    f: int,
+    h: int,
+    w: int,
+    shift_f: int = 0,
+    shift_h: int = 0,
+    shift_w: int = 0,
+    chunk_size: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Apply 3D RoPE (t/h/w) to `x` IN-PLACE in chunks to reduce peak memory.
+
+    x: [B, S, N, D] where D is per-head dim (must be even).
+    freqs_*: complex tensors on CPU or GPU.
+    """
+    if x.ndim != 4:
+        raise ValueError(f"Expected x to be 4D [B,S,N,D], got shape {tuple(x.shape)}")
+
+    _, s, _, d = x.shape
+    if d % 2 != 0:
+        raise ValueError(f"Per-head dim must be even for RoPE, got {d}")
+
+    seq_len = f * h * w
+    if seq_len != s:
+        raise AssertionError(f"seq_len mismatch: expected {seq_len}, got {s}")
+
+    if shift_f < 0 or shift_h < 0 or shift_w < 0:
+        raise ValueError(
+            f"Negative RoPE shift not supported: {shift_f=}, {shift_h=}, {shift_w=}"
         )
-        freqs_i = torch.cat(
+
+    if chunk_size is None or chunk_size <= 0:
+        chunk_size = s
+
+    # Pre-slice ranges, then move (small) slices to the correct device once per segment.
+    freqs_t = freqs_t[shift_f : shift_f + f]
+    freqs_h = freqs_h[shift_h : shift_h + h]
+    freqs_w = freqs_w[shift_w : shift_w + w]
+    if freqs_t.device != x.device:
+        freqs_t = freqs_t.to(x.device)
+    if freqs_h.device != x.device:
+        freqs_h = freqs_h.to(x.device)
+    if freqs_w.device != x.device:
+        freqs_w = freqs_w.to(x.device)
+
+    hw = h * w
+    w_eff = w
+
+    for start in range(0, s, chunk_size):
+        end = min(start + chunk_size, s)
+        pos = torch.arange(start, end, device=x.device, dtype=torch.long)
+
+        t_idx = pos // hw
+        rem = pos - t_idx * hw
+        h_idx = rem // w_eff
+        w_idx = rem - h_idx * w_eff
+
+        # Build real/imag multipliers directly to avoid allocating complex intermediates.
+        mt = freqs_t.index_select(0, t_idx)
+        mh = freqs_h.index_select(0, h_idx)
+        mw = freqs_w.index_select(0, w_idx)
+        mult_real = torch.cat(
             [
-                freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-                freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
+                mt.real.to(dtype=torch.float32),
+                mh.real.to(dtype=torch.float32),
+                mw.real.to(dtype=torch.float32),
             ],
-            dim=-1,
-        ).reshape(seq_len, 1, -1)
+            dim=1,
+        ).view(1, end - start, 1, -1)
+        mult_imag = torch.cat(
+            [
+                mt.imag.to(dtype=torch.float32),
+                mh.imag.to(dtype=torch.float32),
+                mw.imag.to(dtype=torch.float32),
+            ],
+            dim=1,
+        ).view(1, end - start, 1, -1)
 
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
+        x_chunk = x[:, start:end]  # [B, chunk, N, D]
+        x_pairs = x_chunk.unflatten(-1, (-1, 2))
+        x_real = x_pairs[..., 0]
+        x_imag = x_pairs[..., 1]
 
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).float()
+        # Do RoPE math in fp32 for fp16/bf16 inputs (chunked to cap peak memory).
+        if x.dtype in (torch.float16, torch.bfloat16):
+            x_real_f = x_real.float()
+            x_imag_f = x_imag.float()
+            _rope_complex_multiply_inplace(x_real_f, x_imag_f, mult_real, mult_imag)
+            x_real.copy_(x_real_f.to(dtype=x.dtype))
+            x_imag.copy_(x_imag_f.to(dtype=x.dtype))
+        else:
+            _rope_complex_multiply_inplace(
+                x_real,
+                x_imag,
+                mult_real.to(dtype=x.dtype),
+                mult_imag.to(dtype=x.dtype),
+            )
+
+    return x
+
+
+@amp.autocast(enabled=False)
+def _rope_apply_3d_chunked(
+    x: torch.Tensor,
+    freqs: torch.Tensor,
+    *,
+    f: int,
+    h: int,
+    w: int,
+    shift_f: int = 0,
+    shift_h: int = 0,
+    shift_w: int = 0,
+    chunk_size: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Apply 3D RoPE (t/h/w) to x in chunks to reduce peak memory (out-of-place).
+
+    x: [B, S, N, D] where D is per-head dim (must be even).
+    freqs: [max_seq, D/2] complex (can live on CPU).
+    """
+    if x.ndim != 4:
+        raise ValueError(f"Expected x to be 4D [B,S,N,D], got shape {tuple(x.shape)}")
+
+    b, s, n, d = x.shape
+    if d % 2 != 0:
+        raise ValueError(f"Per-head dim must be even for RoPE, got {d}")
+
+    freqs_t, freqs_h, freqs_w = _rope_split_freqs(freqs, d)
+
+    seq_len = f * h * w
+    if seq_len != s:
+        raise AssertionError(f"seq_len mismatch: expected {seq_len}, got {s}")
+
+    if chunk_size is None or chunk_size <= 0:
+        chunk_size = s
+
+    out = torch.empty((b, s, n, d), device=x.device, dtype=torch.float32)
+
+    freqs_t = freqs_t[shift_f : shift_f + f]
+    freqs_h = freqs_h[shift_h : shift_h + h]
+    freqs_w = freqs_w[shift_w : shift_w + w]
+    if freqs_t.device != x.device:
+        freqs_t = freqs_t.to(x.device)
+    if freqs_h.device != x.device:
+        freqs_h = freqs_h.to(x.device)
+    if freqs_w.device != x.device:
+        freqs_w = freqs_w.to(x.device)
+
+    hw = h * w
+    w_eff = w
+
+    for start in range(0, s, chunk_size):
+        end = min(start + chunk_size, s)
+        pos = torch.arange(start, end, device=x.device, dtype=torch.long)
+
+        t_idx = pos // hw
+        rem = pos - t_idx * hw
+        h_idx = rem // w_eff
+        w_idx = rem - h_idx * w_eff
+
+        mult = torch.cat(
+            [
+                freqs_t.index_select(0, t_idx),
+                freqs_h.index_select(0, h_idx),
+                freqs_w.index_select(0, w_idx),
+            ],
+            dim=1,
+        )  # [chunk, D/2] complex
+
+        # Complex multiply in float64 for numerical stability.
+        x_chunk = x[:, start:end].to(torch.float64).reshape(b, end - start, n, -1, 2)
+        x_chunk = torch.view_as_complex(x_chunk)  # [B, chunk, N, D/2]
+        y_chunk = x_chunk * mult.view(1, end - start, 1, -1)
+        y_chunk = torch.view_as_real(y_chunk).flatten(-2)  # [B, chunk, N, D]
+        out[:, start:end] = y_chunk.float()
+
+    return out
+
+
+def rope_apply_video_inplace(
+    x: torch.Tensor,
+    grid_sizes: torch.Tensor,
+    freqs: torch.Tensor,
+    *,
+    chunk_size: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    In-place RoPE for HuMo's video token stream.
+
+    x: [B, S, N, D] (padded to max seq); RoPE is applied to the first (F*H*W) tokens per sample.
+    """
+    if x.ndim != 4:
+        raise ValueError(f"Expected x to be 4D [B,S,N,D], got shape {tuple(x.shape)}")
+
+    _, _, _, d = x.shape
+    freqs_t, freqs_h, freqs_w = _rope_split_freqs(freqs, d)
+    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
+        seq_len = int(f) * int(h) * int(w)
+        if seq_len <= 0:
+            continue
+        _rope_apply_3d_inplace_chunked(
+            x[i : i + 1, :seq_len],
+            freqs_t,
+            freqs_h,
+            freqs_w,
+            f=int(f),
+            h=int(h),
+            w=int(w),
+            shift_f=0,
+            shift_h=0,
+            shift_w=0,
+            chunk_size=chunk_size,
+        )
+    return x
+
+
+def rope_apply_video(
+    x: torch.Tensor,
+    grid_sizes: torch.Tensor,
+    freqs: torch.Tensor,
+    *,
+    chunk_size: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Out-of-place RoPE for HuMo (safer for autograd than the in-place path).
+    """
+    if x.ndim != 4:
+        raise ValueError(f"Expected x to be 4D [B,S,N,D], got shape {tuple(x.shape)}")
+
+    b, s, n, d = x.shape
+    out = torch.empty((b, s, n, d), device=x.device, dtype=torch.float32)
+    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
+        seq_len = int(f) * int(h) * int(w)
+        if seq_len > 0:
+            out[i : i + 1, :seq_len] = _rope_apply_3d_chunked(
+                x[i : i + 1, :seq_len],
+                freqs,
+                f=int(f),
+                h=int(h),
+                w=int(w),
+                shift_f=0,
+                shift_h=0,
+                shift_w=0,
+                chunk_size=chunk_size,
+            )
+        if seq_len < s:
+            out[i, seq_len:] = x[i, seq_len:].to(dtype=torch.float32)
+    return out
 
 
 class WanRMSNorm(nn.Module):
@@ -319,10 +568,18 @@ class WanSelfAttention(nn.Module):
         self.k = nn.Linear(dim, dim)
         self.v = nn.Linear(dim, dim)
         self.o = nn.Linear(dim, dim)
-        self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_q = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
+        self.norm_k = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
 
-    def forward(self, x, seq_lens, grid_sizes, freqs):
+    def forward(self, x, seq_lens, rope_apply_func, **kwargs):
         r"""
         Args:
             x(Tensor): Shape [B, L, num_heads, C / num_heads], torch.Size([1, 9360, 5120])
@@ -330,24 +587,45 @@ class WanSelfAttention(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W), tensor([[ 6, 30, 52]])
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        # Enable list-based early ref dropping (caller may pass `[tensor]`).
+        x = unwrap_single_item_list(x)
+        seq_lens = unwrap_single_item_list(seq_lens)
+
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
 
-        # query, key, value function
-        def qkv_fn(x):
-            q = self.norm_q(self.q(x)).view(b, s, n, d)
-            k = self.norm_k(self.k(x)).view(b, s, n, d)
-            v = self.v(x).view(b, s, n, d)
-            return q, k, v
+        # Projections + in-place Q/K norm (saves one buffer vs `norm(q(x))` style).
+        q = self.q(x)
+        k = self.k(x)
+        v = self.v(x)
+        # Clear input tensor early to reduce peak memory (q+k+v+x -> q+k+v)
+        del x
 
-        q, k, v = qkv_fn(x)
+        self.norm_q(q)
+        self.norm_k(k)
+        q = q.view(b, s, n, d)
+        k = k.view(b, s, n, d)
+        v = v.view(b, s, n, d)
+
+        # Apply RoPE in-place for inference. For training/grad, allow out-of-place
+        # fallback to preserve autograd correctness.
+        if torch.is_grad_enabled() or q.requires_grad:
+            q = rope_apply_func(q)
+        else:
+            rope_apply_func(q)
+        if torch.is_grad_enabled() or k.requires_grad:
+            k = rope_apply_func(k)
+        else:
+            rope_apply_func(k)
 
         x = attention_register.call(
-            q=rope_apply(q, grid_sizes, freqs).transpose(1, 2),
-            k=rope_apply(k, grid_sizes, freqs).transpose(1, 2),
+            q=q.transpose(1, 2),
+            k=k.transpose(1, 2),
             v=v.transpose(1, 2),
             k_lens=seq_lens,
             window_size=self.window_size,
+            key="flash",
         ).transpose(1, 2)
+        del q, k, v
         # output
         x = x.flatten(2)
         x = self.o(x)
@@ -373,10 +651,18 @@ class WanSelfAttentionSepKVDim(nn.Module):
         self.k = nn.Linear(kv_dim, dim)
         self.v = nn.Linear(kv_dim, dim)
         self.o = nn.Linear(dim, dim)
-        self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_q = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
+        self.norm_k = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
 
-    def forward(self, x, seq_lens, grid_sizes, freqs):
+    def forward(self, x, seq_lens, rope_apply_func, **kwargs):
         r"""
         Args:
             x(Tensor): Shape [B, L, num_heads, C / num_heads], torch.Size([1, 9360, 5120])
@@ -384,24 +670,39 @@ class WanSelfAttentionSepKVDim(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W), tensor([[ 6, 30, 52]])
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        x = unwrap_single_item_list(x)
+        seq_lens = unwrap_single_item_list(seq_lens)
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
 
-        # query, key, value function
-        def qkv_fn(x):
-            q = self.norm_q(self.q(x)).view(b, s, n, d)
-            k = self.norm_k(self.k(x)).view(b, s, n, d)
-            v = self.v(x).view(b, s, n, d)
-            return q, k, v
+        q = self.q(x)
+        k = self.k(x)
+        v = self.v(x)
+        del x
 
-        q, k, v = qkv_fn(x)
+        self.norm_q(q)
+        self.norm_k(k)
+        q = q.view(b, s, n, d)
+        k = k.view(b, s, n, d)
+        v = v.view(b, s, n, d)
+
+        if torch.is_grad_enabled() or q.requires_grad:
+            q = rope_apply_func(q)
+        else:
+            rope_apply_func(q)
+        if torch.is_grad_enabled() or k.requires_grad:
+            k = rope_apply_func(k)
+        else:
+            rope_apply_func(k)
 
         x = attention_register.call(
-            q=rope_apply(q, grid_sizes, freqs).transpose(1, 2),
-            k=rope_apply(k, grid_sizes, freqs).transpose(1, 2),
+            q=q.transpose(1, 2),
+            k=k.transpose(1, 2),
             v=v.transpose(1, 2),
             k_lens=seq_lens,
             window_size=self.window_size,
+            key="flash",
         ).transpose(1, 2)
+        del q, k, v
 
         # output
         x = x.flatten(2)
@@ -418,17 +719,33 @@ class WanT2VCrossAttention(WanSelfAttention):
             context(Tensor): Shape [B, L2, C]
             context_lens(Tensor): Shape [B]
         """
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
+        context_lens = unwrap_single_item_list(context_lens)
+
         b, n, d = x.size(0), self.num_heads, self.head_dim
 
-        # compute query, key, value
-        q = self.norm_q(self.q(x)).view(b, -1, n, d).transpose(1, 2)
-        k = self.norm_k(self.k(context)).view(b, -1, n, d).transpose(1, 2)
-        v = self.v(context).view(b, -1, n, d).transpose(1, 2)
+        # compute query, key, value (with in-place Q/K norm)
+        q = self.q(x)
+        del x
+        k = self.k(context)
+        v = self.v(context)
+        self.norm_q(q)
+        self.norm_k(k)
+        q = q.view(b, -1, n, d)
+        k = k.view(b, -1, n, d)
+        v = v.view(b, -1, n, d)
 
         # compute attention
         x = attention_register.call(
-            q, k, v, k_lens=context_lens, window_size=self.window_size
+            q.transpose(1, 2),
+            k.transpose(1, 2),
+            v.transpose(1, 2),
+            k_lens=context_lens,
+            window_size=self.window_size,
+            key="flash",
         ).transpose(1, 2)
+        del q, k, v
 
         # output
         x = x.flatten(2)
@@ -448,6 +765,8 @@ class WanT2VCrossAttentionGather(WanSelfAttentionSepKVDim):
             freqs(Tensor): RoPE frequencies
             audio_seq_len(Tensor): Actual audio sequence length (frames * 16)
         """
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
         b, n, d = x.size(0), self.num_heads, self.head_dim
 
         q = self.norm_q(self.q(x)).view(b, -1, n, d)
@@ -501,10 +820,13 @@ class AudioCrossAttentionWrapper(nn.Module):
         self.norm1_audio = WanLayerNorm(dim, eps, elementwise_affine=True)
 
     def forward(self, x, audio, seq_lens, grid_sizes, freqs, audio_seq_len):
-        x = x + self.audio_cross_attn(
+        delta = self.audio_cross_attn(
             self.norm1_audio(x), audio, seq_lens, grid_sizes, freqs, audio_seq_len
         )
-        return x
+        if (not torch.is_grad_enabled()) and (not x.requires_grad) and (not delta.requires_grad):
+            x.add_(delta)
+            return x
+        return x + delta
 
 
 class WanI2VCrossAttention(WanSelfAttention):
@@ -519,20 +841,31 @@ class WanI2VCrossAttention(WanSelfAttention):
             context(Tensor): Shape [B, L2, C]
             context_lens(Tensor): Shape [B]
         """
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
+        context_lens = unwrap_single_item_list(context_lens)
+
         b, n, d = x.size(0), self.num_heads, self.head_dim
 
-        # compute query, key, value
-        q = self.norm_q(self.q(x)).view(b, -1, n, d)
-        k = self.norm_k(self.k(context)).view(b, -1, n, d)
-        v = self.v(context).view(b, -1, n, d)
+        q = self.q(x)
+        del x
+        k = self.k(context)
+        v = self.v(context)
+        self.norm_q(q)
+        self.norm_k(k)
+        q = q.view(b, -1, n, d)
+        k = k.view(b, -1, n, d)
+        v = v.view(b, -1, n, d)
         x = attention_register.call(
             q=q.transpose(1, 2),
             k=k.transpose(1, 2),
             v=v.transpose(1, 2),
             k_lens=context_lens,
             window_size=self.window_size,
+            key="flash",
         )
         x = x.transpose(1, 2)
+        del q, k, v
 
         # output
         x = x.flatten(2)
@@ -627,6 +960,7 @@ class WanAttentionBlock(nn.Module):
         audio=None,  # None
         audio_seq_len=None,
         ref_num_list=None,
+        **kwargs,  # contains rope_apply_func
     ):
         r"""
         Args:
@@ -638,26 +972,49 @@ class WanAttentionBlock(nn.Module):
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
             ref_num_list: 配合seq_lens可以查到reference image在倒数第几个
         """
+        x = unwrap_single_item_list(x)
+        e = unwrap_single_item_list(e)
+        seq_lens = unwrap_single_item_list(seq_lens)
+        context = unwrap_single_item_list(context)
+        context_lens = unwrap_single_item_list(context_lens)
+
         assert e.dtype == torch.float32
         with amp.autocast(dtype=torch.float32):
             e = (self.modulation + e).chunk(6, dim=1)
-        assert e[0].dtype == torch.float32
 
         # self-attention with chunked modulated norm
         norm_x = _chunked_modulated_norm(
             self.norm1, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size
         )
-        y = self.self_attn(norm_x.float(), seq_lens, grid_sizes, freqs)
-        with amp.autocast(dtype=torch.float32):
-            x = x + y * e[2]
+        # Pass as single-item lists so `unwrap_single_item_list` clears references early.
+        norm_x_list = [norm_x]
+        seq_lens_list = [seq_lens]
+        del norm_x
+        y = self.self_attn(norm_x_list, seq_lens_list, **kwargs)
+        del norm_x_list, seq_lens_list
+
+        # Inference-only in-place residual/gating to avoid allocating `x + y * gate`.
+        if (not torch.is_grad_enabled()) and (not x.requires_grad) and (not y.requires_grad):
+            apply_gate_inplace(y, e[2].to(dtype=y.dtype))
+            x.add_(y)
+        else:
+            with amp.autocast(dtype=torch.float32):
+                x = x + y * e[2]
 
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
-            x = x + self.cross_attn(
-                _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
-                context,
-                context_lens,
-            )
+            norm3_x = _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size)
+            norm3_x_list = [norm3_x]
+            context_list = [context]
+            context_lens_list = [context_lens]
+            del norm3_x, context, context_lens
+            ca = self.cross_attn(norm3_x_list, context_list, context_lens_list)
+
+            if (not torch.is_grad_enabled()) and (not x.requires_grad) and (not ca.requires_grad):
+                x.add_(ca)
+            else:
+                x = x + ca
+            del ca
 
             if self.use_audio:
                 x = self.audio_cross_attn_wrapper(
@@ -669,12 +1026,18 @@ class WanAttentionBlock(nn.Module):
             )
             if self._ff_chunk_size is not None:
                 y = _chunked_feed_forward(
-                    self.ffn, ffn_x.float(), self._ff_chunk_dim, self._ff_chunk_size
+                    self.ffn, ffn_x, self._ff_chunk_dim, self._ff_chunk_size
                 )
             else:
-                y = self.ffn(ffn_x.float())
-            with amp.autocast(dtype=torch.float32):
-                x = x + y * e[5]
+                y = self.ffn(ffn_x)
+            del ffn_x
+
+            if (not torch.is_grad_enabled()) and (not x.requires_grad) and (not y.requires_grad):
+                apply_gate_inplace(y, e[5].to(dtype=y.dtype))
+                x.add_(y)
+            else:
+                with amp.autocast(dtype=torch.float32):
+                    x = x + y * e[5]
             return x
 
         x = cross_attn_ffn(x, context, context_lens, e)
@@ -764,24 +1127,28 @@ class HumoWanTransformerModel(
             "modulated_norm_chunk_size": None,
             "norm_chunk_size": None,
             "out_modulated_norm_chunk_size": None,
+            "rope_chunk_size": None,
         },
         "light": {
             "ffn_chunk_size": 2048,
             "modulated_norm_chunk_size": 16384,
             "norm_chunk_size": 8192,
             "out_modulated_norm_chunk_size": 16384,
+            "rope_chunk_size": 8192,
         },
         "balanced": {
             "ffn_chunk_size": 512,
             "modulated_norm_chunk_size": 8192,
             "norm_chunk_size": 4096,
             "out_modulated_norm_chunk_size": 8192,
+            "rope_chunk_size": 4096,
         },
         "aggressive": {
             "ffn_chunk_size": 256,
             "modulated_norm_chunk_size": 4096,
             "norm_chunk_size": 2048,
             "out_modulated_norm_chunk_size": 4096,
+            "rope_chunk_size": 1024,
         },
     }
 
@@ -950,6 +1317,7 @@ class HumoWanTransformerModel(
         self._out_modulated_norm_chunk_size = p.get(
             "out_modulated_norm_chunk_size", None
         )
+        self._rope_chunk_size = p.get("rope_chunk_size", None)
 
         self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
         for block in self.blocks:
@@ -971,6 +1339,7 @@ class HumoWanTransformerModel(
         seq_len,
         audio=None,
         y=None,
+        rope_on_cpu: Optional[bool] = None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -999,8 +1368,21 @@ class HumoWanTransformerModel(
 
         # params
         device = self.patch_embedding.weight.device
-        if self.freqs.device != device:
-            self.freqs = self.freqs.to(device)
+
+        # If True, keep RoPE frequency tables on CPU and only move the small slices
+        # needed per chunk to GPU. This reduces peak VRAM usage at the cost of some
+        # extra CPU↔GPU transfers.
+        if rope_on_cpu is None:
+            rope_on_cpu = False
+
+        freqs = self.freqs
+        if not rope_on_cpu:
+            if not hasattr(self, "_freqs_device_cache"):
+                self._freqs_device_cache = {}
+            cache_key = str(device)
+            if cache_key not in self._freqs_device_cache:
+                self._freqs_device_cache[cache_key] = self.freqs.to(device)
+            freqs = self._freqs_device_cache[cache_key]
 
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
@@ -1064,15 +1446,30 @@ class HumoWanTransformerModel(
             audio_seq_len = None
 
         # arguments
+        rope_chunk_size = getattr(self, "_rope_chunk_size", None)
+
+        def apply_rope_humo(x_rope: torch.Tensor) -> torch.Tensor:
+            """
+            x_rope: [B, S, N, D]
+            """
+            if torch.is_grad_enabled() or x_rope.requires_grad:
+                return rope_apply_video(
+                    x_rope, grid_sizes=grid_sizes, freqs=freqs, chunk_size=rope_chunk_size
+                )
+            return rope_apply_video_inplace(
+                x_rope, grid_sizes=grid_sizes, freqs=freqs, chunk_size=rope_chunk_size
+            )
+
         kwargs = dict(
             e=e0,
             seq_lens=seq_lens,
             grid_sizes=grid_sizes,
-            freqs=self.freqs,
+            freqs=freqs,
             context=context,
             context_lens=context_lens,
             audio=audio,
             audio_seq_len=audio_seq_len,
+            rope_apply_func=apply_rope_humo,
         )
 
         for block in self.blocks:

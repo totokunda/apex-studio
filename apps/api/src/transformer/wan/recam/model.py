@@ -7,6 +7,7 @@ from einops import rearrange
 from diffusers.models.modeling_utils import ModelMixin
 from src.attention.functions import attention_register
 from diffusers.configuration_utils import register_to_config, ConfigMixin
+from src.transformer.efficiency.mod import InplaceRMSNorm
 
 
 def flash_attention(
@@ -99,20 +100,6 @@ def rope_apply(x, freqs, num_heads):
     return x_out.to(x.dtype)
 
 
-class RMSNorm(nn.Module):
-    def __init__(self, dim, eps=1e-5):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        dtype = x.dtype
-        return self.norm(x.float()).to(dtype) * self.weight
-
-
 class AttentionModule(nn.Module):
     def __init__(self, num_heads):
         super().__init__()
@@ -134,8 +121,8 @@ class SelfAttention(nn.Module):
         self.k = nn.Linear(dim, dim)
         self.v = nn.Linear(dim, dim)
         self.o = nn.Linear(dim, dim)
-        self.norm_q = RMSNorm(dim, eps=eps)
-        self.norm_k = RMSNorm(dim, eps=eps)
+        self.norm_q = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+        self.norm_k = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
 
         self.attn = AttentionModule(self.num_heads)
 
@@ -162,13 +149,13 @@ class CrossAttention(nn.Module):
         self.k = nn.Linear(dim, dim)
         self.v = nn.Linear(dim, dim)
         self.o = nn.Linear(dim, dim)
-        self.norm_q = RMSNorm(dim, eps=eps)
-        self.norm_k = RMSNorm(dim, eps=eps)
+        self.norm_q = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+        self.norm_k = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
         self.has_image_input = has_image_input
         if has_image_input:
             self.k_img = nn.Linear(dim, dim)
             self.v_img = nn.Linear(dim, dim)
-            self.norm_k_img = RMSNorm(dim, eps=eps)
+            self.norm_k_img = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
 
         self.attn = AttentionModule(self.num_heads)
 
