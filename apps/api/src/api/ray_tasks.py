@@ -2335,46 +2335,46 @@ def _execute_preprocessor(
 
         # Post-pass: generate a seek/editor-friendly MP4 for preprocessor outputs too.
         # Best-effort only; leaves the original file intact on failure.
-        # try:
-        #     if media_type == "video" and isinstance(result_path, str):
-        #         fps_hint = None
-        #         try:
-        #             fps_hint = int(
-        #                 round(float((cache._video_info or {}).get("fps") or 0))
-        #             )
-        #         except Exception:
-        #             fps_hint = None
-        #         _optimize_mp4_for_editor_in_place(result_path, fps=fps_hint)
-        # except Exception:
-        #     pass
+        try:
+            if media_type == "video" and isinstance(result_path, str):
+                fps_hint = None
+                try:
+                    fps_hint = int(
+                        round(float((cache._video_info or {}).get("fps") or 0))
+                    )
+                except Exception:
+                    fps_hint = None
+                _optimize_mp4_for_editor_in_place(result_path, fps=fps_hint)
+        except Exception:
+            pass
 
         send_progress(1.0, "Result saved")
 
         # Post-pass: make preprocessor MP4s more iframe/editor-friendly (best-effort).
         # (Only applies to MP4; alpha-channel preprocessors typically output WebM.)
-        # try:
-        #     if isinstance(result_path, str) and result_path.lower().endswith(".mp4"):
-        #         try:
-        #             preproc_gop = int(
-        #                 os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "1") or "1"
-        #             )
-        #         except Exception:
-        #             preproc_gop = 4
-        #
-        #         fps_hint: Optional[int] = None
-        #         try:
-        #             if cache.type == "video":
-        #                 fps_hint = int(
-        #                     max(1, round(float(cache._video_info.get("fps", 0) or 0)))
-        #                 )
-        #         except Exception:
-        #             fps_hint = None
-        #
-        #         _optimize_mp4_for_editor_in_place(
-        #             result_path, fps=fps_hint, gop_frames=preproc_gop
-        #         )
-        # except Exception:
-        #     pass
+        try:
+            if isinstance(result_path, str) and result_path.lower().endswith(".mp4"):
+                try:
+                    preproc_gop = int(
+                        os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "1") or "1"
+                    )
+                except Exception:
+                    preproc_gop = 4
+
+                fps_hint: Optional[int] = None
+                try:
+                    if cache.type == "video":
+                        fps_hint = int(
+                            max(1, round(float(cache._video_info.get("fps", 0) or 0)))
+                        )
+                except Exception:
+                    fps_hint = None
+
+                _optimize_mp4_for_editor_in_place(
+                    result_path, fps=fps_hint, gop_frames=preproc_gop
+                )
+        except Exception:
+            pass
 
         # Construct preview URL for frontend access
         preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
@@ -2932,7 +2932,7 @@ def _run_engine_from_manifest_impl(
                         output_obj,
                         result_path,
                         fps=int(fps),
-                        quality=8.0 if final else 3,
+                        quality=8.0 if final else 3.0,
                     )
                     media_type = "video"
 
