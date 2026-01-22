@@ -565,6 +565,7 @@ class WanFunControlEngine(WanShared):
         progress_callback: Callable = None,
         sigmas: Optional[List[float]] = None,
         offload: bool = True,
+        chunking_profile: str = "none",
         **kwargs,
     ):
         safe_emit_progress(progress_callback, 0.0, "Starting FunControl pipeline")
@@ -1019,6 +1020,7 @@ class WanFunControlEngine(WanShared):
             scheduler=self.scheduler,
             guidance_scale=guidance_scale,
             extra_step_kwargs=extra_step_kwargs,
+            chunking_profile=chunking_profile,
         )
 
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")

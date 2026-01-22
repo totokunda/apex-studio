@@ -280,6 +280,7 @@ spec:
         flow: column
         rows:
         - - chunking_profile
+        - - rope_on_cpu
     inputs:
     - id: reference_images
       label: Reference Images
@@ -421,3 +422,10 @@ spec:
         value: balanced
       - name: Aggressive
         value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false

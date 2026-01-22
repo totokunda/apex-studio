@@ -373,6 +373,7 @@ spec:
       num_inference_steps: 4
       guidance_scale: 5.0
       boundary_ratio: 0.9
+      chunking_profile: light
       return_latents: false
       text_encoder_kwargs: {}
       use_attention_mask: true
@@ -438,6 +439,14 @@ spec:
         - - low_noise_guidance_scale
         - - seed
         - - boundary_ratio
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
     inputs:
     - id: ref_image
       label: Reference Image
@@ -615,3 +624,18 @@ spec:
       min: 0.0
       max: 1.0
       step: 0.01
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
