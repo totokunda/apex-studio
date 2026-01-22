@@ -85,7 +85,7 @@ class Flux2Shared(BaseEngine):
             raise ValueError(f"Expected image dims 4, got {image.ndim}.")
 
         image_latents = self.vae_encode(
-            image,
+            image.contiguous(),
             sample_generator=generator,
             sample_mode="mode",
             offload=offload,

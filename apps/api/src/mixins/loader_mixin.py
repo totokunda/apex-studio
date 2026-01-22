@@ -21,13 +21,13 @@ from typing import List
 import tempfile
 from glob import glob
 from src.mixins.download_mixin import DownloadMixin
-
 # Import pretrained config from transformers
 from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
 from src.types import InputImage, InputVideo, InputAudio
 import types
 import numpy as np
 import mmap
+import pillow_avif
 
 class _LazyModule(types.ModuleType):
     """
