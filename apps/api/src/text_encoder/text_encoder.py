@@ -317,7 +317,10 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
                 setattr(self, "_nan_hook_registered", True)
             except Exception:
                 pass
-
+            
+        if getattr(self.model, "lm_head", None) is not None:
+            self.model.lm_head.to(device=encode_device)
+        
         result = self.model(
             **inputs,
             output_hidden_states=(

@@ -45,12 +45,60 @@ from .attention import (
     MultiTalkWanAttnProcessor2_0,
 )
 from src.attention import attention_register
+from src.transformer.efficiency.mod import InplaceRMSNorm
 from einops import repeat
 from functools import lru_cache
 from einops import rearrange
 from src.transformer.base import TRANSFORMERS_REGISTRY
+from src.transformer.efficiency.ops import (
+    apply_scale_shift_inplace,
+    chunked_feed_forward_inplace,
+)
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+
+def _swap_diffusers_attention_norms_to_inplace_rmsnorm(
+    attn: nn.Module, *, eps: float
+) -> None:
+    """
+    Replace Diffusers Attention's Q/K (and added-K) RMSNorm modules with `InplaceRMSNorm`.
+
+    Q/K (and added-K) are fresh linear projections inside the attention processor, so in-place
+    mutation is safe and saves memory by avoiding an extra output tensor allocation.
+    """
+
+    def _replace(norm: Optional[nn.Module], *, dim: int) -> Optional[nn.Module]:
+        if norm is None or isinstance(norm, nn.Identity):
+            return norm
+        if isinstance(norm, InplaceRMSNorm):
+            return norm
+        elementwise_affine = getattr(norm, "elementwise_affine", True)
+        new = InplaceRMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        # Preserve weights when possible.
+        if elementwise_affine and getattr(norm, "weight", None) is not None:
+            try:
+                with torch.no_grad():
+                    new.weight.copy_(norm.weight.detach().to(new.weight))
+            except Exception:
+                pass
+        return new
+
+    # Q/K norms (inner projection dims are the Linear out_features).
+    to_q = getattr(attn, "to_q", None)
+    to_k = getattr(attn, "to_k", None)
+    if to_q is not None and hasattr(to_q, "out_features"):
+        attn.norm_q = _replace(getattr(attn, "norm_q", None), dim=int(to_q.out_features))
+    if to_k is not None and hasattr(to_k, "out_features"):
+        attn.norm_k = _replace(getattr(attn, "norm_k", None), dim=int(to_k.out_features))
+
+    # Added-K norm for I2V / image conditioning path (fresh projection as well).
+    add_k_proj = getattr(attn, "add_k_proj", None)
+    if add_k_proj is not None and hasattr(add_k_proj, "out_features"):
+        if hasattr(attn, "norm_added_k"):
+            attn.norm_added_k = _replace(
+                getattr(attn, "norm_added_k", None), dim=int(add_k_proj.out_features)
+            )
 
 
 def _chunked_modulated_norm(
@@ -72,13 +120,15 @@ def _chunked_modulated_norm(
 
     # If disabled, run directly and return in the original dtype.
     if chunk_size is None:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     # If sequence is small enough, just do it directly
     if S <= chunk_size:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     # Pre-allocate output to avoid holding all chunks in memory
     out = torch.empty_like(hidden_states)
@@ -97,10 +147,9 @@ def _chunked_modulated_norm(
             scale_chunk = scale
             shift_chunk = shift
 
-        # Norm + modulate directly into pre-allocated output
-        normed = norm_layer(hs_chunk)
-        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
-        del normed  # Free fp32 intermediate immediately
+        # Norm into output, then apply modulation in-place to avoid `(1 + scale)` alloc.
+        out[:, i:end, :].copy_(norm_layer(hs_chunk))
+        apply_scale_shift_inplace(out[:, i:end, :], scale_chunk, shift_chunk)
 
     return out
 
@@ -111,21 +160,9 @@ def _chunked_feed_forward(
     """
     Chunked feed-forward that reduces peak memory when FFN intermediate activations are very large.
     """
-    if chunk_size is None:
-        return ff(hidden_states)
-    if chunk_size <= 0:
-        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-
-    dim_len = hidden_states.shape[chunk_dim]
-    if dim_len <= chunk_size:
-        return ff(hidden_states)
-
-    outputs = []
-    for start in range(0, dim_len, chunk_size):
-        end = min(start + chunk_size, dim_len)
-        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
-        outputs.append(ff(hs_chunk))
-    return torch.cat(outputs, dim=chunk_dim)
+    return chunked_feed_forward_inplace(
+        ff, hidden_states, chunk_dim=chunk_dim, chunk_size=chunk_size
+    )
 
 
 def _chunked_norm(
@@ -708,6 +745,8 @@ class WanMultiTalkTransformerBlock(nn.Module):
             out_bias=True,
             processor=MultiTalkWanAttnProcessor2_0(),
         )
+        # Q/K norms are safe to do in-place (fresh projections); saves a full tensor allocation.
+        _swap_diffusers_attention_norms_to_inplace_rmsnorm(self.attn1, eps=eps)
 
         # 2. Cross-attention for text/image
         self.attn2 = Attention(
@@ -724,6 +763,8 @@ class WanMultiTalkTransformerBlock(nn.Module):
             added_proj_bias=True,
             processor=WanAttnProcessor2_0(),
         )
+        # Same in-place Q/K norm swap for text/image cross-attention (+ added-K for I2V).
+        _swap_diffusers_attention_norms_to_inplace_rmsnorm(self.attn2, eps=eps)
         self.norm2 = (
             FP32LayerNorm(dim, eps, elementwise_affine=True)
             if cross_attn_norm
@@ -738,7 +779,7 @@ class WanMultiTalkTransformerBlock(nn.Module):
             qk_norm=False,
             qkv_bias=True,
             eps=eps,
-            norm_layer=WanRMSNorm,
+            norm_layer=InplaceRMSNorm,
             class_range=class_range,
             class_interval=class_interval,
         )
@@ -793,11 +834,20 @@ class WanMultiTalkTransformerBlock(nn.Module):
         human_num: Optional[int] = None,
         grid_sizes: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        inference_mode = not torch.is_grad_enabled()
 
         hs_dtype = hidden_states.dtype
-        shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-            (self.scale_shift_table + temb.float()).to(hs_dtype).chunk(6, dim=1)
-        )
+        # `temb` is shaped [B, 6, D]; avoid materializing a full [B, 6, D] (and fp32 copy)
+        # via `(table + temb.float()).to(...).chunk(...)`. Instead compute slices when needed.
+        table = self.scale_shift_table
+        if table.device != temb.device:
+            # Budget/offloading may keep tiny params on CPU.
+            table = table.to(device=temb.device)
+
+        # MSA modulation params (compute first; drop before FFN to reduce peak).
+        shift_msa = (table[:, 0:1, :] + temb[:, 0:1, :]).to(dtype=hs_dtype)
+        scale_msa = (table[:, 1:2, :] + temb[:, 1:2, :]).to(dtype=hs_dtype)
+        gate_msa = (table[:, 2:3, :] + temb[:, 2:3, :]).to(dtype=hs_dtype)
 
         # 1. Self-attention
         norm_hidden_states = _chunked_modulated_norm(
@@ -808,25 +858,66 @@ class WanMultiTalkTransformerBlock(nn.Module):
             chunk_size=self._mod_norm_chunk_size,
         )
 
-        attn_output, x_ref_attn_map = self.attn1(
-            hidden_states=norm_hidden_states,
-            rotary_emb=rotary_emb,
-            grid_sizes=grid_sizes,
-            ref_target_masks=ref_target_masks,
-        )
+        if inference_mode and isinstance(self.attn1.processor, MultiTalkWanAttnProcessor2_0):
+            hs_list = [norm_hidden_states]
+            norm_hidden_states = hs_list
+            attn_output, x_ref_attn_map = self.attn1.processor(
+                self.attn1,
+                norm_hidden_states,
+                None,
+                None,
+                rotary_emb,
+                grid_sizes,
+                ref_target_masks,
+            )
+        else:
+            attn_output, x_ref_attn_map = self.attn1(
+                hidden_states=norm_hidden_states,
+                rotary_emb=rotary_emb,
+                grid_sizes=grid_sizes,
+                ref_target_masks=ref_target_masks,
+            )
 
-        hidden_states = hidden_states + attn_output * gate_msa
+        # Gated residual. In inference, use addcmul_ to avoid allocating `attn_output * gate`.
+        if (
+            inference_mode
+            and (not hidden_states.requires_grad)
+            and attn_output.dtype == hidden_states.dtype
+            and gate_msa.dtype == hidden_states.dtype
+        ):
+            hidden_states.addcmul_(attn_output, gate_msa)
+        else:
+            hidden_states = hidden_states + attn_output * gate_msa
+        # Drop large intermediates early.
+        del norm_hidden_states, attn_output, shift_msa, scale_msa, gate_msa
 
         # 2. Cross-attention for text/image
         norm_hidden_states = _chunked_norm(
             self.norm2, hidden_states, chunk_size=self._norm_chunk_size
         )
-        attn_output = self.attn2(
-            hidden_states=norm_hidden_states,
-            encoder_hidden_states=encoder_hidden_states,
-        )
+        if inference_mode and isinstance(self.attn2.processor, WanAttnProcessor2_0):
+            hs_list = [norm_hidden_states]
+            ehs_list = [encoder_hidden_states]
+            norm_hidden_states = hs_list
+            encoder_hidden_states = ehs_list
+            attn_output = self.attn2.processor(
+                self.attn2, norm_hidden_states, encoder_hidden_states
+            )
+        else:
+            attn_output = self.attn2(
+                hidden_states=norm_hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+            )
 
-        hidden_states = hidden_states + attn_output
+        if (
+            inference_mode
+            and (not hidden_states.requires_grad)
+            and attn_output.dtype == hidden_states.dtype
+        ):
+            hidden_states.add_(attn_output)
+        else:
+            hidden_states = hidden_states + attn_output
+        del norm_hidden_states, attn_output
 
         # 3. Audio cross-attention
         if encoder_hidden_states_audio is not None:
@@ -837,7 +928,25 @@ class WanMultiTalkTransformerBlock(nn.Module):
                 human_num=human_num,
                 x_ref_attn_map=x_ref_attn_map,
             )
-            hidden_states = hidden_states + x_a
+            if (
+                inference_mode
+                and (not hidden_states.requires_grad)
+                and x_a.dtype == hidden_states.dtype
+            ):
+                hidden_states.add_(x_a)
+            else:
+                hidden_states = hidden_states + x_a
+            del x_a
+        # `x_ref_attn_map` is only needed for the audio cross-attn above.
+        try:
+            del x_ref_attn_map
+        except Exception:
+            pass
+
+        # FFN modulation params (compute after attention paths to reduce peak live tensors).
+        c_shift_msa = (table[:, 3:4, :] + temb[:, 3:4, :]).to(dtype=hs_dtype)
+        c_scale_msa = (table[:, 4:5, :] + temb[:, 4:5, :]).to(dtype=hs_dtype)
+        c_gate_msa = (table[:, 5:6, :] + temb[:, 5:6, :]).to(dtype=hs_dtype)
 
         # 4. Feed-forward
         norm_hidden_states = _chunked_modulated_norm(
@@ -855,7 +964,16 @@ class WanMultiTalkTransformerBlock(nn.Module):
         else:
             ff_output = self.ffn(norm_hidden_states)
 
-        hidden_states = hidden_states + ff_output * c_gate_msa
+        if (
+            inference_mode
+            and (not hidden_states.requires_grad)
+            and ff_output.dtype == hidden_states.dtype
+            and c_gate_msa.dtype == hidden_states.dtype
+        ):
+            hidden_states.addcmul_(ff_output, c_gate_msa)
+        else:
+            hidden_states = hidden_states + ff_output * c_gate_msa
+        del norm_hidden_states, ff_output, c_shift_msa, c_scale_msa, c_gate_msa, table
 
         return hidden_states
 

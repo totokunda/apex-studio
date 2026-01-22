@@ -8,8 +8,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
+import gc
 from diffusers.loaders import PeftAdapterMixin, FromOriginalModelMixin
 from src.attention import attention_register
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
+from src.transformer.efficiency.mod import InplaceRMSNorm
+from src.transformer.efficiency.ops import (
+    apply_gate_inplace,
+    apply_scale_shift_inplace,
+    chunked_feed_forward_inplace,
+)
 
 __all__ = ["SCAILModel"]
 
@@ -28,12 +36,14 @@ def _chunked_modulated_norm(
     in_dtype = hidden_states.dtype
 
     if chunk_size is None:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     if S <= chunk_size:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     out = torch.empty_like(hidden_states)
     scale_per_token = scale.dim() == 3 and scale.shape[1] == S
@@ -49,9 +59,8 @@ def _chunked_modulated_norm(
             scale_chunk = scale
             shift_chunk = shift
 
-        normed = norm_layer(hs_chunk)
-        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
-        del normed
+        out[:, i:end, :].copy_(norm_layer(hs_chunk))
+        apply_scale_shift_inplace(out[:, i:end, :], scale_chunk, shift_chunk)
 
     return out
 
@@ -59,24 +68,10 @@ def _chunked_modulated_norm(
 def _chunked_feed_forward(
     ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
 ) -> torch.Tensor:
-    """
-    Chunked feed-forward to reduce peak memory.
-    """
-    if chunk_size is None:
-        return ff(hidden_states)
-    if chunk_size <= 0:
-        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-
-    dim_len = hidden_states.shape[chunk_dim]
-    if dim_len <= chunk_size:
-        return ff(hidden_states)
-
-    outputs = []
-    for start in range(0, dim_len, chunk_size):
-        end = min(start + chunk_size, dim_len)
-        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
-        outputs.append(ff(hs_chunk))
-    return torch.cat(outputs, dim=chunk_dim)
+    """Chunked feed-forward to reduce peak memory."""
+    return chunked_feed_forward_inplace(
+        ff, hidden_states, chunk_dim=chunk_dim, chunk_size=chunk_size
+    )
 
 
 def _chunked_norm(
@@ -147,6 +142,21 @@ def _rope_split_freqs(freqs: torch.Tensor, head_dim: int):
         raise ValueError(f"head_dim must be even for RoPE, got {head_dim}")
     c = head_dim // 2
     return freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+
+
+def _rope_complex_multiply_inplace(
+    x_real: torch.Tensor,
+    x_imag: torch.Tensor,
+    freqs_real: torch.Tensor,
+    freqs_imag: torch.Tensor,
+) -> None:
+    """
+    In-place complex multiply on real/imag pairs:
+      (x_real + i*x_imag) *= (freqs_real + i*freqs_imag)
+    """
+    x_real_orig = x_real.clone()
+    x_real.mul_(freqs_real).addcmul_(x_imag, freqs_imag, value=-1.0)
+    x_imag.mul_(freqs_real).addcmul_(x_real_orig, freqs_imag, value=1.0)
 
 
 @amp.autocast(enabled=False)
@@ -344,6 +354,204 @@ def rope_apply_scail(x, **kwargs):
     )
 
 
+@amp.autocast(enabled=False)
+def _rope_apply_3d_inplace_chunked(
+    x: torch.Tensor,
+    freqs_t: torch.Tensor,
+    freqs_h: torch.Tensor,
+    freqs_w: torch.Tensor,
+    *,
+    f: int,
+    h: int,
+    w: int,
+    shift_f: int,
+    shift_h: int,
+    shift_w: int,
+    downsample_hw_by_2: bool = False,
+    chunk_size: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Apply 3D RoPE (t/h/w) to `x` IN-PLACE in chunks to reduce peak memory.
+
+    x: [B, S, N, D] where D is per-head dim (must be even).
+    freqs_*: complex tensors on CPU or GPU.
+    """
+    if x.ndim != 4:
+        raise ValueError(f"Expected x to be 4D [B,S,N,D], got shape {tuple(x.shape)}")
+
+    b, s, n, d = x.shape
+    if d % 2 != 0:
+        raise ValueError(f"Per-head dim must be even for RoPE, got {d}")
+
+    if downsample_hw_by_2:
+        if h % 2 != 0 or w % 2 != 0:
+            raise ValueError(
+                f"Expected even H/W for downsampled RoPE, got H={h}, W={w}"
+            )
+        seq_len = f * (h // 2) * (w // 2)
+    else:
+        seq_len = f * h * w
+
+    if seq_len != s:
+        raise AssertionError(f"seq_len mismatch: expected {seq_len}, got {s}")
+
+    if shift_f < 0 or shift_h < 0 or shift_w < 0:
+        raise ValueError(
+            f"Negative RoPE shift not supported: {shift_f=}, {shift_h=}, {shift_w=}"
+        )
+
+    if chunk_size is None or chunk_size <= 0:
+        chunk_size = s
+
+    # Pre-slice the ranges we will index into, then move the (small) slices to the
+    # correct device once per segment (enables rope freqs on CPU).
+    freqs_t = freqs_t[shift_f : shift_f + f]
+    freqs_h = freqs_h[shift_h : shift_h + h]
+    freqs_w = freqs_w[shift_w : shift_w + w]
+    if freqs_t.device != x.device:
+        freqs_t = freqs_t.to(x.device)
+    if freqs_h.device != x.device:
+        freqs_h = freqs_h.to(x.device)
+    if freqs_w.device != x.device:
+        freqs_w = freqs_w.to(x.device)
+
+    if downsample_hw_by_2:
+        freqs_h = 0.5 * (freqs_h[0::2] + freqs_h[1::2])
+        freqs_w = 0.5 * (freqs_w[0::2] + freqs_w[1::2])
+        hw = (h // 2) * (w // 2)
+        w_eff = w // 2
+    else:
+        hw = h * w
+        w_eff = w
+
+    for start in range(0, s, chunk_size):
+        end = min(start + chunk_size, s)
+        pos = torch.arange(start, end, device=x.device, dtype=torch.long)
+
+        t_idx = pos // hw
+        rem = pos - t_idx * hw
+        h_idx = rem // w_eff
+        w_idx = rem - h_idx * w_eff
+
+        # Build real/imag multipliers directly to avoid allocating complex intermediates.
+        mt = freqs_t.index_select(0, t_idx)
+        mh = freqs_h.index_select(0, h_idx)
+        mw = freqs_w.index_select(0, w_idx)
+        mult_real = torch.cat(
+            [
+                mt.real.to(dtype=torch.float32),
+                mh.real.to(dtype=torch.float32),
+                mw.real.to(dtype=torch.float32),
+            ],
+            dim=1,
+        ).view(1, end - start, 1, -1)
+        mult_imag = torch.cat(
+            [
+                mt.imag.to(dtype=torch.float32),
+                mh.imag.to(dtype=torch.float32),
+                mw.imag.to(dtype=torch.float32),
+            ],
+            dim=1,
+        ).view(1, end - start, 1, -1)
+
+        x_chunk = x[:, start:end]  # [B, chunk, N, D]
+        x_pairs = x_chunk.unflatten(-1, (-1, 2))
+        x_real = x_pairs[..., 0]
+        x_imag = x_pairs[..., 1]
+
+        # Do RoPE math in fp32 for fp16/bf16 inputs (chunked to cap peak memory).
+        if x.dtype in (torch.float16, torch.bfloat16):
+            x_real_f = x_real.float()
+            x_imag_f = x_imag.float()
+            _rope_complex_multiply_inplace(x_real_f, x_imag_f, mult_real, mult_imag)
+            x_real.copy_(x_real_f.to(dtype=x.dtype))
+            x_imag.copy_(x_imag_f.to(dtype=x.dtype))
+        else:
+            _rope_complex_multiply_inplace(
+                x_real,
+                x_imag,
+                mult_real.to(dtype=x.dtype),
+                mult_imag.to(dtype=x.dtype),
+            )
+
+    return x
+
+
+def rope_apply_scail_inplace(x: torch.Tensor, **kwargs) -> torch.Tensor:
+    """
+    In-place RoPE for SCAIL's concatenated (ref | video | pose) token stream.
+
+    x: [B, S, N, D]
+    """
+    ref_length = int(kwargs["ref_length"])
+    video_length = int(kwargs["seq_length"])
+    pose_length = int(kwargs["pose_length"])
+
+    rope_t = int(kwargs["rope_T"])
+    rope_h = int(kwargs["rope_H"])
+    rope_w = int(kwargs["rope_W"])
+    rope_h_shift = int(kwargs["rope_H_shift"])
+    rope_w_shift = int(kwargs["rope_W_shift"])
+    global_rope_h = int(kwargs["global_rope_H"])
+    global_rope_w = int(kwargs["global_rope_W"])
+    rope_t_shift = 1 + int(kwargs.get("rope_T_shift", 0) or 0)  # reference frame offset
+    rope_chunk_size = kwargs.get("rope_chunk_size", None)
+
+    freqs = kwargs["freqs"]
+    _, _, _, d = x.shape
+    freqs_t, freqs_h, freqs_w = _rope_split_freqs(freqs, d)
+
+    # ref segment
+    _rope_apply_3d_inplace_chunked(
+        x[:, :ref_length],
+        freqs_t,
+        freqs_h,
+        freqs_w,
+        f=1,
+        h=rope_h,
+        w=rope_w,
+        shift_f=0,
+        shift_h=rope_h_shift,
+        shift_w=rope_w_shift,
+        downsample_hw_by_2=False,
+        chunk_size=rope_chunk_size,
+    )
+
+    # video segment
+    _rope_apply_3d_inplace_chunked(
+        x[:, ref_length : ref_length + video_length],
+        freqs_t,
+        freqs_h,
+        freqs_w,
+        f=rope_t,
+        h=rope_h,
+        w=rope_w,
+        shift_f=rope_t_shift,
+        shift_h=rope_h_shift,
+        shift_w=rope_w_shift,
+        downsample_hw_by_2=False,
+        chunk_size=rope_chunk_size,
+    )
+
+    # pose segment
+    _rope_apply_3d_inplace_chunked(
+        x[:, -pose_length:],
+        freqs_t,
+        freqs_h,
+        freqs_w,
+        f=rope_t,
+        h=rope_h,
+        w=rope_w,
+        shift_f=rope_t_shift,
+        shift_h=rope_h_shift + global_rope_h,
+        shift_w=rope_w_shift + global_rope_w,
+        downsample_hw_by_2=True,
+        chunk_size=rope_chunk_size,
+    )
+
+    return x
+
+
 class WanRMSNorm(nn.Module):
 
     def __init__(self, dim, eps=1e-5):
@@ -393,8 +601,16 @@ class WanSelfAttention(nn.Module):
         self.k = nn.Linear(dim, dim)
         self.v = nn.Linear(dim, dim)
         self.o = nn.Linear(dim, dim)
-        self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_q = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
+        self.norm_k = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
 
     def forward(self, x, seq_lens, rope_apply_func, **kwargs):
         r"""
@@ -404,25 +620,48 @@ class WanSelfAttention(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        # Enable list-based early ref dropping (caller may pass `[tensor]`).
+        x = unwrap_single_item_list(x)
+        seq_lens = unwrap_single_item_list(seq_lens)
+
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
+        device_index = x.device.index
+        device_type = x.device.type
 
-        # query, key, value function
-        def qkv_fn(x):
-            q = self.norm_q(self.q(x)).view(b, s, n, d)
-            k = self.norm_k(self.k(x)).view(b, s, n, d)
-            v = self.v(x).view(b, s, n, d)
-            return q, k, v
+        # Projections + in-place Q/K norm (saves one buffer vs `norm(q(x))` style).
+        q = self.q(x)
+        k = self.k(x)
+        v = self.v(x)
+        # Clear input tensor early to reduce peak memory (q+k+v+x -> q+k+v)
+        del x
 
-        q, k, v = qkv_fn(x)
+        self.norm_q(q)
+        self.norm_k(k)
+        q = q.view(b, s, n, d)
+        k = k.view(b, s, n, d)
+        v = v.view(b, s, n, d)
 
+        # Apply RoPE in-place for inference. For training/grad, allow out-of-place
+        # fallback to preserve autograd correctness.
+        if torch.is_grad_enabled() or q.requires_grad:
+            q = rope_apply_func(q)
+        else:
+            rope_apply_func(q)
+        if torch.is_grad_enabled() or k.requires_grad:
+            k = rope_apply_func(k)
+        else:
+            rope_apply_func(k)
+        
         x = attention_register.call(
-            q=rope_apply_func(q).transpose(1, 2),
-            k=rope_apply_func(k).transpose(1, 2),
+            q=q.transpose(1, 2),
+            k=k.transpose(1, 2),
             v=v.transpose(1, 2),
             k_lens=seq_lens,
             window_size=self.window_size,
-        )
-        x = x.transpose(1, 2)
+            key="flash"
+        ).transpose(1, 2)
+        del q, k, v
+
         # output
         x = x.flatten(2)
         x = self.o(x)
@@ -438,13 +677,23 @@ class WanT2VCrossAttention(WanSelfAttention):
             context(Tensor): Shape [B, L2, C]
             context_lens(Tensor): Shape [B]
         """
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
+        context_lens = unwrap_single_item_list(context_lens)
+
         b, n, d = x.size(0), self.num_heads, self.head_dim
 
-        # compute query, key, value
-        q = self.norm_q(self.q(x)).view(b, -1, n, d)
-        k = self.norm_k(self.k(context)).view(b, -1, n, d)
-        v = self.v(context).view(b, -1, n, d)
-
+        # compute query, key, value (with in-place Q/K norm)
+        q = self.q(x)
+        del x
+        k = self.k(context)
+        v = self.v(context)
+        self.norm_q(q)
+        self.norm_k(k)
+        q = q.view(b, -1, n, d)
+        k = k.view(b, -1, n, d)
+        v = v.view(b, -1, n, d)
+    
         # compute attention
         x = attention_register.call(
             q.transpose(1, 2),
@@ -452,7 +701,10 @@ class WanT2VCrossAttention(WanSelfAttention):
             v.transpose(1, 2),
             k_lens=context_lens,
             window_size=self.window_size,
+            key="flash"
         ).transpose(1, 2)
+        
+        del q, k, v
 
         # output
         x = x.flatten(2)
@@ -468,7 +720,11 @@ class WanI2VCrossAttention(WanSelfAttention):
         self.k_img = nn.Linear(dim, dim)
         self.v_img = nn.Linear(dim, dim)
         # self.alpha = nn.Parameter(torch.zeros((1, )))
-        self.norm_k_img = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_k_img = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
 
     def forward(self, x, context, context_lens):
         r"""
@@ -477,38 +733,63 @@ class WanI2VCrossAttention(WanSelfAttention):
             context(Tensor): Shape [B, L2, C]
             context_lens(Tensor): Shape [B]
         """
+        x = unwrap_single_item_list(x)
+        context = unwrap_single_item_list(context)
+        context_lens = unwrap_single_item_list(context_lens)
+
         image_context_length = context.shape[1] - T5_CONTEXT_TOKEN_NUMBER
         context_img = context[:, :image_context_length]
         context = context[:, image_context_length:]
         b, n, d = x.size(0), self.num_heads, self.head_dim
+        device_index = x.device.index
+        device_type = x.device.type
 
-        # compute query, key, value
-        q = self.norm_q(self.q(x)).view(b, -1, n, d)
-        k = self.norm_k(self.k(context)).view(b, -1, n, d)
-        v = self.v(context).view(b, -1, n, d)
-        k_img = self.norm_k_img(self.k_img(context_img)).view(b, -1, n, d)
-        v_img = self.v_img(context_img).view(b, -1, n, d)
+        # compute query, key, value (with in-place Q/K norm)
+        q = self.q(x)
+        del x
+        k = self.k(context)
+        v = self.v(context)
+        k_img = self.k_img(context_img)
+        v_img = self.v_img(context_img)
+
+        self.norm_q(q)
+        self.norm_k(k)
+        self.norm_k_img(k_img)
+        q = q.view(b, -1, n, d)
+        k = k.view(b, -1, n, d)
+        v = v.view(b, -1, n, d)
+        k_img = k_img.view(b, -1, n, d)
+        v_img = v_img.view(b, -1, n, d)
+        
+        
         img_x = attention_register.call(
             q.transpose(1, 2),
             k_img.transpose(1, 2),
             v_img.transpose(1, 2),
             k_lens=None,
             window_size=self.window_size,
+            key="flash"
         ).transpose(1, 2)
-        # compute attention
+        del k_img, v_img
+
         x = attention_register.call(
             q.transpose(1, 2),
             k.transpose(1, 2),
             v.transpose(1, 2),
             k_lens=context_lens,
             window_size=self.window_size,
+            key="flash"
         ).transpose(1, 2)
+        del q, k, v
 
         # output
+        if (not torch.is_grad_enabled()) and (not x.requires_grad) and (not img_x.requires_grad):
+            x.add_(img_x)
+        else:
+            x = x + img_x
         x = x.flatten(2)
-        img_x = img_x.flatten(2)
-        x = x + img_x
         x = self.o(x)
+
         return x
 
 
@@ -570,7 +851,7 @@ class WanAttentionBlock(nn.Module):
     def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
         self._ff_chunk_size = chunk_size
         self._ff_chunk_dim = dim
-
+    
     def set_chunk_norms(
         self,
         *,
@@ -579,7 +860,7 @@ class WanAttentionBlock(nn.Module):
     ) -> None:
         self._mod_norm_chunk_size = modulated_norm_chunk_size
         self._norm_chunk_size = norm_chunk_size
-
+  
     def forward(
         self,
         x,
@@ -597,39 +878,75 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        
+        x = unwrap_single_item_list(x)
+        e = unwrap_single_item_list(e)
+        seq_lens = unwrap_single_item_list(seq_lens)
+        context = unwrap_single_item_list(context)
+        context_lens = unwrap_single_item_list(context_lens)
+
         with amp.autocast(dtype=torch.float32):
             e = (self.modulation + e).chunk(6, dim=1)
-
         # self-attention with chunked modulated norm
         norm_x = _chunked_modulated_norm(
             self.norm1, x, e[1], e[0], chunk_size=self._mod_norm_chunk_size
         )
-        y = self.self_attn(norm_x.float(), seq_lens, **kwargs)
-
-        with amp.autocast(dtype=torch.float32):
-            x = x + y * e[2]
-
+        # Pass as single-item lists so `unwrap_single_item_list` clears references early.
+        norm_x_list = [norm_x]
+        seq_lens_list = [seq_lens]
+        del norm_x, seq_lens
+        y = self.self_attn(norm_x_list, seq_lens_list, **kwargs)
+        del norm_x_list, seq_lens_list
+      
+        # Inference-only in-place residual/gating to avoid allocating `x + y * gate`.
+        if (not torch.is_grad_enabled()) and (not x.requires_grad) and (not y.requires_grad):
+            apply_gate_inplace(y, e[2].to(dtype=y.dtype))
+            x.add_(y)
+        else:
+            with amp.autocast(dtype=torch.float32):
+                x = x + y * e[2]
+        
+    
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
-            x = x + self.cross_attn(
-                _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size),
-                context,
-                context_lens,
-            )
+            norm3_x = _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size)
+            norm3_x_list = [norm3_x]
+            context_list = [context]
+            context_lens_list = [context_lens]
+            del norm3_x, context, context_lens
+            ca = self.cross_attn(norm3_x_list, context_list, context_lens_list)
+            
+
+            if (not torch.is_grad_enabled()) and (not x.requires_grad) and (not ca.requires_grad):
+                x.add_(ca)
+            else:
+                x = x + ca
+            del ca
+   
             ffn_x = _chunked_modulated_norm(
                 self.norm2, x, e[4], e[3], chunk_size=self._mod_norm_chunk_size
             )
             if self._ff_chunk_size is not None:
                 y = _chunked_feed_forward(
-                    self.ffn, ffn_x.float(), self._ff_chunk_dim, self._ff_chunk_size
+                    self.ffn, ffn_x, self._ff_chunk_dim, self._ff_chunk_size
                 )
+
             else:
-                y = self.ffn(ffn_x.float())
-            with amp.autocast(dtype=torch.float32):
-                x = x + y * e[5]
+                y = self.ffn(ffn_x)
+            del ffn_x
+
+            if (not torch.is_grad_enabled()) and (not x.requires_grad) and (not y.requires_grad):
+                apply_gate_inplace(y, e[5].to(dtype=y.dtype))
+                x.add_(y)
+
+            else:
+                with amp.autocast(dtype=torch.float32):
+                    x = x + y * e[5]
+            
             return x
 
         x = cross_attn_ffn(x, context, context_lens, e)
+
         return x
 
 
@@ -662,6 +979,9 @@ class Head(nn.Module):
             x(Tensor): Shape [B, L1, C]
             e(Tensor): Shape [B, C]
         """
+        x = unwrap_single_item_list(x)
+        e = unwrap_single_item_list(e)
+
         with amp.autocast(dtype=torch.float32):
             e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
             norm_x = _chunked_modulated_norm(
@@ -720,6 +1040,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
     _CHUNKING_PROFILES: Dict[str, Dict[str, Optional[int]]] = {
         "none": {
             "ffn_chunk_size": None,
+            "ffn_chunk_dim": 1,
             "modulated_norm_chunk_size": None,
             "norm_chunk_size": None,
             "out_modulated_norm_chunk_size": None,
@@ -727,6 +1048,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         },
         "light": {
             "ffn_chunk_size": 2048,
+            "ffn_chunk_dim": 1,
             "modulated_norm_chunk_size": 16384,
             "norm_chunk_size": 8192,
             "out_modulated_norm_chunk_size": 16384,
@@ -734,6 +1056,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         },
         "balanced": {
             "ffn_chunk_size": 512,
+            "ffn_chunk_dim": 1,
             "modulated_norm_chunk_size": 8192,
             "norm_chunk_size": 4096,
             "out_modulated_norm_chunk_size": 8192,
@@ -741,6 +1064,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         },
         "aggressive": {
             "ffn_chunk_size": 256,
+            "ffn_chunk_dim": 1,
             "modulated_norm_chunk_size": 4096,
             "norm_chunk_size": 2048,
             "out_modulated_norm_chunk_size": 4096,
@@ -912,7 +1236,11 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         )
         self._rope_chunk_size = p.get("rope_chunk_size", None)
 
-        self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
+        # Configure FFN chunking (both size and chunk dimension).
+        # This drives `WanAttentionBlock._ff_chunk_size/_ff_chunk_dim`.
+        ffn_chunk_size = p.get("ffn_chunk_size", None)
+        ffn_chunk_dim = p.get("ffn_chunk_dim", 1)
+        self.set_chunk_feed_forward(ffn_chunk_size, dim=int(ffn_chunk_dim or 1))
         for block in self.blocks:
             block.set_chunk_norms(
                 modulated_norm_chunk_size=p.get("modulated_norm_chunk_size", None),
@@ -926,19 +1254,21 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
 
     def apply_i2v_ones_masks(self, inputs: torch.Tensor, mask_dim: int = 4):
         b, d, t, h, w = inputs.shape
-        mask = torch.ones(
-            b, mask_dim, t, h, w, device=inputs.device, dtype=inputs.dtype
+        out = torch.empty(
+            (b, d + mask_dim, t, h, w), device=inputs.device, dtype=inputs.dtype
         )
-        inputs = torch.concat([inputs, mask], dim=1)
-        return inputs
+        out[:, :d].copy_(inputs)
+        out[:, d:].fill_(1)
+        return out
 
     def apply_i2v_zeros_masks(self, inputs: torch.Tensor, mask_dim: int = 4):
         b, d, t, h, w = inputs.shape
-        mask = torch.zeros(
-            b, mask_dim, t, h, w, device=inputs.device, dtype=inputs.dtype
+        out = torch.empty(
+            (b, d + mask_dim, t, h, w), device=inputs.device, dtype=inputs.dtype
         )
-        inputs = torch.concat([inputs, mask], dim=1)
-        return inputs
+        out[:, :d].copy_(inputs)
+        out[:, d:].zero_()
+        return out
 
     def merge_list_of_tensors_to_batch(self, inputs: list[torch.Tensor]):
         return torch.cat([u.unsqueeze(0) for u in inputs], dim=0)
@@ -952,6 +1282,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         encoder_hidden_states: torch.Tensor,
         seq_len: int,
         encoder_hidden_states_clip: torch.Tensor = None,
+        rope_on_cpu: Optional[bool] = None,
         **kwargs,
     ):
         r"""
@@ -975,52 +1306,75 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         Returns:
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
+
+        Args:
+            rope_on_cpu (`bool`, *optional*):
+                If True, keep RoPE frequency tables on CPU and only move the small slices needed per chunk to GPU.
+                This reduces peak VRAM usage at the cost of some extra CPU↔GPU transfers.
         """
+        # Accept list/tuple wrappers (common in some pipelines) and clear list references early.
+        hidden_states = unwrap_single_item_list(hidden_states)
+        encoder_hidden_states_pose = unwrap_single_item_list(encoder_hidden_states_pose)
+        encoder_hidden_states_reference = unwrap_single_item_list(
+            encoder_hidden_states_reference
+        )
+        encoder_hidden_states = unwrap_single_item_list(encoder_hidden_states)
+        encoder_hidden_states_clip = unwrap_single_item_list(encoder_hidden_states_clip)
+
         rope_t_shift = int(kwargs.get("rope_T_shift", 0) or 0)
+        # Backward compatible: allow `rope_on_cpu` to still be passed via `**kwargs`.
+        if rope_on_cpu is None:
+            rope_on_cpu = bool(kwargs.get("rope_on_cpu", False))
         clip_fea = encoder_hidden_states_clip
-        x = hidden_states.unbind(dim=0)
-        ref_latents = encoder_hidden_states_reference.unbind(dim=0)
-        pose_latents = encoder_hidden_states_pose.unbind(dim=0)
         t = timestep
-        context = encoder_hidden_states.unbind(dim=0)
 
         assert clip_fea is not None
-        # params
-        device = self.patch_embedding.weight.device
-        if self.freqs.device != device:
-            self.freqs = self.freqs.to(device)
+        device = hidden_states.device
 
-        # TODO: support misaligned inputs
-        x = self.merge_list_of_tensors_to_batch(x)
-        ref_latents = self.merge_list_of_tensors_to_batch(ref_latents)
-        pose_latents = self.merge_list_of_tensors_to_batch(pose_latents)
+        # Keep RoPE freqs on CPU when requested, otherwise cache a device copy for
+        # the (training / reference) out-of-place RoPE path.
+        freqs = self.freqs
+        if not rope_on_cpu:
+            if not hasattr(self, "_freqs_device_cache"):
+                self._freqs_device_cache = {}
+            cache_key = str(device)
+            if cache_key not in self._freqs_device_cache:
+                self._freqs_device_cache[cache_key] = self.freqs.to(device)
+            freqs = self._freqs_device_cache[cache_key]
 
-        x = self.apply_i2v_zeros_masks(x)
-        ref_latents = self.apply_i2v_ones_masks(ref_latents)
-        pose_latents = self.apply_i2v_ones_masks(pose_latents)
+        # Avoid list<->tensor roundtrips; work directly on batched tensors.
+        x_in = self.apply_i2v_zeros_masks(hidden_states)
+        ref_in = self.apply_i2v_ones_masks(encoder_hidden_states_reference)
+        pose_in = self.apply_i2v_ones_masks(encoder_hidden_states_pose)
 
-        B, D, T, H, W = x.shape
+        B, _, T, H, W = x_in.shape
 
-        assert pose_latents.shape[3] == H // 2
-        assert pose_latents.shape[4] == W // 2
+        assert pose_in.shape[3] == H // 2
+        assert pose_in.shape[4] == W // 2
 
         ref_length = 1 * H * W // reduce(mul, self.patch_size)
         seq_length = T * ref_length
         pose_length = T * (H // 2) * (W // 2) // reduce(mul, self.patch_size)
 
         # embeddings
-        x = torch.cat([ref_latents, x], dim=2)
-        x = self.patch_embedding(x)
-        pose_emb = self.patch_embedding_pose(pose_latents)
+        # Run patch embedding separately for ref/video to avoid a large concat in latent space.
+        ref_emb = self.patch_embedding(ref_in)
+        vid_emb = self.patch_embedding(x_in)
+        pose_emb = self.patch_embedding_pose(pose_in)
+        del x_in, ref_in, pose_in
+
         x = torch.cat(
             [
-                rearrange(x, "b c t h w -> b (t h w) c"),
+                rearrange(ref_emb, "b c t h w -> b (t h w) c"),
+                rearrange(vid_emb, "b c t h w -> b (t h w) c"),
                 rearrange(pose_emb, "b c t h w -> b (t h w) c"),
             ],
             dim=1,
         )
+        del ref_emb, vid_emb, pose_emb
 
-        seq_lens = torch.tensor([u.size(0) for u in x], dtype=torch.long)
+        # seq_lens is used for flash attention k_lens (constant for this model).
+        seq_lens = torch.full((B,), x.shape[1], dtype=torch.long)
         # seq_lens is used for flash attention k_lens
 
         # time embeddings
@@ -1030,14 +1384,17 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
 
         # context
         context_lens = None
-        context = self.text_embedding(
-            torch.stack(
-                [
-                    torch.cat([u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
-                    for u in context
-                ]
+        context = encoder_hidden_states
+        if context.shape[1] < self.text_len:
+            pad = torch.zeros(
+                (context.shape[0], self.text_len - context.shape[1], context.shape[2]),
+                device=context.device,
+                dtype=context.dtype,
             )
-        )
+            context = torch.cat([context, pad], dim=1)
+        elif context.shape[1] > self.text_len:
+            context = context[:, : self.text_len]
+        context = self.text_embedding(context)
 
         if clip_fea is not None:
             context_clip = self.img_emb(clip_fea)  # bs x 257 (x2) x dim
@@ -1059,7 +1416,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
             e=e0,
             seq_lens=seq_lens,
             grid_sizes=grid_sizes,
-            freqs=self.freqs,
+            freqs=freqs,
             context=context,
             context_lens=context_lens,
             ref_length=ref_length,
@@ -1076,6 +1433,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
         model_kwargs["global_rope_W"] = self.pose_rope_shift[2]
         model_kwargs["rope_chunk_size"] = getattr(self, "_rope_chunk_size", None)
         model_kwargs["rope_T_shift"] = rope_t_shift
+        model_kwargs["rope_on_cpu"] = rope_on_cpu
 
         # TODO: add shift based on rank of sequence parallelism
         model_kwargs["rope_H_shift"] = 0
@@ -1085,16 +1443,24 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
             """
             x: [b, s, n, d]
             """
-            y = rope_apply_scail(x, **model_kwargs)
-            return y
+            if torch.is_grad_enabled() or x.requires_grad:
+                return rope_apply_scail(x, **model_kwargs)
+            return rope_apply_scail_inplace(x, **model_kwargs)
 
         model_kwargs["rope_apply_func"] = apply_rope_scail
 
         for block in self.blocks:
-            x = block(x, **model_kwargs)
+            # Pass as a single-item list so the block can clear the wrapper early.
+            x_list = [x]
+            del x
+            x = block(x_list, **model_kwargs)
+
 
         # head
-        x = self.head(x, e)
+        x_list = [x]
+        e_list = [e]
+        del x, e
+        x = self.head(x_list, e_list)
 
         # unpatchify
         x = self.unpatchify(x, grid_sizes, offset=ref_length)

@@ -5,7 +5,7 @@ import math
 import random
 import os
 import time
-from typing import Tuple, Optional, List
+from typing import Dict, List, Optional, Tuple
 from einops import rearrange
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
@@ -31,6 +31,72 @@ except ImportError:
 from PIL import Image
 import numpy as np
 from src.attention import attention_register
+from src.transformer.efficiency.mod import InplaceRMSNorm
+from src.transformer.efficiency.ops import (
+    apply_gate_inplace,
+    apply_scale_shift_inplace,
+    apply_wan_rope_inplace,
+    chunked_feed_forward_inplace,
+)
+
+
+def _chunked_norm(
+    norm_layer: nn.Module, hidden_states: torch.Tensor, chunk_size: Optional[int] = None
+) -> torch.Tensor:
+    """
+    LayerNorm in chunks along the sequence dimension to reduce peak memory.
+
+    Expects `hidden_states` to be `[batch, seq_len, dim]`.
+    """
+    if isinstance(norm_layer, nn.Identity):
+        return hidden_states
+
+    if chunk_size is None or hidden_states.ndim != 3:
+        return norm_layer(hidden_states)
+
+    b, s, _ = hidden_states.shape
+    if s <= chunk_size:
+        return norm_layer(hidden_states)
+
+    out = torch.empty_like(hidden_states)
+    for i in range(0, s, int(chunk_size)):
+        end = min(i + int(chunk_size), s)
+        out[:, i:end, :] = norm_layer(hidden_states[:, i:end, :])
+    return out
+
+
+def _chunked_modulated_norm(
+    norm_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    scale: torch.Tensor,
+    shift: torch.Tensor,
+    chunk_size: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Modulated norm with optional chunking. Uses in-place scale/shift to avoid allocating `(1 + scale)`.
+    """
+    if chunk_size is None or hidden_states.ndim != 3:
+        out = norm_layer(hidden_states)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
+
+    b, s, _ = hidden_states.shape
+    if s <= chunk_size:
+        out = norm_layer(hidden_states)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
+
+    out = torch.empty_like(hidden_states)
+    scale_per_token = scale.ndim == 3 and scale.shape[1] == s
+    for i in range(0, s, int(chunk_size)):
+        end = min(i + int(chunk_size), s)
+        out_chunk = out[:, i:end, :]
+        out_chunk.copy_(norm_layer(hidden_states[:, i:end, :]))
+        if scale_per_token:
+            apply_scale_shift_inplace(out_chunk, scale[:, i:end, :], shift[:, i:end, :])
+        else:
+            apply_scale_shift_inplace(out_chunk, scale, shift)
+    return out
 
 
 # ----------------------------
@@ -368,29 +434,13 @@ def precompute_freqs_cis(dim: int, end: int = 1024, theta: float = 10000.0):
 
 
 def rope_apply(x, freqs, num_heads):
+    # Legacy (allocating) implementation kept for back-compat / debugging.
     x = rearrange(x, "b s (n d) -> b s n d", n=num_heads)
     x_out = torch.view_as_complex(
         x.to(torch.float64).reshape(x.shape[0], x.shape[1], x.shape[2], -1, 2)
     )
     x_out = torch.view_as_real(x_out * freqs).flatten(2)
     return x_out.to(x.dtype)
-
-
-# ----------------------------
-# Norms & Blocks
-# ----------------------------
-class RMSNorm(nn.Module):
-    def __init__(self, dim, eps=1e-5):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        dtype = x.dtype
-        return self.norm(x.float()).to(dtype) * self.weight
 
 
 class AttentionModule(nn.Module):
@@ -416,8 +466,8 @@ class SelfAttention(nn.Module):
         self.k = nn.Linear(dim, dim)
         self.v = nn.Linear(dim, dim)
         self.o = nn.Linear(dim, dim)
-        self.norm_q = RMSNorm(dim, eps=eps)
-        self.norm_k = RMSNorm(dim, eps=eps)
+        self.norm_q = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+        self.norm_k = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
 
         self.attn = AttentionModule(self.num_heads)
         self.local_attn_mask = None
@@ -439,6 +489,8 @@ class SelfAttention(nn.Module):
         pre_cache_k=None,
         pre_cache_v=None,
         local_range=9,
+        rotary_emb_chunk_size: Optional[int] = None,
+        freqs_may_be_cpu: bool = True,
     ):
         B, L, D = x.shape
         if is_stream and pre_cache_k is not None and pre_cache_v is not None:
@@ -447,11 +499,43 @@ class SelfAttention(nn.Module):
             assert f == 6, " start f must be 6"
         assert L == f * h * w, "Sequence length mismatch with provided (f,h,w)."
 
-        q = self.norm_q(self.q(x))
-        k = self.norm_k(self.k(x))
+        # Canonicalize RoPE freqs to `[1, 1, S, D/2]` for `apply_wan_rope_inplace`.
+        # Some call sites still provide the legacy shape `[S, 1, D/2]`.
+        if freqs is not None:
+            if freqs.dim() == 3:
+                # [S, 1, D/2] -> [1, S, 1, D/2]
+                freqs = freqs.unsqueeze(0)
+            if freqs.dim() == 4 and freqs.shape[1] != 1 and freqs.shape[2] == 1:
+                # [1, S, 1, D/2] -> [1, 1, S, D/2]
+                freqs = freqs.permute(0, 2, 1, 3)
+
+        # Project + normalize Q/K in-place (fresh tensors, safe to mutate).
+        q = self.q(x)
+        k = self.k(x)
         v = self.v(x)
-        q = rope_apply(q, freqs, self.num_heads)
-        k = rope_apply(k, freqs, self.num_heads)
+        self.norm_q(q)
+        self.norm_k(k)
+
+        # Apply RoPE in-place on [B, H, S, Dh] with optional chunking and CPU freqs support.
+        q_4d = q.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
+        k_4d = k.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
+        apply_wan_rope_inplace(
+            q_4d,
+            freqs,
+            chunk_size=rotary_emb_chunk_size,
+            freqs_may_be_cpu=freqs_may_be_cpu,
+        )
+        apply_wan_rope_inplace(
+            k_4d,
+            freqs,
+            chunk_size=rotary_emb_chunk_size,
+            freqs_may_be_cpu=freqs_may_be_cpu,
+        )
+
+        # Back to [B, S, D] for the rest of this attention path.
+        q = q_4d.transpose(1, 2).reshape(B, L, D)
+        k = k_4d.transpose(1, 2).reshape(B, L, D)
+        del q_4d, k_4d
 
         win = (2, 8, 8)
         q = q.view(B, f, h, w, D)
@@ -461,6 +545,7 @@ class SelfAttention(nn.Module):
         q_w = WindowPartition3D.partition(q, win)
         k_w = WindowPartition3D.partition(k, win)
         v_w = WindowPartition3D.partition(v, win)
+        del q, k, v
 
         seqlen = f // win[0]
         one_len = k_w.shape[0] // B // seqlen
@@ -533,6 +618,7 @@ class SelfAttention(nn.Module):
             )
 
         x = self.attn(reorder_q, reorder_k, reorder_v, attention_mask)
+        del reorder_q, reorder_k, reorder_v, attention_mask
 
         cur_block_n, cur_block_s, _ = k_w.shape
         cache_num = cur_block_n // one_len
@@ -573,8 +659,8 @@ class CrossAttention(nn.Module):
         self.v = nn.Linear(dim, dim)
         self.o = nn.Linear(dim, dim)
 
-        self.norm_q = RMSNorm(dim, eps=eps)
-        self.norm_k = RMSNorm(dim, eps=eps)
+        self.norm_q = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+        self.norm_k = InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
 
         self.attn = AttentionModule(self.num_heads)
 
@@ -636,6 +722,29 @@ class DiTBlock(nn.Module):
         self.modulation = nn.Parameter(torch.randn(1, 6, dim) / dim**0.5)
         self.gate = GateModule()
 
+        # Memory/VRAM controls (disabled by default; configured via `FlashVSRModel.set_chunking_profile()`).
+        self._ff_chunk_size: Optional[int] = None
+        self._ff_chunk_dim: int = 1
+        self._mod_norm_chunk_size: Optional[int] = None
+        self._norm_chunk_size: Optional[int] = None
+        self._rotary_emb_chunk_size: Optional[int] = None
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        self._ff_chunk_size = chunk_size
+        self._ff_chunk_dim = dim
+
+    def set_chunk_norms(
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
+    ) -> None:
+        self._mod_norm_chunk_size = modulated_norm_chunk_size
+        self._norm_chunk_size = norm_chunk_size
+
+    def set_rotary_emb_chunk_size(self, chunk_size: Optional[int]) -> None:
+        self._rotary_emb_chunk_size = chunk_size
+
     def forward(
         self,
         x,
@@ -655,13 +764,34 @@ class DiTBlock(nn.Module):
         pre_cache_k=None,
         pre_cache_v=None,
         local_range=9,
+        rotary_emb_chunk_size: Optional[int] = None,
+        freqs_may_be_cpu: bool = True,
     ):
+        # Prefer a per-call override; otherwise use the per-block configured default.
+        if rotary_emb_chunk_size is None:
+            rotary_emb_chunk_size = self._rotary_emb_chunk_size
+
+        x_dtype = x.dtype
+        # Compute modulation in fp32, then cast to activation dtype to avoid fp32 intermediates.
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.modulation.to(dtype=t_mod.dtype, device=t_mod.device) + t_mod
-        ).chunk(6, dim=1)
-        input_x = modulate(self.norm1(x), shift_msa, scale_msa)
+            (self.modulation + t_mod.float()).to(dtype=x_dtype, device=x.device).chunk(
+                6, dim=1
+            )
+        )
+        del t_mod
+
+        # 1) Self-attention with modulated norm (chunked) + in-place gating/add in inference.
+        norm_x = _chunked_modulated_norm(
+            self.norm1,
+            x,
+            scale_msa,
+            shift_msa,
+            chunk_size=self._mod_norm_chunk_size,
+        )
+        del scale_msa, shift_msa
+
         self_attn_output, self_attn_cache_k, self_attn_cache_v = self.self_attn(
-            input_x,
+            norm_x,
             freqs,
             f,
             h,
@@ -676,12 +806,73 @@ class DiTBlock(nn.Module):
             pre_cache_k=pre_cache_k,
             pre_cache_v=pre_cache_v,
             local_range=local_range,
+            rotary_emb_chunk_size=rotary_emb_chunk_size,
+            freqs_may_be_cpu=freqs_may_be_cpu,
         )
+        del norm_x
 
-        x = self.gate(x, gate_msa, self_attn_output)
-        x = x + self.cross_attn(self.norm3(x), context, is_stream=is_stream)
-        input_x = modulate(self.norm2(x), shift_mlp, scale_mlp)
-        x = self.gate(x, gate_mlp, self.ffn(input_x))
+        can_inplace = (
+            (not torch.is_grad_enabled())
+            and (not x.requires_grad)
+            and (not self_attn_output.requires_grad)
+        )
+        if can_inplace:
+            apply_gate_inplace(self_attn_output, gate_msa.to(dtype=self_attn_output.dtype))
+            x.add_(self_attn_output)
+        else:
+            x = x + self_attn_output * gate_msa
+        del self_attn_output, gate_msa
+
+        # 2) Cross-attention with chunked norm, add in-place when safe.
+        norm3_x = _chunked_norm(self.norm3, x, chunk_size=self._norm_chunk_size)
+        cross_out = self.cross_attn(norm3_x, context, is_stream=is_stream)
+        del norm3_x
+
+        can_inplace2 = (
+            (not torch.is_grad_enabled())
+            and (not x.requires_grad)
+            and (not cross_out.requires_grad)
+        )
+        if can_inplace2:
+            x.add_(cross_out)
+        else:
+            x = x + cross_out
+        del cross_out
+
+        # 3) Feed-forward: modulated norm (chunked) -> optional chunked FF -> gated residual add.
+        ff_x = _chunked_modulated_norm(
+            self.norm2,
+            x,
+            scale_mlp,
+            shift_mlp,
+            chunk_size=self._mod_norm_chunk_size,
+        )
+        del scale_mlp, shift_mlp
+
+        if self._ff_chunk_size is not None:
+            ff_out = chunked_feed_forward_inplace(
+                self.ffn, ff_x, chunk_dim=self._ff_chunk_dim, chunk_size=self._ff_chunk_size
+            )
+        else:
+            ff_out = self.ffn(ff_x)
+        # If we used the inference-only in-place FF path, `ff_out` is `ff_x` mutated.
+        if ff_out is ff_x:
+            del ff_x
+        else:
+            del ff_x
+
+        can_inplace3 = (
+            (not torch.is_grad_enabled())
+            and (not x.requires_grad)
+            and (not ff_out.requires_grad)
+        )
+        if can_inplace3:
+            apply_gate_inplace(ff_out, gate_mlp.to(dtype=ff_out.dtype))
+            x.add_(ff_out)
+        else:
+            x = x + ff_out * gate_mlp
+        del ff_out, gate_mlp
+
         if is_stream:
             return x, self_attn_cache_k, self_attn_cache_v
         return x
@@ -719,11 +910,20 @@ class Head(nn.Module):
         self.modulation = nn.Parameter(torch.randn(1, 2, dim) / dim**0.5)
 
     def forward(self, x, t_mod):
-        shift, scale = (
-            self.modulation.to(dtype=t_mod.dtype, device=t_mod.device) + t_mod
+        x_dtype = x.dtype
+        shift, scale = (self.modulation + t_mod.float()).to(
+            dtype=x_dtype, device=x.device
         ).chunk(2, dim=1)
-        x = self.head(self.norm(x) * (1 + scale) + shift)
-        return x
+        del t_mod
+
+        norm_x = _chunked_norm(
+            self.norm, x, chunk_size=getattr(self, "_norm_chunk_size", None)
+        )
+        apply_scale_shift_inplace(norm_x, scale, shift)
+        del scale, shift
+        out = self.head(norm_x)
+        del norm_x
+        return out
 
 
 # ----------------------------
@@ -780,6 +980,9 @@ class FlashVSRModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapter
 
         self._cross_kv_initialized = False
 
+        # Chunking defaults (match WAN base: off unless explicitly enabled).
+        self.set_chunking_profile("none")
+
         if use_causal_lq4x_proj:
             self.LQ_proj_in = Causal_LQ4x_Proj(
                 in_dim=lq4x_proj_in_dim,
@@ -794,6 +997,132 @@ class FlashVSRModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapter
             )
         else:
             self.LQ_proj_in = None
+
+    # ----------------------------
+    # Chunking profile presets
+    # ----------------------------
+
+    _CHUNKING_PROFILES: Dict[str, Dict[str, Optional[int]]] = {
+        "none": {
+            "ffn_chunk_size": None,
+            "modulated_norm_chunk_size": None,
+            "norm_chunk_size": None,
+            "head_norm_chunk_size": None,
+            "rotary_emb_chunk_size": None,
+        },
+        "light": {
+            "ffn_chunk_size": 2048,
+            "modulated_norm_chunk_size": 16384,
+            "norm_chunk_size": 8192,
+            "head_norm_chunk_size": 16384,
+            "rotary_emb_chunk_size": None,
+        },
+        "balanced": {
+            "ffn_chunk_size": 512,
+            "modulated_norm_chunk_size": 8192,
+            "norm_chunk_size": 4096,
+            "head_norm_chunk_size": 8192,
+            "rotary_emb_chunk_size": 1024,
+        },
+        "aggressive": {
+            "ffn_chunk_size": 256,
+            "modulated_norm_chunk_size": 4096,
+            "norm_chunk_size": 2048,
+            "head_norm_chunk_size": 4096,
+            "rotary_emb_chunk_size": 256,
+        },
+    }
+
+    def list_chunking_profiles(self) -> Tuple[str, ...]:
+        return tuple(self._CHUNKING_PROFILES.keys())
+
+    def set_chunking_profile(self, profile_name: str) -> None:
+        if profile_name not in self._CHUNKING_PROFILES:
+            raise ValueError(
+                f"Unknown chunking profile '{profile_name}'. "
+                f"Available: {sorted(self._CHUNKING_PROFILES.keys())}"
+            )
+
+        p = self._CHUNKING_PROFILES[profile_name]
+        self._chunking_profile_name = profile_name
+
+        self._rotary_emb_chunk_size_default = p.get("rotary_emb_chunk_size", None)
+
+        self.set_chunk_feed_forward(p.get("ffn_chunk_size", None), dim=1)
+        self.set_chunk_norms(
+            modulated_norm_chunk_size=p.get("modulated_norm_chunk_size", None),
+            norm_chunk_size=p.get("norm_chunk_size", None),
+            head_norm_chunk_size=p.get("head_norm_chunk_size", None),
+        )
+
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
+        for block in self.blocks:
+            block.set_chunk_feed_forward(chunk_size, dim=dim)
+
+    def set_chunk_norms(
+        self,
+        *,
+        modulated_norm_chunk_size: Optional[int] = None,
+        norm_chunk_size: Optional[int] = None,
+        head_norm_chunk_size: Optional[int] = None,
+    ) -> None:
+        for block in self.blocks:
+            block.set_chunk_norms(
+                modulated_norm_chunk_size=modulated_norm_chunk_size,
+                norm_chunk_size=norm_chunk_size,
+            )
+        # Store on head for `_chunked_norm` in `Head.forward`.
+        self.head._norm_chunk_size = head_norm_chunk_size
+
+    def set_rotary_emb_chunk_size(self, chunk_size: Optional[int]) -> None:
+        self._rotary_emb_chunk_size_default = chunk_size
+        for block in self.blocks:
+            block.set_rotary_emb_chunk_size(chunk_size)
+
+    # ----------------------------
+    # RoPE CPU caching
+    # ----------------------------
+
+    def _get_rope_cpu_cache(self) -> Dict[Tuple[int, int, int, int], torch.Tensor]:
+        if not hasattr(self, "_rope_cpu_cache"):
+            self._rope_cpu_cache = {}
+        return self._rope_cpu_cache
+
+    def _build_rope_cached(
+        self,
+        *,
+        f: int,
+        h: int,
+        w: int,
+        device: torch.device,
+        rope_on_cpu: bool,
+        f_start: int = 0,
+    ) -> torch.Tensor:
+        """
+        Build RoPE freqs for current patch-grid (f,h,w).
+
+        Returns complex freqs shaped [1, 1, S, Dh/2] where S=f*h*w.
+        When `rope_on_cpu=True`, the returned tensor stays on CPU and is cached.
+        """
+        key = (int(f), int(h), int(w), int(f_start))
+        cache = self._get_rope_cpu_cache()
+        if key not in cache:
+            f0 = int(f_start)
+            f1 = f0 + int(f)
+            freqs_cpu = torch.cat(
+                [
+                    self.freqs[0][f0:f1].view(f, 1, 1, -1).expand(f, h, w, -1),
+                    self.freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+                    self.freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
+                ],
+                dim=-1,
+            ).reshape(1, 1, f * h * w, -1)
+            cache[key] = freqs_cpu
+
+        freqs = cache[key]
+        if rope_on_cpu:
+            return freqs
+        return freqs.to(device)
 
     # 可选：手动清空 / 重新初始化
     def clear_cross_kv(self):
@@ -830,66 +1159,74 @@ class FlashVSRModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapter
         self,
         x: torch.Tensor,
         timestep: torch.Tensor,
-        context: torch.Tensor,
+        context: torch.Tensor = None,
         use_gradient_checkpointing: bool = False,
         use_gradient_checkpointing_offload: bool = False,
         LQ_latents: Optional[List[torch.Tensor]] = None,
         train_img: bool = False,
-        topk_ratio: Optional[float] = None,
-        kv_ratio: Optional[float] = None,
+        topk_ratio: float = 2.0,
+        kv_ratio: float = 3.0,
         local_num: Optional[int] = None,
         is_full_block: bool = False,
         causal_idx: Optional[int] = None,
+        is_stream: bool = False,
+        pre_cache_k: Optional[List[torch.Tensor]] = None,
+        pre_cache_v: Optional[List[torch.Tensor]] = None,
+        cur_process_idx: int = 0,
+        t_mod: torch.Tensor = None,
+        t: torch.Tensor = None,
+        local_range: int = 9,
+        rope_on_cpu: Optional[bool] = None,
+        rotary_emb_chunk_size: Optional[int] = None,
         **kwargs,
     ):
-        # time / text embeds
-        t = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, timestep))
-        t_mod = self.time_projection(t).unflatten(1, (6, self.dim))
+        if rope_on_cpu is None:
+            rope_on_cpu = (
+                getattr(self, "_apex_forward_kwargs_defaults", {}) or {}
+            ).get("rope_on_cpu", False)
+        if rotary_emb_chunk_size is None:
+            rotary_emb_chunk_size = getattr(self, "_rotary_emb_chunk_size_default", None)
+
+        # Streaming mode returns per-block caches; checkpointing doesn't handle tuple outputs.
+        if is_stream:
+            use_gradient_checkpointing = False
+
+        # Back-compat: allow passing local_range via kwargs too.
+        if "local_range" in kwargs:
+            local_range = int(kwargs.pop("local_range", local_range))
+
+        # time / text embeds (engine often precomputes these and passes them in)
+        if t is None:
+            t = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, timestep))
+        if t_mod is None:
+            t_mod = self.time_projection(t).unflatten(1, (6, self.dim))
 
         # 这里仍会嵌入 text（CrossAttention 若已有缓存会忽略它）
         # context = self.text_embedding(context)
 
         # 输入打补丁
         x, (f, h, w) = self.patchify(x)
-        B = x.shape[0]
-
-        # window / masks 超参
+        # window / masks hyperparams (match engine `inference_step`)
         win = (2, 8, 8)
         seqlen = f // win[0]
         if local_num is None:
-            local_random = random.random()
-            if local_random < 0.3:
-                local_num = seqlen - 3
-            elif local_random < 0.4:
-                local_num = seqlen - 4
-            elif local_random < 0.5:
-                local_num = seqlen - 2
-            else:
-                local_num = seqlen
-
+            local_num = seqlen
         window_size = win[0] * h * w // 128
         square_num = window_size * window_size
-        topk_ratio = 2.0
-        topk = min(max(int(square_num * topk_ratio), 1), int(square_num * seqlen) - 1)
+        topk = max(int(square_num * float(topk_ratio)) - 1, 0)
+        kv_len = int(kv_ratio)
 
-        if kv_ratio is None:
-            kv_ratio = (random.uniform(0.0, 1.0) ** 2) * (local_num - 2 - 2) + 2
-        kv_len = min(max(int(window_size * kv_ratio), 1), int(window_size * seqlen) - 1)
+        # RoPE 位置（分段）: match engine's segmented time indexing.
+        f_start = 0 if int(cur_process_idx) == 0 else 4 + int(cur_process_idx) * 2
 
-        decay_ratio = random.uniform(0.7, 1.0)
-
-        # RoPE 3D
-        freqs = (
-            torch.cat(
-                [
-                    self.freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                    self.freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-                    self.freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
-                ],
-                dim=-1,
-            )
-            .reshape(f * h * w, 1, -1)
-            .to(x.device)
+        # RoPE 3D (optionally cached on CPU and streamed to GPU in chunks).
+        freqs = self._build_rope_cached(
+            f=f,
+            h=h,
+            w=w,
+            device=x.device,
+            rope_on_cpu=bool(rope_on_cpu),
+            f_start=f_start,
         )
 
         def create_custom_forward(module):
@@ -901,7 +1238,16 @@ class FlashVSRModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapter
         # blocks
         for block_id, block in enumerate(self.blocks):
             if LQ_latents is not None and block_id < len(LQ_latents):
-                x += LQ_latents[block_id]
+                lq = LQ_latents[block_id]
+                if (
+                    (not torch.is_grad_enabled())
+                    and (not x.requires_grad)
+                    and (not lq.requires_grad)
+                ):
+                    x.add_(lq)
+                else:
+                    x = x + lq
+                del lq
 
             if self.training and use_gradient_checkpointing:
                 if use_gradient_checkpointing_offload:
@@ -924,6 +1270,9 @@ class FlashVSRModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapter
                             False,
                             None,
                             None,
+                            local_range,
+                            rotary_emb_chunk_size,
+                            bool(rope_on_cpu),
                             use_reentrant=False,
                         )
                 else:
@@ -945,10 +1294,13 @@ class FlashVSRModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapter
                         False,
                         None,
                         None,
+                        local_range,
+                        rotary_emb_chunk_size,
+                        bool(rope_on_cpu),
                         use_reentrant=False,
                     )
             else:
-                x = block(
+                out = block(
                     x,
                     context,
                     t_mod,
@@ -958,15 +1310,33 @@ class FlashVSRModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapter
                     w,
                     local_num,
                     topk,
-                    train_img,
-                    block_id,
-                    kv_len,
-                    is_full_block,
-                    False,
-                    None,
-                    None,
+                    train_img=train_img,
+                    block_id=block_id,
+                    kv_len=kv_len,
+                    is_full_block=is_full_block,
+                    is_stream=is_stream,
+                    pre_cache_k=(
+                        pre_cache_k[block_id] if pre_cache_k is not None else None
+                    ),
+                    pre_cache_v=(
+                        pre_cache_v[block_id] if pre_cache_v is not None else None
+                    ),
+                    local_range=local_range,
+                    rotary_emb_chunk_size=rotary_emb_chunk_size,
+                    freqs_may_be_cpu=bool(rope_on_cpu),
                 )
+                if is_stream:
+                    x, last_k, last_v = out
+                    if pre_cache_k is not None:
+                        pre_cache_k[block_id] = last_k
+                    if pre_cache_v is not None:
+                        pre_cache_v[block_id] = last_v
+                else:
+                    x = out
 
+        del freqs, t_mod
         x = self.head(x, t)
         x = self.unpatchify(x, (f, h, w))
+        if is_stream:
+            return x, pre_cache_k, pre_cache_v
         return x
