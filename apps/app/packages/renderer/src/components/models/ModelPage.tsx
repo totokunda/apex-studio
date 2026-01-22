@@ -32,6 +32,8 @@ const ModelPage: React.FC<ModelPageProps> = ({
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   if (!manifest) return null;
 
+  
+
   useLayoutEffect(() => {
     if (!scrollCache || !scrollKey) return;
     const root = scrollAreaRef.current;
