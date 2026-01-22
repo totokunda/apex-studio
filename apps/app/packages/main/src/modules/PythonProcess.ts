@@ -1082,6 +1082,15 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     } catch {
       // ignore
     }
+
+    // Auto memory management toggle (backend reads this at engine init time).
+    // Always set explicitly so local desktop settings can override any stale persisted backend config.
+    try {
+      const disabled = Boolean(getSettingsModule().getDisableAutoMemoryManagement());
+      env.APEX_DISABLE_AUTO_MEMORY_MANAGEMENT = disabled ? "true" : "false";
+    } catch {
+      // ignore
+    }
     
     // Set Python paths for bundled deployment
     if (this.app?.isPackaged) {
