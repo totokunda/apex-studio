@@ -88,6 +88,9 @@ export * from "./rayJobs.js";
 // Settings helpers
 export * from "./settings.js";
 
+// Global offload defaults (persisted in main process, keyed by backend URL + manifest id)
+export * from "./offload.js";
+
 // Export result caching (persistent, electron-store)
 export * from "./exportCache.js";
 
