@@ -3345,44 +3345,63 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         self.logger.info(
             f"Offloading engine: {engine.config.get('metadata', {}).get('name', 'BaseEngine')}"
         )
-        for component in components:
-            name = component.get("name")
-            type_ = component.get("type")
-            # Prefer the named attribute, otherwise fall back to component type.
-            attr_name = None
-            try:
-                if isinstance(name, str) and hasattr(engine, name):
-                    attr_name = name
-                elif isinstance(type_, str) and hasattr(engine, type_):
-                    attr_name = type_
-            except Exception:
-                attr_name = None
-
-            if not attr_name:
-                continue
-
-            comp = getattr(engine, attr_name, None)
-            if comp is None:
-                continue
-            try:
-                # Discard-by-name first: avoids moving huge weights into CPU RAM.
-                self._offload(attr_name, offload_type="discard")
-            except Exception:
-                # Fallback: attempt CPU offload for non-standard components.
+        # If the component memory manager is installed, force offloading so we
+        # don't accidentally "keep warm" weights when the caller explicitly
+        # requested freeing VRAM (e.g. worker cleanup or warm-pool eviction).
+        manager = getattr(engine, "_component_memory_manager", None)
+        forced_flag_set = False
+        try:
+            if manager is not None and hasattr(manager, "_evicting_flag"):
                 try:
-                    self._offload(comp, offload_type="cpu")
+                    manager._evicting_flag.is_evicting = True
+                    forced_flag_set = True
+                except Exception:
+                    forced_flag_set = False
+
+            for component in components:
+                name = component.get("name")
+                type_ = component.get("type")
+                # Prefer the named attribute, otherwise fall back to component type.
+                attr_name = None
+                try:
+                    if isinstance(name, str) and hasattr(engine, name):
+                        attr_name = name
+                    elif isinstance(type_, str) and hasattr(engine, type_):
+                        attr_name = type_
+                except Exception:
+                    attr_name = None
+
+                if not attr_name:
+                    continue
+
+                comp = getattr(engine, attr_name, None)
+                if comp is None:
+                    continue
+                try:
+                    # Discard-by-name first: avoids moving huge weights into CPU RAM.
+                    self._offload(attr_name, offload_type="discard")
+                except Exception:
+                    # Fallback: attempt CPU offload for non-standard components.
+                    try:
+                        self._offload(comp, offload_type="cpu")
+                    except Exception:
+                        pass
                 except Exception:
                     pass
-            except Exception:
-                pass
-            try:
-                # CRITICAL: break the strong reference from the engine instance so
-                # the component object can be garbage-collected after the task ends.
-                setattr(engine, attr_name, None)
-            except Exception:
-                pass
-            del comp
-            empty_cache()
+                try:
+                    # CRITICAL: break the strong reference from the engine instance so
+                    # the component object can be garbage-collected after the task ends.
+                    setattr(engine, attr_name, None)
+                except Exception:
+                    pass
+                del comp
+                empty_cache()
+        finally:
+            if forced_flag_set and manager is not None:
+                try:
+                    manager._evicting_flag.is_evicting = False
+                except Exception:
+                    pass
 
     @staticmethod
     def calculate_shift(

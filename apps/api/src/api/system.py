@@ -105,15 +105,54 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
         # This avoids creating a new engine (which requires a yaml_path).
         from .ray_app import get_ray_app  # lazy import (avoid ray.init at import-time)
         from .ray_resources import get_best_gpu, get_ray_resources
-        from .ray_tasks import free_unused_modules_in_warm_pool
+        from .ray_tasks import (
+            get_engine_runner_actor,
+            kill_engine_runner_actor,
+            free_unused_modules_in_warm_pool,
+        )
 
         ray = get_ray_app()
         device_index, device_type = get_best_gpu()
         resources = get_ray_resources(device_index, device_type, load_profile="light")
-        ref = free_unused_modules_in_warm_pool.options(**resources).remote(
-            active=sorted(active_set), target=request.target
-        )
+        runner = None
+        if device_type == "cuda" and device_index is not None:
+            runner = get_engine_runner_actor(
+                device_index=device_index, device_type=device_type, resources=resources
+            )
+            ref = runner.free_unused_modules_in_warm_pool.remote(
+                active=sorted(active_set), target=request.target
+            )
+        else:
+            # CPU-only fallback (no GPU actor needed).
+            ref = free_unused_modules_in_warm_pool.options(**resources).remote(
+                active=sorted(active_set), target=request.target
+            )
         worker_result = await _run_blocking(ray.get, ref)
+
+        # If the user asked for a full "free VRAM" and nothing is running, we must
+        # terminate the GPU actor process to release the CUDA context itself.
+        # (Offloading modules + empty_cache does not fully return VRAM to the OS.)
+        actor_killed = False
+        try:
+            skipped = (
+                (worker_result or {}).get("skipped_in_use", [])
+                if isinstance(worker_result, dict)
+                else []
+            )
+            nothing_in_use = not bool(skipped)
+            if (
+                runner is not None
+                and request.target == "disk"
+                and not active_set
+                and nothing_in_use
+            ):
+                actor_killed = bool(
+                    kill_engine_runner_actor(
+                        device_index=device_index, device_type=device_type
+                    )
+                )
+        except Exception:
+            actor_killed = False
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to free memory: {e}")
 
@@ -149,6 +188,7 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
             else {}
         ),
         "target": request.target,
+        "actor_killed": actor_killed,
     }
 
 
