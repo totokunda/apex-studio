@@ -45,12 +45,19 @@ def _init_ray() -> None:
 
         # Try to initialize with dashboard, fall back without if packages missing
         try:
+            # Start local Ray by default. This intentionally ignores Ray's own `RAY_ADDRESS`
+            # env var unless the user explicitly opts into cluster mode via `APEX_RAY_ADDRESS`.
+            # In some containerized environments Ray may pick an IP that isn't reachable
+            # from within the same namespace; allow overriding node IP as needed.
+            node_ip = os.getenv("APEX_RAY_NODE_IP_ADDRESS", "127.0.0.1")
             ray.init(
+                address=settings.ray_address,
                 ignore_reinit_error=True,
                 num_cpus=os.cpu_count(),
                 dashboard_host="0.0.0.0",
                 dashboard_port=settings.ray_dashboard_port,
                 include_dashboard=True,
+                _node_ip_address=node_ip,
                 _metrics_export_port=0,  # Disable metrics agent
                 _system_config={
                     "automatic_object_spilling_enabled": True,
@@ -60,7 +67,6 @@ def _init_ray() -> None:
                             "params": {"directory_path": str(spill_dir)},
                         }
                     ),
-                    "enable_file_system_monitor": False,  # Disable file system monitor to suppress disk space warnings
                 },
             )
             _install_shutdown_handler()
@@ -76,10 +82,13 @@ def _init_ray() -> None:
                 logger.info(
                     "To enable dashboard: pip install 'ray[default,dashboard]' aiohttp aiohttp-cors grpcio"
                 )
+                node_ip = os.getenv("APEX_RAY_NODE_IP_ADDRESS", "127.0.0.1")
                 ray.init(
+                    address=settings.ray_address,
                     ignore_reinit_error=True,
                     num_cpus=os.cpu_count(),
                     include_dashboard=False,
+                    _node_ip_address=node_ip,
                     _metrics_export_port=0,  # Disable metrics agent
                     _system_config={
                         "automatic_object_spilling_enabled": True,
@@ -89,7 +98,6 @@ def _init_ray() -> None:
                                 "params": {"directory_path": str(spill_dir)},
                             }
                         ),
-                        "enable_file_system_monitor": False,  # Disable file system monitor to suppress disk space warnings
                     },
                 )
                 _install_shutdown_handler()
