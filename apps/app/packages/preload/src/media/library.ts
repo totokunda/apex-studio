@@ -399,8 +399,6 @@ async function listServerMediaPage(
       }
     }
 
-    console.log("candidates", candidates);
-
 
     if (candidates.length === 0) return { items: [], nextCursor: null };
 
@@ -518,7 +516,7 @@ async function importMediaPaths(
     try {
       await fsp.rm(dstAbs, { force: true });
       await fsp.symlink(srcAbs, dstAbs);
-      console.log("symlink created", dstAbs, srcAbs);
+
     } catch (error) {
       console.error("Error creating symlink:", error);
       try {
