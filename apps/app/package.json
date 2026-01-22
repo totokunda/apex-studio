@@ -20,6 +20,9 @@
     "type": "git",
     "url": "https://github.com/totokunda/apex-studio.git"
   },
+  "publish": [
+      { "provider": "github", "timeout": 600000 }
+    ],
   "scripts": {
     "build": "npm run build -ws --if-present",
     "compile": "npm run build && electron-builder build --config electron-builder.cjs",
