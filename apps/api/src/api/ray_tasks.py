@@ -2932,7 +2932,7 @@ def _run_engine_from_manifest_impl(
                         output_obj,
                         result_path,
                         fps=int(fps),
-                        quality=8.0 if final else 5.0,
+                        quality=8.0 if final else 3.0,
                     )
                     media_type = "video"
 
