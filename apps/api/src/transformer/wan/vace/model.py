@@ -32,6 +32,7 @@ from diffusers.models.cache_utils import CacheMixin
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import FP32LayerNorm
+from src.transformer.efficiency.mod import InplaceRMSNorm
 from src.transformer.wan.base.model import (
     WanRotaryPosEmbed,
     WanTimeTextImageEmbedding,
@@ -44,6 +45,36 @@ from src.transformer.wan.base.attention import WanAttnProcessor2_0
 from src.transformer.base import TRANSFORMERS_REGISTRY
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+
+def _swap_qk_norm_to_inplace_rmsnorm(attn: nn.Module, *, dim: int, eps: float) -> None:
+    """
+    Replace diffusers Attention's Q/K (and added-K) norm layers with `InplaceRMSNorm`.
+
+    This is safe because Q/K tensors are fresh projections inside the attention processor,
+    and in-place normalization avoids extra allocations in long-seq inference.
+    """
+
+    def _swap(attr: str) -> None:
+        old = getattr(attn, attr, None)
+        if old is None:
+            return
+
+        # Preserve whether the original norm had affine parameters (if discoverable).
+        elementwise_affine = bool(getattr(old, "elementwise_affine", True))
+        new = InplaceRMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+
+        old_weight = getattr(old, "weight", None)
+        new_weight = getattr(new, "weight", None)
+        if old_weight is not None and new_weight is not None:
+            with torch.no_grad():
+                new_weight.copy_(old_weight.detach().to(new_weight.device))
+
+        setattr(attn, attr, new)
+
+    _swap("norm_q")
+    _swap("norm_k")
+    _swap("norm_added_k")
 
 
 class WanVACETransformerBlock(nn.Module):
@@ -81,6 +112,7 @@ class WanVACETransformerBlock(nn.Module):
             out_bias=True,
             processor=WanAttnProcessor2_0(),
         )
+        _swap_qk_norm_to_inplace_rmsnorm(self.attn1, dim=dim, eps=eps)
 
         # 3. Cross-attention
         self.attn2 = Attention(
@@ -97,6 +129,7 @@ class WanVACETransformerBlock(nn.Module):
             added_proj_bias=True,
             processor=WanAttnProcessor2_0(),
         )
+        _swap_qk_norm_to_inplace_rmsnorm(self.attn2, dim=dim, eps=eps)
         self.norm2 = (
             FP32LayerNorm(dim, eps, elementwise_affine=True)
             if cross_attn_norm
@@ -175,21 +208,33 @@ class WanVACETransformerBlock(nn.Module):
             shift_msa,
             chunk_size=self._mod_norm_chunk_size,
         )
-        attn_output = self.attn1(
-            hidden_states=norm_hidden_states, rotary_emb=rotary_emb
-        )
+        inference_mode = not torch.is_grad_enabled()
+        if inference_mode and isinstance(self.attn1.processor, WanAttnProcessor2_0):
+            # Pass as a list so the processor can clear references early (Wan2GP/LTX2 pattern).
+            norm_hidden_states = [norm_hidden_states]
+        attn_output = self.attn1(hidden_states=norm_hidden_states, rotary_emb=rotary_emb)
 
-        control_hidden_states = control_hidden_states + attn_output * gate_msa
+        if inference_mode and not attn_output.requires_grad:
+            attn_output.mul_(gate_msa)
+            control_hidden_states.add_(attn_output)
+        else:
+            control_hidden_states = control_hidden_states + attn_output * gate_msa
 
         # 2. Cross-attention
         norm_hidden_states = _chunked_norm(
             self.norm2, control_hidden_states, chunk_size=self._norm_chunk_size
         )
+        if inference_mode and isinstance(self.attn2.processor, WanAttnProcessor2_0):
+            # Pass as lists so the processor can clear references early.
+            norm_hidden_states = [norm_hidden_states]
+            encoder_hidden_states = [encoder_hidden_states]
         attn_output = self.attn2(
-            hidden_states=norm_hidden_states,
-            encoder_hidden_states=encoder_hidden_states,
+            hidden_states=norm_hidden_states, encoder_hidden_states=encoder_hidden_states
         )
-        control_hidden_states = control_hidden_states + attn_output
+        if inference_mode and not attn_output.requires_grad:
+            control_hidden_states.add_(attn_output)
+        else:
+            control_hidden_states = control_hidden_states + attn_output
 
         # 3. Feed-forward
         norm_hidden_states = _chunked_modulated_norm(
@@ -207,7 +252,11 @@ class WanVACETransformerBlock(nn.Module):
         else:
             ff_output = self.ffn(norm_hidden_states)
 
-        control_hidden_states = control_hidden_states + ff_output * c_gate_msa
+        if inference_mode and not ff_output.requires_grad:
+            ff_output.mul_(c_gate_msa)
+            control_hidden_states.add_(ff_output)
+        else:
+            control_hidden_states = control_hidden_states + ff_output * c_gate_msa
 
         conditioning_states = None
         if self.proj_out is not None:
@@ -469,6 +518,81 @@ class WanVACETransformer3DModel(
                 norm_chunk_size=p.get("norm_chunk_size", None),
             )
 
+    def _get_rope_cpu_cache(self) -> Dict[tuple, torch.Tensor]:
+        if not hasattr(self, "_rope_cpu_cache"):
+            self._rope_cpu_cache = {}
+        return self._rope_cpu_cache
+
+    def _rope_cache_key(
+        self,
+        *,
+        tag: str,
+        ppf: int,
+        pph: int,
+        ppw: int,
+        ppf_ip: Optional[int] = None,
+        pph_ip: Optional[int] = None,
+        ppw_ip: Optional[int] = None,
+        time_index: Optional[int] = None,
+    ) -> tuple:
+        return (
+            tag,
+            int(ppf),
+            int(pph),
+            int(ppw),
+            int(ppf_ip) if ppf_ip is not None else None,
+            int(pph_ip) if pph_ip is not None else None,
+            int(ppw_ip) if ppw_ip is not None else None,
+            int(time_index) if time_index is not None else None,
+        )
+
+    def _build_rope_cached(
+        self,
+        *,
+        hidden_states: torch.Tensor,
+        ip_image_hidden_states: Optional[torch.Tensor] = None,
+        time_index: Optional[int] = None,
+        rope_on_cpu: bool = False,
+    ) -> torch.Tensor:
+        if not rope_on_cpu:
+            return self.rope(
+                hidden_states, ip_image_hidden_states, time_index=time_index
+            )
+
+        _, _, t, h, w = hidden_states.shape
+        p_t, p_h, p_w = self.config.patch_size
+        ppf, pph, ppw = t // p_t, h // p_h, w // p_w
+
+        if ip_image_hidden_states is None:
+            key = self._rope_cache_key(tag="main", ppf=ppf, pph=pph, ppw=ppw)
+        else:
+            _, _, t_ip, h_ip, w_ip = ip_image_hidden_states.shape
+            ppf_ip, pph_ip, ppw_ip = (
+                t_ip // p_t,
+                h_ip // p_h,
+                w_ip // p_w,
+            )
+            key = self._rope_cache_key(
+                tag="ip",
+                ppf=ppf,
+                pph=pph,
+                ppw=ppw,
+                ppf_ip=ppf_ip,
+                pph_ip=pph_ip,
+                ppw_ip=ppw_ip,
+                time_index=time_index or 0,
+            )
+
+        cache = self._get_rope_cpu_cache()
+        if key not in cache:
+            cache[key] = self.rope(
+                hidden_states,
+                ip_image_hidden_states,
+                time_index=time_index,
+                device=torch.device("cpu"),
+            )
+        return cache[key]
+
     def init_ip_projections(self, train: bool = False):
         for block in self.blocks:
             block.attn1.init_ip_projections(train=train)
@@ -490,6 +614,7 @@ class WanVACETransformer3DModel(
         return_dict: bool = True,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         enhance_kwargs: Optional[Dict[str, Any]] = None,
+        rope_on_cpu: Optional[bool] = None,
     ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
 
         if enhance_kwargs is not None:
@@ -497,6 +622,11 @@ class WanVACETransformer3DModel(
             num_frames = enhance_kwargs.get("num_frames", None)
             if enhance_weight is not None and num_frames is not None:
                 self.set_enhance(enhance_weight, num_frames)
+
+        if rope_on_cpu is None:
+            rope_on_cpu = (
+                getattr(self, "_apex_forward_kwargs_defaults", {}) or {}
+            ).get("rope_on_cpu", False)
 
         if attention_kwargs is not None:
             attention_kwargs = attention_kwargs.copy()
@@ -534,14 +664,19 @@ class WanVACETransformer3DModel(
             )
 
         # 1. Rotary position embedding
-        rotary_emb = self.rope(hidden_states)
+        rotary_emb = self._build_rope_cached(
+            hidden_states=hidden_states, rope_on_cpu=rope_on_cpu
+        )
         ip_hidden_states_len = 0
         if ip_image_hidden_states is not None:
             hidden_states_ip = self.patch_embedding(ip_image_hidden_states)
             hidden_states_ip = hidden_states_ip.flatten(2).transpose(1, 2)
             ip_hidden_states_len = hidden_states_ip.shape[1]
-            rotary_emb_ip = self.rope(
-                hidden_states, ip_image_hidden_states, time_index=0
+            rotary_emb_ip = self._build_rope_cached(
+                hidden_states=hidden_states,
+                ip_image_hidden_states=ip_image_hidden_states,
+                time_index=0,
+                rope_on_cpu=rope_on_cpu,
             )
             rotary_emb = torch.concat([rotary_emb, rotary_emb_ip], dim=2)
         else:

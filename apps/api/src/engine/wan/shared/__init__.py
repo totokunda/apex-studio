@@ -379,9 +379,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
         keep_moe_transformers_on_cpu = self._should_keep_moe_transformers_on_cpu()
         chunking_profile = kwargs.get("chunking_profile", "none")
 
-        if total_steps <= 8:
-            render_on_step = False
-
+    
         has_offloaded_low_noise_transformer = False
         has_loaded_low_noise_transformer = False
         has_offloaded_high_noise_transformer = False
@@ -429,16 +427,9 @@ class WanShared(BaseEngine, WanMLXDenoise):
                         )
 
                         self.load_component_by_name("high_noise_transformer")
-
-                        self.to_device(self.high_noise_transformer)
                         self.high_noise_transformer.current_steps = i
                         self.high_noise_transformer.num_inference_steps = total_steps
-                        if chunking_profile != "none" and hasattr(
-                            self.high_noise_transformer, "set_chunking_profile"
-                        ):
-                            self.high_noise_transformer.set_chunking_profile(
-                                chunking_profile
-                            )
+                        
                         if easy_cache_thresh > 0.0:
                             self.high_noise_transformer.enable_easy_cache(
                                 total_steps,
@@ -455,12 +446,17 @@ class WanShared(BaseEngine, WanMLXDenoise):
                             float(i) / float(total_steps) if total_steps else 0.0,
                             "New transformer ready",
                         )
-
-                        has_loaded_high_noise_transformer = True
-
+                    
+            
                     if not has_loaded_high_noise_transformer:
                         self.to_device(self.high_noise_transformer)
-                        has_loaded_high_noise_transformer = True
+                        
+                        if chunking_profile != "none" and hasattr(
+                            self.high_noise_transformer, "set_chunking_profile"
+                        ):
+                            self.high_noise_transformer.set_chunking_profile(
+                                chunking_profile
+                            )
 
                     transformer = self.high_noise_transformer
 
@@ -492,13 +488,8 @@ class WanShared(BaseEngine, WanMLXDenoise):
                             "Loading alternate transformer",
                         )
                         self.load_component_by_name("low_noise_transformer")
-                        self.to_device(self.low_noise_transformer)
-                        if chunking_profile != "none" and hasattr(
-                            self.low_noise_transformer, "set_chunking_profile"
-                        ):
-                            self.low_noise_transformer.set_chunking_profile(
-                                chunking_profile
-                            )
+           
+                        
                         if easy_cache_thresh > 0.0:
                             self.low_noise_transformer.enable_easy_cache(
                                 total_steps,
@@ -511,10 +502,16 @@ class WanShared(BaseEngine, WanMLXDenoise):
                             float(i) / float(total_steps) if total_steps else 0.0,
                             "Alternate transformer ready",
                         )
-                        has_loaded_low_noise_transformer = True
+                        
 
                     if not has_loaded_low_noise_transformer:
                         self.to_device(self.low_noise_transformer)
+                        if chunking_profile != "none" and hasattr(
+                            self.low_noise_transformer, "set_chunking_profile"
+                        ):
+                            self.low_noise_transformer.set_chunking_profile(
+                                chunking_profile
+                            )
                         has_loaded_low_noise_transformer = True
 
                     transformer = self.low_noise_transformer
@@ -606,6 +603,9 @@ class WanShared(BaseEngine, WanMLXDenoise):
         chunking_profile = kwargs.get("chunking_profile", "none")
         easy_cache_thresh = kwargs.get("easy_cache_thresh", 0.00)
         easy_cache_ret_steps = kwargs.get("easy_cache_ret_steps", 10)
+        transformer_kwargs = kwargs.get("transformer_kwargs", {})
+        unconditional_transformer_kwargs = kwargs.get("unconditional_transformer_kwargs", {}) or {}
+        
 
         total_steps = len(timesteps) if timesteps is not None else 0
         safe_emit_progress(denoise_progress_callback, 0.0, "Starting denoise")
@@ -626,6 +626,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
         if not self.transformer:
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
+        
         if chunking_profile != "none" and hasattr(
             self.transformer, "set_chunking_profile"
         ):
@@ -678,7 +679,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
                     ip_image_hidden_states=ip_image_latent,
                     timestep=timestep,
                     return_dict=False,
-                    **kwargs.get("transformer_kwargs", {}),
+                    **transformer_kwargs,
                 )[0]
 
                 ip_image_latent = None
@@ -690,7 +691,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
                         hidden_states=latent_model_input,
                         timestep=timestep,
                         return_dict=False,
-                        **kwargs.get("unconditional_transformer_kwargs", {}),
+                        **unconditional_transformer_kwargs,
                     )[0]
                     noise_pred = uncond_noise_pred + guidance_scale * (
                         noise_pred - uncond_noise_pred

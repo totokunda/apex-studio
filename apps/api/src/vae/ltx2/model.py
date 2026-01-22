@@ -53,15 +53,13 @@ class PerChannelRMSNorm(nn.Module):
         self.channel_dim = channel_dim
         self.eps = eps
 
-    def forward(
-        self, x: torch.Tensor, channel_dim: Optional[int] = None
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, channel_dim: Optional[int] = None) -> torch.Tensor:
         """
         Apply RMS normalization along the configured dimension.
         """
         channel_dim = channel_dim or self.channel_dim
         # Compute mean of squared values along `dim`, keep dimensions for broadcasting.
-        mean_sq = torch.mean(x**2, dim=channel_dim, keepdim=True)
+        mean_sq = torch.mean(x**2, dim=self.channel_dim, keepdim=True)
         # Normalize by the root-mean-square (RMS).
         rms = torch.sqrt(mean_sq + self.eps)
         return x / rms
@@ -83,11 +81,7 @@ class LTX2VideoCausalConv3d(nn.Module):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = (
-            kernel_size
-            if isinstance(kernel_size, tuple)
-            else (kernel_size, kernel_size, kernel_size)
-        )
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size, kernel_size)
 
         dilation = dilation if isinstance(dilation, tuple) else (dilation, 1, 1)
         stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
@@ -110,20 +104,12 @@ class LTX2VideoCausalConv3d(nn.Module):
         time_kernel_size = self.kernel_size[0]
 
         if causal:
-            pad_left = hidden_states[:, :, :1, :, :].repeat(
-                (1, 1, time_kernel_size - 1, 1, 1)
-            )
+            pad_left = hidden_states[:, :, :1, :, :].repeat((1, 1, time_kernel_size - 1, 1, 1))
             hidden_states = torch.concatenate([pad_left, hidden_states], dim=2)
         else:
-            pad_left = hidden_states[:, :, :1, :, :].repeat(
-                (1, 1, (time_kernel_size - 1) // 2, 1, 1)
-            )
-            pad_right = hidden_states[:, :, -1:, :, :].repeat(
-                (1, 1, (time_kernel_size - 1) // 2, 1, 1)
-            )
-            hidden_states = torch.concatenate(
-                [pad_left, hidden_states, pad_right], dim=2
-            )
+            pad_left = hidden_states[:, :, :1, :, :].repeat((1, 1, (time_kernel_size - 1) // 2, 1, 1))
+            pad_right = hidden_states[:, :, -1:, :, :].repeat((1, 1, (time_kernel_size - 1) // 2, 1, 1))
+            hidden_states = torch.concatenate([pad_left, hidden_states, pad_right], dim=2)
 
         hidden_states = self.conv(hidden_states)
         return hidden_states
@@ -190,16 +176,9 @@ class LTX2VideoResnetBlock3d(nn.Module):
         self.norm3 = None
         self.conv_shortcut = None
         if in_channels != out_channels:
-            self.norm3 = nn.LayerNorm(
-                in_channels, eps=eps, elementwise_affine=True, bias=True
-            )
+            self.norm3 = nn.LayerNorm(in_channels, eps=eps, elementwise_affine=True, bias=True)
             # LTX 2.0 uses a normal nn.Conv3d here rather than LTXVideoCausalConv3d
-            self.conv_shortcut = nn.Conv3d(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=1,
-                stride=1,
-            )
+            self.conv_shortcut = nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1)
 
         self.per_channel_scale1 = None
         self.per_channel_scale2 = None
@@ -209,9 +188,7 @@ class LTX2VideoResnetBlock3d(nn.Module):
 
         self.scale_shift_table = None
         if timestep_conditioning:
-            self.scale_shift_table = nn.Parameter(
-                torch.randn(4, in_channels) / in_channels**0.5
-            )
+            self.scale_shift_table = nn.Parameter(torch.randn(4, in_channels) / in_channels**0.5)
 
     def forward(
         self,
@@ -225,10 +202,7 @@ class LTX2VideoResnetBlock3d(nn.Module):
         hidden_states = self.norm1(hidden_states)
 
         if self.scale_shift_table is not None:
-            temb = (
-                temb.unflatten(1, (4, -1))
-                + self.scale_shift_table[None, ..., None, None, None]
-            )
+            temb = temb.unflatten(1, (4, -1)) + self.scale_shift_table[None, ..., None, None, None]
             shift_1, scale_1, shift_2, scale_2 = temb.unbind(dim=1)
             hidden_states = hidden_states * (1 + scale_1) + shift_1
 
@@ -238,15 +212,9 @@ class LTX2VideoResnetBlock3d(nn.Module):
         if self.per_channel_scale1 is not None:
             spatial_shape = hidden_states.shape[-2:]
             spatial_noise = torch.randn(
-                spatial_shape,
-                generator=generator,
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
+                spatial_shape, generator=generator, device=hidden_states.device, dtype=hidden_states.dtype
             )[None]
-            hidden_states = (
-                hidden_states
-                + (spatial_noise * self.per_channel_scale1)[None, :, None, ...]
-            )
+            hidden_states = hidden_states + (spatial_noise * self.per_channel_scale1)[None, :, None, ...]
 
         hidden_states = self.norm2(hidden_states)
 
@@ -260,15 +228,9 @@ class LTX2VideoResnetBlock3d(nn.Module):
         if self.per_channel_scale2 is not None:
             spatial_shape = hidden_states.shape[-2:]
             spatial_noise = torch.randn(
-                spatial_shape,
-                generator=generator,
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
+                spatial_shape, generator=generator, device=hidden_states.device, dtype=hidden_states.dtype
             )[None]
-            hidden_states = (
-                hidden_states
-                + (spatial_noise * self.per_channel_scale2)[None, :, None, ...]
-            )
+            hidden_states = hidden_states + (spatial_noise * self.per_channel_scale2)[None, :, None, ...]
 
         if self.norm3 is not None:
             inputs = self.norm3(inputs.movedim(1, -1)).movedim(-1, 1)
@@ -292,13 +254,9 @@ class LTXVideoDownsampler3d(nn.Module):
         super().__init__()
 
         self.stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
-        self.group_size = (
-            in_channels * stride[0] * stride[1] * stride[2]
-        ) // out_channels
+        self.group_size = (in_channels * stride[0] * stride[1] * stride[2]) // out_channels
 
-        out_channels = out_channels // (
-            self.stride[0] * self.stride[1] * self.stride[2]
-        )
+        out_channels = out_channels // (self.stride[0] * self.stride[1] * self.stride[2])
 
         self.conv = LTX2VideoCausalConv3d(
             in_channels=in_channels,
@@ -309,9 +267,7 @@ class LTXVideoDownsampler3d(nn.Module):
         )
 
     def forward(self, hidden_states: torch.Tensor, causal: bool = True) -> torch.Tensor:
-        hidden_states = torch.cat(
-            [hidden_states[:, :, : self.stride[0] - 1], hidden_states], dim=2
-        )
+        hidden_states = torch.cat([hidden_states[:, :, : self.stride[0] - 1], hidden_states], dim=2)
 
         residual = (
             hidden_states.unflatten(4, (-1, self.stride[2]))
@@ -350,9 +306,7 @@ class LTXVideoUpsampler3d(nn.Module):
         self.residual = residual
         self.upscale_factor = upscale_factor
 
-        out_channels = (
-            in_channels * stride[0] * stride[1] * stride[2]
-        ) // upscale_factor
+        out_channels = (in_channels * stride[0] * stride[1] * stride[2]) // upscale_factor
 
         self.conv = LTX2VideoCausalConv3d(
             in_channels=in_channels,
@@ -367,44 +321,18 @@ class LTXVideoUpsampler3d(nn.Module):
 
         if self.residual:
             residual = hidden_states.reshape(
-                batch_size,
-                -1,
-                self.stride[0],
-                self.stride[1],
-                self.stride[2],
-                num_frames,
-                height,
-                width,
+                batch_size, -1, self.stride[0], self.stride[1], self.stride[2], num_frames, height, width
             )
-            residual = (
-                residual.permute(0, 1, 5, 2, 6, 3, 7, 4)
-                .flatten(6, 7)
-                .flatten(4, 5)
-                .flatten(2, 3)
-            )
-            repeats = (
-                self.stride[0] * self.stride[1] * self.stride[2]
-            ) // self.upscale_factor
+            residual = residual.permute(0, 1, 5, 2, 6, 3, 7, 4).flatten(6, 7).flatten(4, 5).flatten(2, 3)
+            repeats = (self.stride[0] * self.stride[1] * self.stride[2]) // self.upscale_factor
             residual = residual.repeat(1, repeats, 1, 1, 1)
             residual = residual[:, :, self.stride[0] - 1 :]
 
         hidden_states = self.conv(hidden_states, causal=causal)
         hidden_states = hidden_states.reshape(
-            batch_size,
-            -1,
-            self.stride[0],
-            self.stride[1],
-            self.stride[2],
-            num_frames,
-            height,
-            width,
+            batch_size, -1, self.stride[0], self.stride[1], self.stride[2], num_frames, height, width
         )
-        hidden_states = (
-            hidden_states.permute(0, 1, 5, 2, 6, 3, 7, 4)
-            .flatten(6, 7)
-            .flatten(4, 5)
-            .flatten(2, 3)
-        )
+        hidden_states = hidden_states.permute(0, 1, 5, 2, 6, 3, 7, 4).flatten(6, 7).flatten(4, 5).flatten(2, 3)
         hidden_states = hidden_states[:, :, self.stride[0] - 1 :]
 
         if self.residual:
@@ -525,9 +453,7 @@ class LTX2VideoDownBlock3D(nn.Module):
 
         for i, resnet in enumerate(self.resnets):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
-                hidden_states = self._gradient_checkpointing_func(
-                    resnet, hidden_states, temb, generator, causal
-                )
+                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb, generator, causal)
             else:
                 hidden_states = resnet(hidden_states, temb, generator, causal=causal)
 
@@ -576,9 +502,7 @@ class LTX2VideoMidBlock3d(nn.Module):
 
         self.time_embedder = None
         if timestep_conditioning:
-            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(
-                in_channels * 4, 0
-            )
+            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(in_channels * 4, 0)
 
         resnets = []
         for _ in range(num_layers):
@@ -619,9 +543,7 @@ class LTX2VideoMidBlock3d(nn.Module):
 
         for i, resnet in enumerate(self.resnets):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
-                hidden_states = self._gradient_checkpointing_func(
-                    resnet, hidden_states, temb, generator, causal
-                )
+                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb, generator, causal)
             else:
                 hidden_states = resnet(hidden_states, temb, generator, causal=causal)
 
@@ -676,9 +598,7 @@ class LTX2VideoUpBlock3d(nn.Module):
 
         self.time_embedder = None
         if timestep_conditioning:
-            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(
-                in_channels * 4, 0
-            )
+            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(in_channels * 4, 0)
 
         self.conv_in = None
         if in_channels != out_channels:
@@ -751,9 +671,7 @@ class LTX2VideoUpBlock3d(nn.Module):
 
         for i, resnet in enumerate(self.resnets):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
-                hidden_states = self._gradient_checkpointing_func(
-                    resnet, hidden_states, temb, generator, causal
-                )
+                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb, generator, causal)
             else:
                 hidden_states = resnet(hidden_states, temb, generator, causal=causal)
 
@@ -806,12 +724,7 @@ class LTX2VideoEncoder3d(nn.Module):
         ),
         spatio_temporal_scaling: Tuple[bool, ...] = (True, True, True, True),
         layers_per_block: Tuple[int, ...] = (4, 6, 6, 2, 2),
-        downsample_type: Tuple[str, ...] = (
-            "spatial",
-            "temporal",
-            "spatiotemporal",
-            "spatiotemporal",
-        ),
+        downsample_type: Tuple[str, ...] = ("spatial", "temporal", "spatiotemporal", "spatiotemporal"),
         patch_size: int = 4,
         patch_size_t: int = 1,
         resnet_norm_eps: float = 1e-6,
@@ -878,9 +791,7 @@ class LTX2VideoEncoder3d(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(
-        self, hidden_states: torch.Tensor, causal: Optional[bool] = None
-    ) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
         r"""The forward method of the `LTXVideoEncoder3d` class."""
 
         p = self.patch_size
@@ -893,14 +804,7 @@ class LTX2VideoEncoder3d(nn.Module):
         causal = causal or self.is_causal
 
         hidden_states = hidden_states.reshape(
-            batch_size,
-            num_channels,
-            post_patch_num_frames,
-            p_t,
-            post_patch_height,
-            p,
-            post_patch_width,
-            p,
+            batch_size, num_channels, post_patch_num_frames, p_t, post_patch_height, p, post_patch_width, p
         )
         # Thanks for driving me insane with the weird patching order :(
         hidden_states = hidden_states.permute(0, 1, 3, 7, 5, 2, 4, 6).flatten(1, 4)
@@ -908,13 +812,9 @@ class LTX2VideoEncoder3d(nn.Module):
 
         if torch.is_grad_enabled() and self.gradient_checkpointing:
             for down_block in self.down_blocks:
-                hidden_states = self._gradient_checkpointing_func(
-                    down_block, hidden_states, None, None, causal
-                )
+                hidden_states = self._gradient_checkpointing_func(down_block, hidden_states, None, None, causal)
 
-            hidden_states = self._gradient_checkpointing_func(
-                self.mid_block, hidden_states, None, None, causal
-            )
+            hidden_states = self._gradient_checkpointing_func(self.mid_block, hidden_states, None, None, causal)
         else:
             for down_block in self.down_blocks:
                 hidden_states = down_block(hidden_states, causal=causal)
@@ -1048,15 +948,9 @@ class LTX2VideoDecoder3d(nn.Module):
         self.scale_shift_table = None
         self.timestep_scale_multiplier = None
         if timestep_conditioning:
-            self.timestep_scale_multiplier = nn.Parameter(
-                torch.tensor(1000.0, dtype=torch.float32)
-            )
-            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(
-                output_channel * 2, 0
-            )
-            self.scale_shift_table = nn.Parameter(
-                torch.randn(2, output_channel) / output_channel**0.5
-            )
+            self.timestep_scale_multiplier = nn.Parameter(torch.tensor(1000.0, dtype=torch.float32))
+            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(output_channel * 2, 0)
+            self.scale_shift_table = nn.Parameter(torch.randn(2, output_channel) / output_channel**0.5)
 
         self.gradient_checkpointing = False
 
@@ -1074,14 +968,10 @@ class LTX2VideoDecoder3d(nn.Module):
             temb = temb * self.timestep_scale_multiplier
 
         if torch.is_grad_enabled() and self.gradient_checkpointing:
-            hidden_states = self._gradient_checkpointing_func(
-                self.mid_block, hidden_states, temb, None, causal
-            )
+            hidden_states = self._gradient_checkpointing_func(self.mid_block, hidden_states, temb, None, causal)
 
             for up_block in self.up_blocks:
-                hidden_states = self._gradient_checkpointing_func(
-                    up_block, hidden_states, temb, None, causal
-                )
+                hidden_states = self._gradient_checkpointing_func(up_block, hidden_states, temb, None, causal)
         else:
             hidden_states = self.mid_block(hidden_states, temb, causal=causal)
 
@@ -1110,22 +1000,13 @@ class LTX2VideoDecoder3d(nn.Module):
         p_t = self.patch_size_t
 
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
-        hidden_states = hidden_states.reshape(
-            batch_size, -1, p_t, p, p, num_frames, height, width
-        )
-        hidden_states = (
-            hidden_states.permute(0, 1, 5, 2, 6, 4, 7, 3)
-            .flatten(6, 7)
-            .flatten(4, 5)
-            .flatten(2, 3)
-        )
+        hidden_states = hidden_states.reshape(batch_size, -1, p_t, p, p, num_frames, height, width)
+        hidden_states = hidden_states.permute(0, 1, 5, 2, 6, 4, 7, 3).flatten(6, 7).flatten(4, 5).flatten(2, 3)
 
         return hidden_states
 
 
-class AutoencoderKLLTX2Video(
-    ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalModelMixin
-):
+class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalModelMixin):
     r"""
     A VAE model with KL loss for encoding images into latents and decoding latent representations into images. Used in
     [LTX-2](https://huggingface.co/Lightricks/LTX-2).
@@ -1186,12 +1067,7 @@ class AutoencoderKLLTX2Video(
         spatio_temporal_scaling: Tuple[bool, ...] = (True, True, True, True),
         decoder_spatio_temporal_scaling: Tuple[bool, ...] = (True, True, True),
         decoder_inject_noise: Tuple[bool, ...] = (False, False, False, False),
-        downsample_type: Tuple[str, ...] = (
-            "spatial",
-            "temporal",
-            "spatiotemporal",
-            "spatiotemporal",
-        ),
+        downsample_type: Tuple[str, ...] = ("spatial", "temporal", "spatiotemporal", "spatiotemporal"),
         upsample_residual: Tuple[bool, ...] = (True, True, True),
         upsample_factor: Tuple[int, ...] = (2, 2, 2),
         timestep_conditioning: bool = False,
@@ -1262,8 +1138,7 @@ class AutoencoderKLLTX2Video(
         # When decoding spatially large video latents, the memory requirement is very high. By breaking the video latent
         # frames spatially into smaller tiles and performing multiple forward passes for decoding, and then blending the
         # intermediate tiles together, the memory requirement can be lowered.
-        # Tiling is enabled by default for LTX2 video VAE (can be disabled via `enable_tiling(enabled=False)`).
-        self.use_tiling = True
+        self.use_tiling = False
 
         # When decoding temporally long video latents, the memory requirement is very high. By decoding latent frames
         # at a fixed frame batch size (based on `self.num_latent_frames_batch_sizes`), the memory requirement can be lowered.
@@ -1288,185 +1163,54 @@ class AutoencoderKLLTX2Video(
 
     def enable_tiling(
         self,
-        enabled: bool = True,
         tile_sample_min_height: Optional[int] = None,
         tile_sample_min_width: Optional[int] = None,
         tile_sample_min_num_frames: Optional[int] = None,
-        tile_sample_stride_height: Optional[int] = None,
-        tile_sample_stride_width: Optional[int] = None,
-        tile_sample_stride_num_frames: Optional[int] = None,
+        tile_sample_stride_height: Optional[float] = None,
+        tile_sample_stride_width: Optional[float] = None,
+        tile_sample_stride_num_frames: Optional[float] = None,
         use_framewise_encoding: Optional[bool] = None,
         use_framewise_decoding: Optional[bool] = None,
         num_sample_frames_batch_size: Optional[int] = None,
         num_latent_frames_batch_size: Optional[int] = None,
+        enabled: bool = True,
     ) -> None:
         r"""
-        Enable/disable tiled VAE decoding/encoding and configure tiling + framewise behavior.
-
-        When tiling is enabled, the VAE may split the input tensor into overlapping spatial/temporal tiles to compute
-        decoding/encoding in several steps, blending overlaps to avoid seams. This is useful for saving memory and
-        processing larger videos.
+        Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
+        compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
+        processing larger images.
 
         Args:
-            enabled (`bool`, defaults to `True`):
-                Enable tiling when `True`, disable when `False`.
             tile_sample_min_height (`int`, *optional*):
                 The minimum height required for a sample to be separated into tiles across the height dimension.
             tile_sample_min_width (`int`, *optional*):
                 The minimum width required for a sample to be separated into tiles across the width dimension.
-            tile_sample_min_num_frames (`int`, *optional*):
-                The minimum number of frames required for temporal tiling to be used.
             tile_sample_stride_height (`int`, *optional*):
                 The minimum amount of overlap between two consecutive vertical tiles. This is to ensure that there are
                 no tiling artifacts produced across the height dimension.
             tile_sample_stride_width (`int`, *optional*):
                 The stride between two consecutive horizontal tiles. This is to ensure that there are no tiling
                 artifacts produced across the width dimension.
-            tile_sample_stride_num_frames (`int`, *optional*):
-                The overlap/stride for temporal tiling.
-            use_framewise_encoding (`bool`, *optional*):
-                If set, forces framewise (temporal tiled) encoding regardless of heuristics.
-            use_framewise_decoding (`bool`, *optional*):
-                If set, forces framewise (temporal tiled) decoding regardless of heuristics.
-            num_sample_frames_batch_size (`int`, *optional*):
-                Hint for how many sample frames to decode per batch (best-effort; may be used by callers).
-            num_latent_frames_batch_size (`int`, *optional*):
-                Hint for how many latent frames to decode per batch (best-effort; may be used by callers).
         """
-        self.use_tiling = bool(enabled)
-        self.tile_sample_min_height = (
-            tile_sample_min_height or self.tile_sample_min_height
-        )
+        self.use_tiling = enabled
+        self.tile_sample_min_height = tile_sample_min_height or self.tile_sample_min_height
         self.tile_sample_min_width = tile_sample_min_width or self.tile_sample_min_width
-        self.tile_sample_min_num_frames = (
-            tile_sample_min_num_frames or self.tile_sample_min_num_frames
-        )
-        self.tile_sample_stride_height = (
-            tile_sample_stride_height or self.tile_sample_stride_height
-        )
-        self.tile_sample_stride_width = (
-            tile_sample_stride_width or self.tile_sample_stride_width
-        )
-        self.tile_sample_stride_num_frames = (
-            tile_sample_stride_num_frames or self.tile_sample_stride_num_frames
-        )
-
-        if use_framewise_encoding is not None:
-            self.use_framewise_encoding = bool(use_framewise_encoding)
-        if use_framewise_decoding is not None:
-            self.use_framewise_decoding = bool(use_framewise_decoding)
-        if num_sample_frames_batch_size is not None:
-            self.num_sample_frames_batch_size = int(num_sample_frames_batch_size)
-        if num_latent_frames_batch_size is not None:
-            self.num_latent_frames_batch_size = int(num_latent_frames_batch_size)
-
-    def _get_cuda_vram_info_bytes(
-        self, device: torch.device
-    ) -> Tuple[Optional[int], Optional[int]]:
-        """
-        Returns (free_bytes, total_bytes) for CUDA devices, otherwise (None, None).
-
-        Note: "available" VRAM is approximated via `torch.cuda.mem_get_info()`.
-        """
-        if device is None:
-            return (None, None)
-        if device.type != "cuda" or not torch.cuda.is_available():
-            return (None, None)
-
-        try:
-            # Torch supports both `mem_get_info()` and `mem_get_info(device)` depending on version.
-            if device.index is None:
-                free, total = torch.cuda.mem_get_info()
-            else:
-                free, total = torch.cuda.mem_get_info(device.index)
-            return int(free), int(total)
-        except Exception:
-            # Conservative fallback: total VRAM only, no free VRAM.
-            try:
-                idx = (
-                    device.index
-                    if device.index is not None
-                    else torch.cuda.current_device()
-                )
-                total = int(torch.cuda.get_device_properties(idx).total_memory)
-                return (None, total)
-            except Exception:
-                return (None, None)
-
-    def _is_low_vram_device(
-        self, device: torch.device, threshold_gb: float = 16.0
-    ) -> bool:
-        _, total = self._get_cuda_vram_info_bytes(device)
-        if total is None:
-            return False
-        return total < int(threshold_gb * 1024**3)
-
-    def _latent_channels(self) -> int:
-        # `latents_mean` is registered as shape (latent_channels,).
-        return int(self.latents_mean.numel())
-
-    def _estimate_latent_shape_from_sample(
-        self, x: torch.Tensor
-    ) -> Tuple[int, int, int, int, int]:
-        """
-        Estimate (b, c, f, h, w) for decoded latents (z) produced by the posterior.
-        """
-        b, _, f, h, w = x.shape
-        latent_f = (f - 1) // int(self.temporal_compression_ratio) + 1
-        latent_h = h // int(self.spatial_compression_ratio)
-        latent_w = w // int(self.spatial_compression_ratio)
-        return (b, self._latent_channels(), latent_f, latent_h, latent_w)
-
-    def _num_bytes(self, shape: Tuple[int, ...], dtype: torch.dtype) -> int:
-        # `torch.finfo/torch.iinfo` don't support all dtypes cleanly; use a tiny tensor.
-        return int(torch.empty((), dtype=dtype).element_size()) * int(
-            torch.tensor(shape).prod().item()
-        )
-
-    def _should_use_framewise_for_encode(self, x: torch.Tensor) -> bool:
-        # Respect explicit opt-in.
-        if self.use_framewise_encoding:
-            return True
-
-        # Length-based requirement: long videos should be encoded framewise to avoid OOM from one-shot activations.
-        # Uses the same windowing unit as `_temporal_tiled_encode`.
-        if x.shape[2] > int(self.tile_sample_min_num_frames):
-            return True
-
-        free, total = self._get_cuda_vram_info_bytes(x.device)
-        # Hard requirement: for VRAM <16GB, framewise decoding/encoding always.
-        if total is not None and total < 16 * 1024**3:
-            return True
-
-        # If we can't read free VRAM, keep current behavior.
-        if free is None:
-            return False
-
-        # Heuristic: compare estimated latent size to available VRAM.
-        est_latent_shape = self._estimate_latent_shape_from_sample(x)
-        est_latent_bytes = self._num_bytes(est_latent_shape, dtype=x.dtype)
-
-        # Encoding activations can be several multiples of latent size; keep a safety margin.
-        activation_multiplier = 8
-        safety_fraction = 0.80
-        return (est_latent_bytes * activation_multiplier) > int(free * safety_fraction)
-
-    def _should_use_framewise_for_decode(self, z: torch.Tensor) -> bool:
-        # Respect explicit opt-in.
-        if self.use_framewise_decoding:
-            return True
-
+        self.tile_sample_min_num_frames = tile_sample_min_num_frames or self.tile_sample_min_num_frames
+        self.tile_sample_stride_height = tile_sample_stride_height or self.tile_sample_stride_height
+        self.tile_sample_stride_width = tile_sample_stride_width or self.tile_sample_stride_width
+        self.tile_sample_stride_num_frames = tile_sample_stride_num_frames or self.tile_sample_stride_num_frames
+        self.use_framewise_encoding = use_framewise_encoding or self.use_framewise_encoding
+        self.use_framewise_decoding = use_framewise_decoding or self.use_framewise_decoding
+        self.num_sample_frames_batch_size = num_sample_frames_batch_size or self.num_sample_frames_batch_size
+        self.num_latent_frames_batch_size = num_latent_frames_batch_size or self.num_latent_frames_batch_size
+        
     def _encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = x.shape
 
-        # Auto-decide framewise encoding based on VRAM + estimated latent size.
-        # Also fixes a bug: this was previously checking `use_framewise_decoding`.
-        if self._should_use_framewise_for_encode(x):
+        if self.use_framewise_decoding and num_frames > self.tile_sample_min_num_frames:
             return self._temporal_tiled_encode(x, causal=causal)
 
-        if self.use_tiling and (
-            width > self.tile_sample_min_width or height > self.tile_sample_min_height
-        ):
+        if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
             return self.tiled_encode(x, causal=causal)
 
         enc = self.encoder(x, causal=causal)
@@ -1490,9 +1234,7 @@ class AutoencoderKLLTX2Video(
                 [`~models.autoencoder_kl.AutoencoderKLOutput`] is returned, otherwise a plain `tuple` is returned.
         """
         if self.use_slicing and x.shape[0] > 1:
-            encoded_slices = [
-                self._encode(x_slice, causal=causal) for x_slice in x.split(1)
-            ]
+            encoded_slices = [self._encode(x_slice, causal=causal) for x_slice in x.split(1)]
             h = torch.cat(encoded_slices)
         else:
             h = self._encode(x, causal=causal)
@@ -1510,25 +1252,15 @@ class AutoencoderKLLTX2Video(
         return_dict: bool = True,
     ) -> Union[DecoderOutput, torch.Tensor]:
         batch_size, num_channels, num_frames, height, width = z.shape
-        tile_latent_min_height = (
-            self.tile_sample_min_height // self.spatial_compression_ratio
-        )
-        tile_latent_min_width = (
-            self.tile_sample_min_width // self.spatial_compression_ratio
-        )
-        tile_latent_min_num_frames = (
-            self.tile_sample_min_num_frames // self.temporal_compression_ratio
-        )
 
-        # Auto-decide framewise decoding based on VRAM + latent size.
-        if self._should_use_framewise_for_decode(z):
-            return self._temporal_tiled_decode(
-                z, temb, causal=causal, return_dict=return_dict
-            )
+        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
+        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
+        tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
+    
+        if self.use_framewise_decoding and num_frames > tile_latent_min_num_frames:
+            return self._temporal_tiled_decode(z, temb, causal=causal, return_dict=return_dict)
 
-        if self.use_tiling and (
-            width > tile_latent_min_width or height > tile_latent_min_height
-        ):
+        if self.use_tiling and (width > tile_latent_min_width or height > tile_latent_min_height):
             return self.tiled_decode(z, temb, causal=causal, return_dict=return_dict)
 
         dec = self.decoder(z, temb, causal=causal)
@@ -1566,10 +1298,7 @@ class AutoencoderKLLTX2Video(
                     for z_slice, t_slice in (z.split(1), temb.split(1))
                 ]
             else:
-                decoded_slices = [
-                    self._decode(z_slice, causal=causal).sample
-                    for z_slice in z.split(1)
-                ]
+                decoded_slices = [self._decode(z_slice, causal=causal).sample for z_slice in z.split(1)]
             decoded = torch.cat(decoded_slices)
         else:
             decoded = self._decode(z, temb, causal=causal).sample
@@ -1579,39 +1308,31 @@ class AutoencoderKLLTX2Video(
 
         return DecoderOutput(sample=decoded)
 
-    def blend_v(
-        self, a: torch.Tensor, b: torch.Tensor, blend_extent: int
-    ) -> torch.Tensor:
+    def blend_v(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
         blend_extent = min(a.shape[3], b.shape[3], blend_extent)
         for y in range(blend_extent):
-            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (
-                1 - y / blend_extent
-            ) + b[:, :, :, y, :] * (y / blend_extent)
+            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (1 - y / blend_extent) + b[:, :, :, y, :] * (
+                y / blend_extent
+            )
         return b
 
-    def blend_h(
-        self, a: torch.Tensor, b: torch.Tensor, blend_extent: int
-    ) -> torch.Tensor:
+    def blend_h(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
         blend_extent = min(a.shape[4], b.shape[4], blend_extent)
         for x in range(blend_extent):
-            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (
-                1 - x / blend_extent
-            ) + b[:, :, :, :, x] * (x / blend_extent)
+            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, :, x] * (
+                x / blend_extent
+            )
         return b
 
-    def blend_t(
-        self, a: torch.Tensor, b: torch.Tensor, blend_extent: int
-    ) -> torch.Tensor:
+    def blend_t(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
         blend_extent = min(a.shape[-3], b.shape[-3], blend_extent)
         for x in range(blend_extent):
-            b[:, :, x, :, :] = a[:, :, -blend_extent + x, :, :] * (
-                1 - x / blend_extent
-            ) + b[:, :, x, :, :] * (x / blend_extent)
+            b[:, :, x, :, :] = a[:, :, -blend_extent + x, :, :] * (1 - x / blend_extent) + b[:, :, x, :, :] * (
+                x / blend_extent
+            )
         return b
 
-    def tiled_encode(
-        self, x: torch.Tensor, causal: Optional[bool] = None
-    ) -> torch.Tensor:
+    def tiled_encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
         r"""Encode a batch of images using a tiled encoder.
 
         Args:
@@ -1625,18 +1346,10 @@ class AutoencoderKLLTX2Video(
         latent_height = height // self.spatial_compression_ratio
         latent_width = width // self.spatial_compression_ratio
 
-        tile_latent_min_height = (
-            self.tile_sample_min_height // self.spatial_compression_ratio
-        )
-        tile_latent_min_width = (
-            self.tile_sample_min_width // self.spatial_compression_ratio
-        )
-        tile_latent_stride_height = (
-            self.tile_sample_stride_height // self.spatial_compression_ratio
-        )
-        tile_latent_stride_width = (
-            self.tile_sample_stride_width // self.spatial_compression_ratio
-        )
+        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
+        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
+        tile_latent_stride_height = self.tile_sample_stride_height // self.spatial_compression_ratio
+        tile_latent_stride_width = self.tile_sample_stride_width // self.spatial_compression_ratio
 
         blend_height = tile_latent_min_height - tile_latent_stride_height
         blend_width = tile_latent_min_width - tile_latent_stride_width
@@ -1648,13 +1361,7 @@ class AutoencoderKLLTX2Video(
             row = []
             for j in range(0, width, self.tile_sample_stride_width):
                 time = self.encoder(
-                    x[
-                        :,
-                        :,
-                        :,
-                        i : i + self.tile_sample_min_height,
-                        j : j + self.tile_sample_min_width,
-                    ],
+                    x[:, :, :, i : i + self.tile_sample_min_height, j : j + self.tile_sample_min_width],
                     causal=causal,
                 )
 
@@ -1671,20 +1378,14 @@ class AutoencoderKLLTX2Video(
                     tile = self.blend_v(rows[i - 1][j], tile, blend_height)
                 if j > 0:
                     tile = self.blend_h(row[j - 1], tile, blend_width)
-                result_row.append(
-                    tile[:, :, :, :tile_latent_stride_height, :tile_latent_stride_width]
-                )
+                result_row.append(tile[:, :, :, :tile_latent_stride_height, :tile_latent_stride_width])
             result_rows.append(torch.cat(result_row, dim=4))
 
         enc = torch.cat(result_rows, dim=3)[:, :, :, :latent_height, :latent_width]
         return enc
 
     def tiled_decode(
-        self,
-        z: torch.Tensor,
-        temb: Optional[torch.Tensor],
-        causal: Optional[bool] = None,
-        return_dict: bool = True,
+        self, z: torch.Tensor, temb: Optional[torch.Tensor], causal: Optional[bool] = None, return_dict: bool = True
     ) -> Union[DecoderOutput, torch.Tensor]:
         r"""
         Decode a batch of images using a tiled decoder.
@@ -1704,18 +1405,10 @@ class AutoencoderKLLTX2Video(
         sample_height = height * self.spatial_compression_ratio
         sample_width = width * self.spatial_compression_ratio
 
-        tile_latent_min_height = (
-            self.tile_sample_min_height // self.spatial_compression_ratio
-        )
-        tile_latent_min_width = (
-            self.tile_sample_min_width // self.spatial_compression_ratio
-        )
-        tile_latent_stride_height = (
-            self.tile_sample_stride_height // self.spatial_compression_ratio
-        )
-        tile_latent_stride_width = (
-            self.tile_sample_stride_width // self.spatial_compression_ratio
-        )
+        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
+        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
+        tile_latent_stride_height = self.tile_sample_stride_height // self.spatial_compression_ratio
+        tile_latent_stride_width = self.tile_sample_stride_width // self.spatial_compression_ratio
 
         blend_height = self.tile_sample_min_height - self.tile_sample_stride_height
         blend_width = self.tile_sample_min_width - self.tile_sample_stride_width
@@ -1727,15 +1420,7 @@ class AutoencoderKLLTX2Video(
             row = []
             for j in range(0, width, tile_latent_stride_width):
                 time = self.decoder(
-                    z[
-                        :,
-                        :,
-                        :,
-                        i : i + tile_latent_min_height,
-                        j : j + tile_latent_min_width,
-                    ],
-                    temb,
-                    causal=causal,
+                    z[:, :, :, i : i + tile_latent_min_height, j : j + tile_latent_min_width], temb, causal=causal
                 )
 
                 row.append(time)
@@ -1751,15 +1436,7 @@ class AutoencoderKLLTX2Video(
                     tile = self.blend_v(rows[i - 1][j], tile, blend_height)
                 if j > 0:
                     tile = self.blend_h(row[j - 1], tile, blend_width)
-                result_row.append(
-                    tile[
-                        :,
-                        :,
-                        :,
-                        : self.tile_sample_stride_height,
-                        : self.tile_sample_stride_width,
-                    ]
-                )
+                result_row.append(tile[:, :, :, : self.tile_sample_stride_height, : self.tile_sample_stride_width])
             result_rows.append(torch.cat(result_row, dim=4))
 
         dec = torch.cat(result_rows, dim=3)[:, :, :, :sample_height, :sample_width]
@@ -1769,27 +1446,18 @@ class AutoencoderKLLTX2Video(
 
         return DecoderOutput(sample=dec)
 
-    def _temporal_tiled_encode(
-        self, x: torch.Tensor, causal: Optional[bool] = None
-    ) -> AutoencoderKLOutput:
+    def _temporal_tiled_encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> AutoencoderKLOutput:
         batch_size, num_channels, num_frames, height, width = x.shape
         latent_num_frames = (num_frames - 1) // self.temporal_compression_ratio + 1
 
-        tile_latent_min_num_frames = (
-            self.tile_sample_min_num_frames // self.temporal_compression_ratio
-        )
-        tile_latent_stride_num_frames = (
-            self.tile_sample_stride_num_frames // self.temporal_compression_ratio
-        )
+        tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
+        tile_latent_stride_num_frames = self.tile_sample_stride_num_frames // self.temporal_compression_ratio
         blend_num_frames = tile_latent_min_num_frames - tile_latent_stride_num_frames
 
         row = []
         for i in range(0, num_frames, self.tile_sample_stride_num_frames):
             tile = x[:, :, i : i + self.tile_sample_min_num_frames + 1, :, :]
-            if self.use_tiling and (
-                height > self.tile_sample_min_height
-                or width > self.tile_sample_min_width
-            ):
+            if self.use_tiling and (height > self.tile_sample_min_height or width > self.tile_sample_min_width):
                 tile = self.tiled_encode(tile, causal=causal)
             else:
                 tile = self.encoder(tile, causal=causal)
@@ -1809,130 +1477,39 @@ class AutoencoderKLLTX2Video(
         return enc
 
     def _temporal_tiled_decode(
-        self,
-        z: torch.Tensor,
-        temb: Optional[torch.Tensor],
-        causal: Optional[bool] = None,
-        return_dict: bool = True,
+        self, z: torch.Tensor, temb: Optional[torch.Tensor], causal: Optional[bool] = None, return_dict: bool = True
     ) -> Union[DecoderOutput, torch.Tensor]:
         batch_size, num_channels, num_frames, height, width = z.shape
         num_sample_frames = (num_frames - 1) * self.temporal_compression_ratio + 1
 
-        tile_latent_min_height = (
-            self.tile_sample_min_height // self.spatial_compression_ratio
-        )
-        tile_latent_min_width = (
-            self.tile_sample_min_width // self.spatial_compression_ratio
-        )
-        tile_latent_min_num_frames = (
-            self.tile_sample_min_num_frames // self.temporal_compression_ratio
-        )
-        tile_latent_stride_num_frames = (
-            self.tile_sample_stride_num_frames // self.temporal_compression_ratio
-        )
-        blend_num_frames = (
-            self.tile_sample_min_num_frames - self.tile_sample_stride_num_frames
-        )
+        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
+        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
+        tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
+        tile_latent_stride_num_frames = self.tile_sample_stride_num_frames // self.temporal_compression_ratio
+        blend_num_frames = self.tile_sample_min_num_frames - self.tile_sample_stride_num_frames
 
-        # MPS is particularly sensitive to peak-memory spikes and fragmentation.
-        # The old implementation materialized *all* decoded tiles in a Python list before blending + concatenation,
-        # which can OOM even when the final output tensor would fit.
-        #
-        # We stream tiles instead: keep only (prev_tile, cur_tile) resident, and write directly into a preallocated
-        # output tensor. This preserves the exact blending behavior (note: `blend_t` mutates `b` in-place).
-        is_mps = z.device.type == "mps"
-        mps_empty_cache = (
-            is_mps
-            and hasattr(torch, "mps")
-            and hasattr(torch.mps, "empty_cache")
-            and callable(torch.mps.empty_cache)
-        )
-        mps_sync = (
-            is_mps
-            and hasattr(torch, "mps")
-            and hasattr(torch.mps, "synchronize")
-            and callable(torch.mps.synchronize)
-        )
-
-        # Decode first tile to learn output shape, then preallocate the full output.
-        frame_indices = list(range(0, num_frames, tile_latent_stride_num_frames))
-        if len(frame_indices) == 0:
-            # Degenerate case: no frames.
-            dec = z.new_empty((batch_size, num_channels, 0, height, width))
-        else:
-            i0 = frame_indices[0]
-            tile0 = z[:, :, i0 : i0 + tile_latent_min_num_frames + 1, :, :]
-            if self.use_tiling and (
-                tile0.shape[-1] > tile_latent_min_width
-                or tile0.shape[-2] > tile_latent_min_height
-            ):
-                prev_tile = self.tiled_decode(
-                    tile0, temb, causal=causal, return_dict=True
-                ).sample
+        row = []
+        from tqdm import tqdm
+        for i in tqdm(range(0, num_frames, tile_latent_stride_num_frames)):
+            tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
+            if self.use_tiling and (tile.shape[-1] > tile_latent_min_width or tile.shape[-2] > tile_latent_min_height):
+                decoded = self.tiled_decode(tile, temb, causal=causal, return_dict=True).sample
             else:
-                prev_tile = self.decoder(tile0, temb, causal=causal)
+                decoded = self.decoder(tile, temb, causal=causal)
+            if i > 0:
+                decoded = decoded[:, :, :-1, :, :]
+            row.append(decoded.cpu())
 
-            out = prev_tile.new_empty(
-                (
-                    prev_tile.shape[0],
-                    prev_tile.shape[1],
-                    num_sample_frames,
-                    prev_tile.shape[3],
-                    prev_tile.shape[4],
-                )
-            )
+        result_row = []
+        for i, tile in enumerate(row):
+            if i > 0:
+                tile = self.blend_t(row[i - 1], tile, blend_num_frames)
+                tile = tile[:, :, : self.tile_sample_stride_num_frames, :, :]
+                result_row.append(tile)
+            else:
+                result_row.append(tile[:, :, : self.tile_sample_stride_num_frames + 1, :, :])
 
-            # First tile contributes stride+1 frames; subsequent tiles contribute stride frames.
-            stride = int(self.tile_sample_stride_num_frames)
-            write_pos = 0
-            first_take = min(stride + 1, prev_tile.shape[2], num_sample_frames)
-            out[:, :, write_pos : write_pos + first_take, :, :] = prev_tile[
-                :, :, :first_take, :, :
-            ]
-            write_pos += first_take
-
-            # Best-effort MPS memory hygiene.
-            if mps_sync:
-                torch.mps.synchronize()
-            if mps_empty_cache:
-                torch.mps.empty_cache()
-
-            for i in tqdm(frame_indices[1:], desc="Temporal tiled decode"):
-                tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
-                if self.use_tiling and (
-                    tile.shape[-1] > tile_latent_min_width
-                    or tile.shape[-2] > tile_latent_min_height
-                ):
-                    cur_tile = self.tiled_decode(
-                        tile, temb, causal=causal, return_dict=True
-                    ).sample
-                else:
-                    cur_tile = self.decoder(tile, temb, causal=causal)
-
-                # Match old behavior: for i>0, drop the last frame before blending to avoid duplication.
-                cur_tile = cur_tile[:, :, :-1, :, :]
-
-                # Blend overlap into the *current* tile (in-place) and emit only the stride prefix.
-                cur_tile = self.blend_t(prev_tile, cur_tile, blend_num_frames)
-                emit = cur_tile[:, :, :stride, :, :]
-
-                if write_pos < num_sample_frames:
-                    take = min(emit.shape[2], num_sample_frames - write_pos)
-                    out[:, :, write_pos : write_pos + take, :, :] = emit[
-                        :, :, :take, :, :
-                    ]
-                    write_pos += take
-
-                # Carry forward the blended tile (matches the in-place semantics of the old implementation).
-                prev_tile = cur_tile
-
-                # Free ASAP on MPS to reduce fragmentation.
-                if mps_sync:
-                    torch.mps.synchronize()
-                if mps_empty_cache:
-                    torch.mps.empty_cache()
-
-            dec = out[:, :, :num_sample_frames]
+        dec = torch.cat(result_row, dim=2)[:, :, :num_sample_frames]
 
         if not return_dict:
             return (dec,)

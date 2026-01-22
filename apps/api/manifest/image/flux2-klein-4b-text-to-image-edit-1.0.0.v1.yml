@@ -65,7 +65,7 @@ spec:
     - embed_tokens
     block_modules:
     - model
-    config_path: black-forest-labs/FLUX.2-klein-9B/text_encoder/config.json
+    config_path: black-forest-labs/FLUX.2-klein-4B/text_encoder/config.json
     model_path:
     - path: black-forest-labs/FLUX.2-klein-4B/text_encoder
       variant: default

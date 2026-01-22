@@ -168,13 +168,14 @@ def load_safetensors(
 
     with safetensors.safe_open(filename, framework=framework, device=device) as f:
         # Fast path: no framework conversion and no dtype casting.
+        get_key_func = getattr(f, "offset_keys", f.keys)
         if not framework_is_np and not has_dtype:
-            for k in f.offset_keys():
+            for k in get_key_func():
                 result[k] = f.get_tensor(k)
             return result
 
         # General path with optional framework and/or dtype conversion.
-        for k in f.offset_keys():
+        for k in get_key_func():
             tensor = f.get_tensor(k)
 
             if framework_is_np:

@@ -41,7 +41,7 @@ spec:
     name: ltx-2-19b-distilled-lora-384
     label: LTX2 19B Distilled LoRA 384
     verified: true
-    scale: 1.0
+    scale: 0.8
     required: false
   components:
   - type: scheduler
@@ -363,8 +363,6 @@ spec:
         - - vae_tile_sample_stride_height
         - - vae_tile_sample_stride_width
         - - vae_tile_sample_stride_num_frames
-        - - vae_num_sample_frames_batch_size
-        - - vae_num_latent_frames_batch_size
     inputs:
     - id: image
       label: Image
@@ -581,7 +579,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 32
+      default: 8
       min: 1
       max: 256
       step: 1
@@ -591,7 +589,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 448
+      default: 384
       min: 64
       max: 2048
       step: 64
@@ -601,7 +599,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 448
+      default: 384
       min: 64
       max: 2048
       step: 64
@@ -611,27 +609,8 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 16
+      default: 128
       min: 1
-      max: 128
+      max: 512
       step: 1
-    - id: vae_num_sample_frames_batch_size
-      label: VAE Sample Frames Batch Size
-      description: Hint for how many sample frames to decode per chunk (best-effort).
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 16
-      min: 1
-      max: 64
-      step: 1
-    - id: vae_num_latent_frames_batch_size
-      label: VAE Latent Frames Batch Size
-      description: Hint for how many latent frames to decode per chunk (best-effort).
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 2
-      min: 1
-      max: 16
-      step: 1
+

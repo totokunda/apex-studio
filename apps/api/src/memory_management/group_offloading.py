@@ -42,6 +42,107 @@ _LAZY_PREFETCH_GROUP_OFFLOADING = "lazy_prefetch_group_offloading"
 _GROUP_ID_LAZY_LEAF = "lazy_leafs"
 # fmt: on
 
+_APEX_ENSURE_ONLOAD_PRE_HOOK_ATTR = "_apex_ensure_onload_pre_hook_handle"
+
+
+def _module_direct_tensors_on_device(
+    module: torch.nn.Module, device: torch.device
+) -> bool:
+    """
+    Checks params/buffers for device match.
+
+    Note: we intentionally check *recursively* because common output heads like
+    `lm_head` are sometimes thin wrapper modules whose tensors live in children.
+    """
+    try:
+        for p in module.parameters():
+            if p is not None and getattr(p, "device", None) != device:
+                return False
+        for b in module.buffers():
+            if b is not None and getattr(b, "device", None) != device:
+                return False
+    except Exception:
+        # If introspection fails, be conservative and say "not on device".
+        return False
+    return True
+
+
+def _ensure_module_on_device_(
+    module: torch.nn.Module,
+    device: torch.device,
+    *,
+    non_blocking: bool = False,
+) -> None:
+    """Moves module params/buffers to device (best-effort, in-place)."""
+    try:
+        module.to(device=device, non_blocking=bool(non_blocking))
+        return
+    except Exception:
+        # Fallback: move direct tensors only.
+        try:
+            for p in module.parameters(recurse=False):
+                if p is not None and getattr(p, "device", None) != device:
+                    p.data = p.data.to(device=device, non_blocking=False)
+            for b in module.buffers(recurse=False):
+                if b is not None and getattr(b, "device", None) != device:
+                    b.data = b.data.to(device=device, non_blocking=False)
+        except Exception:
+            return
+
+
+def _register_ensure_on_device_pre_hook(
+    module: torch.nn.Module,
+    *,
+    device: torch.device,
+    non_blocking: bool,
+) -> None:
+    """
+    Registers a tiny forward-pre hook that guarantees the module's *direct*
+    params/buffers are on `device` right before the module runs.
+
+    This is particularly important for tied weights (e.g. `lm_head` <-> embeddings),
+    where another group's offload can move the shared parameter `.data` back to CPU
+    mid-forward.
+    """
+    if getattr(module, _APEX_ENSURE_ONLOAD_PRE_HOOK_ATTR, None) is not None:
+        return
+
+    def _pre_hook(mod: torch.nn.Module, inputs):  # noqa: ARG001
+        try:
+            if torch.compiler.is_compiling():
+                return
+        except Exception:
+            pass
+        if not _module_direct_tensors_on_device(mod, device):
+            _ensure_module_on_device_(mod, device, non_blocking=non_blocking)
+
+    try:
+        handle = module.register_forward_pre_hook(_pre_hook)
+        setattr(module, _APEX_ENSURE_ONLOAD_PRE_HOOK_ATTR, handle)
+    except Exception:
+        # If hook registration fails, do nothing (best-effort safety).
+        return
+
+
+def _register_default_output_head_device_guards(
+    module: torch.nn.Module, *, config: "GroupOffloadingConfig"
+) -> None:
+    """
+    Registers device guards for common "output head" modules.
+    Today this focuses on `lm_head`, which frequently hits device mismatch under
+    group offloading due to tied weights.
+    """
+    try:
+        for name, submodule in module.named_modules():
+            if name.split(".")[-1] == "lm_head":
+                _register_ensure_on_device_pre_hook(
+                    submodule,
+                    device=config.onload_device,
+                    non_blocking=config.non_blocking,
+                )
+    except Exception:
+        return
+
 
 class GroupOffloadingType(str, Enum):
     BLOCK_LEVEL = "block_level"
@@ -762,6 +863,35 @@ def apply_group_offloading(
     exclude_kwargs: Optional[List[str]] = None,
     ignore_modules: Optional[List[str]] = None,
 ) -> None:
+    # ---------------------------------------------------------------------
+    # Mutual exclusion with Apex budget offloading
+    # ---------------------------------------------------------------------
+    # Budget offloading modifies `forward()` and swaps parameter objects in a
+    # mmgp-like way. Group offloading installs diffusers hooks that assume they
+    # own device transitions. Running both on the same module is unsupported.
+    #
+    # We deliberately avoid importing `budget_offloading` here to prevent
+    # circular imports (budget_offloading imports `_is_group_offload_enabled`).
+ 
+    def _has_budget_offloading_enabled(m: torch.nn.Module) -> bool:
+        if bool(getattr(m, "_apex_budget_offloading_enabled", False)):
+            return True
+        mgr = getattr(m, "_apex_budget_offloading_manager", None)
+        if mgr is not None:
+            return True
+        # Budget offloading may wrap submodules; detect that too.
+        for sm in m.modules():
+            if bool(getattr(sm, "_apex_budget_offloading_enabled", False)):
+                return True
+            if getattr(sm, "_apex_budget_offloading_manager", None) is not None:
+                return True
+        return False
+
+    if _has_budget_offloading_enabled(module):
+        raise RuntimeError(
+            "Group offloading cannot be combined with budget offloading on the same module."
+        )
+
     r"""
     Applies group offloading to the internal layers of a torch.nn.Module. To understand what group offloading is, and
     where it is beneficial, we need to first provide some context on how other supported offloading methods work.
@@ -949,10 +1079,12 @@ def apply_group_offloading(
 
             # If the user only specified dotted paths, we intentionally skip applying to the root module.
             if not undotted:
+                _register_default_output_head_device_guards(module, config=config)
                 return
             config = replace(config, block_modules=undotted)
 
     _apply_group_offloading(module, config)
+    _register_default_output_head_device_guards(module, config=config)
 
 
 def _normalize_ignore_modules(ignore_modules: Optional[List[str]]) -> Set[str]:
@@ -1039,6 +1171,11 @@ def _apply_group_offloading_block_level(
                 submodule.to(config.onload_device)
             except Exception:
                 pass
+            _register_ensure_on_device_pre_hook(
+                submodule,
+                device=config.onload_device,
+                non_blocking=config.non_blocking,
+            )
 
             modules_with_group_offloading.add(name)
             continue
@@ -1200,6 +1337,11 @@ def _apply_group_offloading_leaf_level(
                 submodule.to(config.onload_device)
             except Exception:
                 pass
+            _register_ensure_on_device_pre_hook(
+                submodule,
+                device=config.onload_device,
+                non_blocking=config.non_blocking,
+            )
             modules_with_group_offloading.add(name)
             continue
 
@@ -1444,6 +1586,13 @@ def _maybe_remove_and_reapply_group_offloading(module: torch.nn.Module) -> None:
     top_level_group_offload_hook = _get_top_level_group_offload_hook(module)
 
     if top_level_group_offload_hook is None:
+        return
+
+    # If budget offloading is enabled, never reapply group offloading.
+    # (Prevents ending up with both mechanisms active after in-place mutations.)
+    if bool(getattr(module, "_apex_budget_offloading_enabled", False)) or getattr(
+        module, "_apex_budget_offloading_manager", None
+    ) is not None:
         return
 
     registry = HookRegistry.check_if_exists_or_initialize(module)

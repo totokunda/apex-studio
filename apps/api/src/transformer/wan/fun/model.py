@@ -41,7 +41,12 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import FP32LayerNorm
 from src.transformer.wan.base.attention import WanAttnProcessor2_0
 from src.transformer.base import TRANSFORMERS_REGISTRY
-
+from src.transformer.efficiency.ops import (
+    apply_gate_inplace,
+    apply_scale_shift_inplace,
+    chunked_feed_forward_inplace,
+)
+from src.transformer.efficiency.mod import InplaceRMSNorm
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
@@ -59,12 +64,14 @@ def _chunked_modulated_norm(
     in_dtype = hidden_states.dtype
 
     if chunk_size is None:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     if S <= chunk_size:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     out = torch.empty_like(hidden_states)
     scale_per_token = scale.dim() == 3 and scale.shape[1] == S
@@ -80,9 +87,8 @@ def _chunked_modulated_norm(
             scale_chunk = scale
             shift_chunk = shift
 
-        normed = norm_layer(hs_chunk)
-        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
-        del normed
+        out[:, i:end, :].copy_(norm_layer(hs_chunk))
+        apply_scale_shift_inplace(out[:, i:end, :], scale_chunk, shift_chunk)
 
     return out
 
@@ -90,24 +96,10 @@ def _chunked_modulated_norm(
 def _chunked_feed_forward(
     ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
 ) -> torch.Tensor:
-    """
-    Chunked feed-forward to reduce peak memory.
-    """
-    if chunk_size is None:
-        return ff(hidden_states)
-    if chunk_size <= 0:
-        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-
-    dim_len = hidden_states.shape[chunk_dim]
-    if dim_len <= chunk_size:
-        return ff(hidden_states)
-
-    outputs = []
-    for start in range(0, dim_len, chunk_size):
-        end = min(start + chunk_size, dim_len)
-        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
-        outputs.append(ff(hs_chunk))
-    return torch.cat(outputs, dim=chunk_dim)
+    """Chunked feed-forward to reduce peak memory."""
+    return chunked_feed_forward_inplace(
+        ff, hidden_states, chunk_dim=chunk_dim, chunk_size=chunk_size
+    )
 
 
 def _chunked_norm(
@@ -159,7 +151,10 @@ class WanImageEmbedding(torch.nn.Module):
             encoder_hidden_states_image = encoder_hidden_states_image.view(
                 -1, 2 * seq_len, embed_dim
             )
-            encoder_hidden_states_image = encoder_hidden_states_image + self.pos_embed
+            if (not torch.is_grad_enabled()) and (not encoder_hidden_states_image.requires_grad):
+                encoder_hidden_states_image.add_(self.pos_embed)
+            else:
+                encoder_hidden_states_image = encoder_hidden_states_image + self.pos_embed
 
         hidden_states = self.norm1(encoder_hidden_states_image)
         hidden_states = self.ff(hidden_states)
@@ -310,12 +305,34 @@ class WanRotaryPosEmbed(nn.Module):
             freqs.append(freq)
         self.freqs = torch.cat(freqs, dim=1)
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        batch_size, num_channels, num_frames, height, width = hidden_states.shape
+    def forward(
+        self,
+        hidden_states: Union[torch.Tensor, Tuple[int, int, int, int, int]],
+        *,
+        device: Optional[torch.device] = None,
+    ) -> torch.Tensor:
+        """
+        Build RoPE table for the given 5D input shape without allocating a dummy tensor.
+
+        Accepts either:
+        - a 5D tensor shaped [B, C, F, H, W], or
+        - a shape tuple/list (B, C, F, H, W).
+        """
+        if torch.is_tensor(hidden_states):
+            _, _, num_frames, height, width = hidden_states.shape
+            target_device = device or hidden_states.device
+        else:
+            # Shape-only path (saves a large allocation vs `torch.zeros(shape)`).
+            _, _, num_frames, height, width = hidden_states
+            target_device = device
+            if target_device is None:
+                raise ValueError(
+                    "WanRotaryPosEmbed.forward(shape=...) requires `device=`."
+                )
         p_t, p_h, p_w = self.patch_size
         ppf, pph, ppw = num_frames // p_t, height // p_h, width // p_w
 
-        freqs = self.freqs.to(hidden_states.device)
+        freqs = self.freqs.to(target_device)
         freqs = freqs.split_with_sizes(
             [
                 self.attention_head_dim // 2 - 2 * (self.attention_head_dim // 6),
@@ -350,6 +367,7 @@ class WanTransformerBlock(nn.Module):
 
         # 1. Self-attention
         self.norm1 = FP32LayerNorm(dim, eps, elementwise_affine=False)
+        
         self.attn1 = Attention(
             query_dim=dim,
             heads=num_heads,
@@ -362,6 +380,13 @@ class WanTransformerBlock(nn.Module):
             out_bias=True,
             processor=WanAttnProcessor2_0(use_enhance=use_enhance),
         )
+        
+        
+        self.attn1.norm_q = InplaceRMSNorm(self.attn1.norm_q.weight.shape[0], eps=self.attn1.norm_q.eps, elementwise_affine=self.attn1.norm_q.elementwise_affine)
+        self.attn1.norm_k = InplaceRMSNorm(self.attn1.norm_k.weight.shape[0], eps=self.attn1.norm_k.eps, elementwise_affine=self.attn1.norm_k.elementwise_affine)
+
+# self.attn2 created above
+
 
         # 2. Cross-attention
         self.attn2 = Attention(
@@ -378,6 +403,13 @@ class WanTransformerBlock(nn.Module):
             added_proj_bias=True,
             processor=WanAttnProcessor2_0(),
         )
+        
+        
+        self.attn2.norm_q = InplaceRMSNorm(self.attn2.norm_q.weight.shape[0], eps=self.attn2.norm_q.eps, elementwise_affine=self.attn2.norm_q.elementwise_affine)
+        self.attn2.norm_k = InplaceRMSNorm(self.attn2.norm_k.weight.shape[0], eps=self.attn2.norm_k.eps, elementwise_affine=self.attn2.norm_k.elementwise_affine)
+
+
+
         self.norm2 = (
             FP32LayerNorm(dim, eps, elementwise_affine=True)
             if cross_attn_norm
@@ -417,8 +449,12 @@ class WanTransformerBlock(nn.Module):
         rotary_emb: torch.Tensor,
     ) -> torch.Tensor:
 
+        # Cast modulation to hidden_states dtype early to avoid fp32 intermediates during
+        # gating (e.g. `attn_output * gate`) which would otherwise promote to fp32 and
+        # increase peak memory.
+        hs_dtype = hidden_states.dtype
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-            self.scale_shift_table + temb.float()
+            (self.scale_shift_table + temb.float()).to(hs_dtype)
         ).chunk(6, dim=1)
 
         # 1. Self-attention with chunked modulated norm
@@ -428,26 +464,41 @@ class WanTransformerBlock(nn.Module):
             scale_msa,
             shift_msa,
             chunk_size=self._mod_norm_chunk_size,
-        ).type_as(hidden_states)
+        )
 
         attn_output = self.attn1(
             hidden_states=norm_hidden_states, rotary_emb=rotary_emb
         )
 
-        hidden_states = (hidden_states.float() + attn_output * gate_msa).type_as(
-            hidden_states
-        )
+        if (
+            (not torch.is_grad_enabled())
+            and (not hidden_states.requires_grad)
+            and (not attn_output.requires_grad)
+        ):
+            apply_gate_inplace(attn_output, gate_msa)
+            hidden_states.add_(attn_output)
+        else:
+            hidden_states = hidden_states + attn_output * gate_msa
+        del norm_hidden_states, attn_output
 
         # 2. Cross-attention
         norm_hidden_states = _chunked_norm(
             self.norm2, hidden_states, chunk_size=self._norm_chunk_size
-        ).type_as(hidden_states)
+        )
         attn_output = self.attn2(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states,
         )
 
-        hidden_states = hidden_states + attn_output
+        if (
+            (not torch.is_grad_enabled())
+            and (not hidden_states.requires_grad)
+            and (not attn_output.requires_grad)
+        ):
+            hidden_states.add_(attn_output)
+        else:
+            hidden_states = hidden_states + attn_output
+        del norm_hidden_states, attn_output
 
         # 3. Feed-forward
         norm_hidden_states = _chunked_modulated_norm(
@@ -456,16 +507,23 @@ class WanTransformerBlock(nn.Module):
             c_scale_msa,
             c_shift_msa,
             chunk_size=self._mod_norm_chunk_size,
-        ).type_as(hidden_states)
+        )
         if self._ff_chunk_size is not None:
             ff_output = _chunked_feed_forward(
                 self.ffn, norm_hidden_states, self._ff_chunk_dim, self._ff_chunk_size
             )
         else:
             ff_output = self.ffn(norm_hidden_states)
-        hidden_states = (
-            hidden_states.float() + ff_output.float() * c_gate_msa
-        ).type_as(hidden_states)
+        if (
+            (not torch.is_grad_enabled())
+            and (not hidden_states.requires_grad)
+            and (not ff_output.requires_grad)
+        ):
+            apply_gate_inplace(ff_output, c_gate_msa)
+            hidden_states.add_(ff_output)
+        else:
+            hidden_states = hidden_states + ff_output * c_gate_msa
+        del norm_hidden_states, ff_output
 
         return hidden_states
 
@@ -744,6 +802,7 @@ class WanFunTransformer3DModel(
         hidden_states = hidden_states.flatten(2).transpose(1, 2)
 
         seq_len = math.ceil((height * width) / (p_h * p_w) * num_frames)
+        full_ref_shape = 0
 
         if encoder_hidden_states_camera is not None and self.control_adapter:
 
@@ -754,10 +813,18 @@ class WanFunTransformer3DModel(
             encoder_hidden_states_camera = encoder_hidden_states_camera.flatten(
                 2
             ).transpose(1, 2)
-            hidden_states = hidden_states + encoder_hidden_states_camera
+            if (
+                (not torch.is_grad_enabled())
+                and (not hidden_states.requires_grad)
+                and (not encoder_hidden_states_camera.requires_grad)
+            ):
+                hidden_states.add_(encoder_hidden_states_camera)
+            else:
+                hidden_states = hidden_states + encoder_hidden_states_camera
+            del encoder_hidden_states_camera
 
         if encoder_hidden_states_full_ref is not None and hasattr(self, "ref_conv"):
-
+            
             encoder_hidden_states_full_ref = self.ref_conv(
                 encoder_hidden_states_full_ref
             )
@@ -772,6 +839,8 @@ class WanFunTransformer3DModel(
             hidden_states = torch.cat(
                 [encoder_hidden_states_full_ref, hidden_states], dim=1
             )
+            full_ref_shape = encoder_hidden_states_full_ref.shape[1]
+            del encoder_hidden_states_full_ref
 
             if timestep.dim() != 1 and timestep.size(1) < seq_len:
                 pad_size = seq_len - timestep.size(1)
@@ -780,6 +849,7 @@ class WanFunTransformer3DModel(
                 timestep = torch.cat([padding, timestep], dim=1)
 
         if encoder_hidden_states_subject_ref is not None:
+            
             hidden_states_shape[2] += encoder_hidden_states_subject_ref.shape[2]
             encoder_hidden_states_subject_ref = self.patch_embedding(
                 encoder_hidden_states_subject_ref
@@ -807,13 +877,7 @@ class WanFunTransformer3DModel(
             )
         )
 
-        rotary_emb = self.rope(
-            torch.zeros(
-                hidden_states_shape,
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
-            )
-        )
+        rotary_emb = self.rope(tuple(hidden_states_shape), device=hidden_states.device)
 
         timestep_proj = timestep_proj.unflatten(1, (6, -1))
 
@@ -821,6 +885,7 @@ class WanFunTransformer3DModel(
             encoder_hidden_states = torch.concat(
                 [encoder_hidden_states_image, encoder_hidden_states], dim=1
             )
+            del encoder_hidden_states_image
 
         # 4. Transformer blocks
         if torch.is_grad_enabled() and self.gradient_checkpointing:
@@ -854,11 +919,11 @@ class WanFunTransformer3DModel(
             scale,
             shift,
             chunk_size=getattr(self, "_out_modulated_norm_chunk_size", None),
-        ).type_as(hidden_states)
+        )
         hidden_states = self.proj_out(hidden_states)
 
-        if self.add_ref_conv and encoder_hidden_states_full_ref is not None:
-            hidden_states = hidden_states[:, encoder_hidden_states_full_ref.shape[1] :]
+        if self.add_ref_conv and full_ref_shape > 0:
+            hidden_states = hidden_states[:, full_ref_shape:]
 
         if encoder_hidden_states_subject_ref is not None:
             hidden_states = hidden_states[
