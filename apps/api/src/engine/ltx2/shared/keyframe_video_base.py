@@ -114,6 +114,8 @@ class LTX2KeyframeVideoBaseEngine(LTX2TI2VEngine, LTX2KeyframeConditioningMixin)
             )
 
         connectors = self.helpers["connectors"]
+        # Defensive: after OOM/offload, connectors may be on CPU between runs.
+        self.to_device(connectors, device=device)
         additive_attention_mask = (
             1 - prompt_attention_mask.to(prompt_embeds.dtype)
         ) * -1000000.0

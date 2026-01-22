@@ -808,7 +808,12 @@ class LTX2TI2VEngine(LTX2Shared):
             )
         
         prompt_embeds_dtype = prompt_embeds.dtype
-        connectors = self.helpers["connectors"].to(prompt_embeds_dtype)
+        connectors = self.helpers["connectors"]
+        # Defensive: after OOM/offload, helpers can be left on CPU between runs.
+        # Ensure connectors are on the active device *before* forward to avoid
+        # CPU-weight vs MPS-input mismatches.
+        self.to_device(connectors, device=device)
+        connectors = connectors.to(prompt_embeds_dtype)
         # Extremely large magnitudes (e.g. -1e6) can become `-inf` in fp16/bf16 and may destabilize some
         # attention backends at large problem sizes.
         additive_attention_mask = (

@@ -315,7 +315,8 @@ class ComponentMemoryManager:
         try:
 
             def _pre(_mod, _inputs):
-                self._on_forward_start(label, _mod)
+                # Allow returning modified inputs from the hook.
+                return self._on_forward_start(label, _mod, _inputs)
 
             def _post(_mod, _inputs, _outputs):
                 self._on_forward_end(label, _mod)
@@ -327,20 +328,104 @@ class ComponentMemoryManager:
         return tuple(handles)
 
     # --------- lifecycle ----------
-    def _on_forward_start(self, label: str, module: torch.nn.Module) -> None:
+    def _infer_first_tensor_device(self, obj: Any) -> Optional[torch.device]:
+        """
+        Best-effort: find the first tensor device within a nested input structure.
+        """
+        try:
+            if torch.is_tensor(obj):
+                return obj.device
+        except Exception:
+            pass
+        if isinstance(obj, (list, tuple)):
+            for it in obj:
+                dev = self._infer_first_tensor_device(it)
+                if dev is not None:
+                    return dev
+        if isinstance(obj, dict):
+            for it in obj.values():
+                dev = self._infer_first_tensor_device(it)
+                if dev is not None:
+                    return dev
+        return None
+
+    def _move_tensors_to_device(self, obj: Any, device: torch.device) -> Any:
+        """
+        Recursively move tensors inside `obj` to `device`.
+        Non-tensors are preserved.
+        """
+        try:
+            if torch.is_tensor(obj):
+                return obj.to(device)
+        except Exception:
+            pass
+        if isinstance(obj, tuple):
+            return tuple(self._move_tensors_to_device(x, device) for x in obj)
+        if isinstance(obj, list):
+            return [self._move_tensors_to_device(x, device) for x in obj]
+        if isinstance(obj, dict):
+            return {k: self._move_tensors_to_device(v, device) for k, v in obj.items()}
+        return obj
+
+    def _on_forward_start(
+        self, label: str, module: torch.nn.Module, inputs: Any
+    ) -> Any:
         comp = self._components.get(label)
         if comp is None:
-            return
+            return None
         comp.in_forward = True
         comp.last_used = time.time()
-        device = self._module_device(module)
-        comp.device = device
+        module_device = self._module_device(module)
+
+        # -----------------------------
+        # Device alignment guard
+        # -----------------------------
+        # If an input tensor is on a different device than the module weights,
+        # fix it *before* the forward to avoid runtime errors like:
+        #   "weight is on cpu but expected on mps".
+        input_device = self._infer_first_tensor_device(inputs)
+        if (
+            input_device is not None
+            and isinstance(input_device, torch.device)
+            and input_device.type != module_device.type
+        ):
+            # Prefer moving the module to the input device (keeps the fast path fast).
+            reserve = max(comp.estimated_bytes, 0)
+            reserve = int(reserve * self._env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20))
+            reserve += self._env_int(
+                "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
+            )
+            try:
+                # Ensure we have headroom on the *target* device before moving.
+                self._ensure_room(input_device, reserve, exclude_label=label)
+                engine = comp.engine()
+                if engine is not None and hasattr(engine, "to_device"):
+                    engine.to_device(module, device=input_device)
+                else:
+                    module.to(input_device)
+                module_device = self._module_device(module)
+            except Exception as exc:
+                # If moving weights fails (e.g. OOM), fall back to moving inputs.
+                self._log_debug(
+                    f"[mem] device align failed for '{label}' "
+                    f"({module_device} -> {input_device}): {exc}; falling back to input move"
+                )
+                try:
+                    moved = self._move_tensors_to_device(inputs, module_device)
+                    inputs = moved
+                except Exception:
+                    pass
+
+        comp.device = module_device
 
         reserve = max(comp.estimated_bytes, 0)
         reserve = int(reserve * self._env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20))
         reserve += self._env_int("APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2)
 
-        self._ensure_room(device, reserve, exclude_label=label)
+        self._ensure_room(module_device, reserve, exclude_label=label)
+
+        # If we modified inputs, return them to the hook caller.
+        return inputs
 
     def _on_forward_end(self, label: str, module: torch.nn.Module) -> None:
         comp = self._components.get(label)
