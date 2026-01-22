@@ -279,20 +279,22 @@ def step_mem(
     reset_peak: bool = False,
     sync_cuda: bool = True,
     log_tensors: bool = False,
-    tensors_top_k: int = 50,
+    tensors_top_k: int = 15,
     tensors_min_bytes: int = 0,
     tensors_device: Optional[str] = None,
     stream: Optional[IO[str]] = None,
+    cuda_only: bool = True,
 ) -> None:
     """
     Print process/system RAM + CUDA VRAM stats, then (optionally) pause until Enter.
 
     - Set env `APEX_STEP_MEM_DISABLE=1` to disable completely.
+    - Set env `APEX_STEP_MEM_PAUSE=1` to force pausing (when stdin is a TTY).
     - If stdin is not a TTY (non-interactive), it will NOT block, but still prints.
     - `reset_peak=True` resets PyTorch CUDA peak stats for the selected device.
     - `log_tensors=True` walks Python GC to list live torch tensors (can be slow/noisy).
     """
-    if os.environ.get("APEX_STEP_MEM_DISABLE", "").strip() not in (
+    if os.environ.get("APEX_STEP_MEM_DISABLE", "0").strip() not in (
         "",
         "0",
         "false",
@@ -306,19 +308,20 @@ def step_mem(
     hdr = f"[step_mem] {label} @ {callsite}" if label else f"[step_mem] @ {callsite}"
     print(hdr, file=out, flush=True)
 
-    cpu = _collect_cpu_mem()
-    print(
-        "  CPU:"
-        f" proc_rss={_fmt_bytes(cpu.get('proc_rss'))}"
-        f" | system_used={_fmt_bytes(cpu.get('system_used'))}/{_fmt_bytes(cpu.get('system_total'))}"
-        + (
-            f" ({cpu.get('system_used_percent'):.1f}%)"
-            if isinstance(cpu.get("system_used_percent"), (int, float))
-            else ""
-        ),
-        file=out,
-        flush=True,
-    )
+    if not cuda_only:
+        cpu = _collect_cpu_mem()
+        print(
+            "  CPU:"
+            f" proc_rss={_fmt_bytes(cpu.get('proc_rss'))}"
+            f" | system_used={_fmt_bytes(cpu.get('system_used'))}/{_fmt_bytes(cpu.get('system_total'))}"
+            + (
+                f" ({cpu.get('system_used_percent'):.1f}%)"
+                if isinstance(cpu.get("system_used_percent"), (int, float))
+                else ""
+            ),
+            file=out,
+            flush=True,
+        )
 
     cuda = _collect_cuda_mem(device=device, sync=sync_cuda)
     if cuda is None:
@@ -408,7 +411,18 @@ def step_mem(
                         )
 
     # Pause last so you can read the output.
-    should_pause = bool(pause) and sys.stdin is not None and sys.stdin.isatty()
+    pause_env = os.environ.get("APEX_STEP_MEM_PAUSE", "0").strip() not in (
+        "",
+        "0",
+        "false",
+        "False",
+        "FALSE",
+    )
+    should_pause = (
+        (bool(pause) or bool(pause_env))
+        and sys.stdin is not None
+        and sys.stdin.isatty()
+    )
     if should_pause:
         try:
             _ = input("  Press Enter to continue... ")
