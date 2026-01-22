@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import Optional, Tuple
 from src.attention import attention_register
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
 
 
 # Copied from diffusers.models.transformers.transformer_wan._get_qkv_projections
@@ -61,6 +62,8 @@ class WanAttnProcessor:
         attention_mask: Optional[torch.Tensor] = None,
         rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
+        hidden_states = unwrap_single_item_list(hidden_states)
+        encoder_hidden_states = unwrap_single_item_list(encoder_hidden_states)
         encoder_hidden_states_img = None
         if attn.add_k_proj is not None:
             # 512 is the context length of the text encoder, hardcoded for now
@@ -72,8 +75,8 @@ class WanAttnProcessor:
             attn, hidden_states, encoder_hidden_states
         )
 
-        query = attn.norm_q(query)
-        key = attn.norm_k(key)
+        attn.norm_q(query)
+        attn.norm_k(key)
 
         query = query.unflatten(2, (attn.heads, -1))
         key = key.unflatten(2, (attn.heads, -1))
@@ -103,7 +106,7 @@ class WanAttnProcessor:
             key_img, value_img = _get_added_kv_projections(
                 attn, encoder_hidden_states_img
             )
-            key_img = attn.norm_added_k(key_img)
+            attn.norm_added_k(key_img)
 
             key_img = key_img.unflatten(2, (attn.heads, -1))
             value_img = value_img.unflatten(2, (attn.heads, -1))
@@ -156,6 +159,8 @@ class WanAnimateFaceBlockAttnProcessor:
         encoder_hidden_states: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        hidden_states = unwrap_single_item_list(hidden_states)
+        encoder_hidden_states = unwrap_single_item_list(encoder_hidden_states)
         # encoder_hidden_states corresponds to the motion vec
         # attention_mask corresponds to the motion mask (if any)
         hidden_states = attn.pre_norm_q(hidden_states)
@@ -174,8 +179,8 @@ class WanAnimateFaceBlockAttnProcessor:
         )  # [B, T, N, H * D_kv] --> [B, T, N, H, D_kv]
         value = value.view(B, T, N, attn.heads, -1)
 
-        query = attn.norm_q(query)
-        key = attn.norm_k(key)
+        attn.norm_q(query)
+        attn.norm_k(key)
 
         # NOTE: the below line (which follows the official code) means that in practice, the number of frames T in
         # encoder_hidden_states (the motion vector after applying the face encoder) must evenly divide the

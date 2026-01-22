@@ -4,6 +4,8 @@ from diffusers.models.attention import Attention
 from typing import Optional
 
 from src.attention.functions import attention_register
+from src.transformer.efficiency.ops import apply_wan_rope_inplace
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
 
 
 @torch.compile
@@ -211,6 +213,8 @@ class MultiTalkWanAttnProcessor2_0:
         x_ref_attn_chunk_size_x: Optional[int] = None,
         x_ref_attn_chunk_size_ref: Optional[int] = None,
     ) -> torch.Tensor:
+        hidden_states = unwrap_single_item_list(hidden_states)
+        encoder_hidden_states = unwrap_single_item_list(encoder_hidden_states)
         encoder_hidden_states_img = None
         if attn.add_k_proj is not None:
             # 512 is the context length of the text encoder, hardcoded for now
@@ -237,21 +241,12 @@ class MultiTalkWanAttnProcessor2_0:
         value = value.unflatten(2, (attn.heads, -1)).transpose(1, 2)
 
         if rotary_emb is not None:
-
-            def apply_rotary_emb(hidden_states: torch.Tensor, freqs: torch.Tensor):
-                dtype = (
-                    torch.float32
-                    if hidden_states.device.type == "mps"
-                    else torch.float64
-                )
-                x_rotated = torch.view_as_complex(
-                    hidden_states.to(dtype).unflatten(3, (-1, 2))
-                )
-                x_out = torch.view_as_real(x_rotated * freqs).flatten(3, 4)
-                return x_out.type_as(hidden_states)
-
-            query = apply_rotary_emb(query, rotary_emb)
-            key = apply_rotary_emb(key, rotary_emb)
+            apply_wan_rope_inplace(
+                query, rotary_emb, chunk_size=None, freqs_may_be_cpu=True
+            )
+            apply_wan_rope_inplace(
+                key, rotary_emb, chunk_size=None, freqs_may_be_cpu=True
+            )
 
         # I2V task
         hidden_states_img = None

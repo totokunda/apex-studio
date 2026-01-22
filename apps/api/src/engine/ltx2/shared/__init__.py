@@ -635,7 +635,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
 
         if offload:
             # Keep VRAM headroom for connectors/transformer; text encoder can be reloaded on demand.
-            self._offload("text_encoder", offload_type="cpu")
+            self._offload("text_encoder")
 
         return (
             prompt_embeds,

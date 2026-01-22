@@ -588,6 +588,7 @@ class WanMultitalkEngine(WanShared):
                                 latents.shape[0]
                             )
                         )
+                        
                         add_latent = scheduler.add_noise(
                             latent_motion_frames, motion_add_noise, noise_timestep
                         )

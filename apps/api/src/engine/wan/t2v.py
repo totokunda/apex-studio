@@ -39,6 +39,7 @@ class WanT2VEngine(WanShared):
         ip_image: Image.Image | str | np.ndarray | torch.Tensor = None,
         enhance_kwargs: Dict[str, Any] = {},
         chunking_profile: str = "none",
+        rope_on_cpu: bool = False,
         **kwargs,
     ):
 
@@ -152,6 +153,10 @@ class WanT2VEngine(WanShared):
         )
 
         safe_emit_progress(progress_callback, 0.26, "Initializing latent noise")
+        
+        if expand_timesteps:
+            height = (height // 32) * 32
+            width = (width // 32) * 32
 
         latents = self._get_latents(
             height,
@@ -202,12 +207,14 @@ class WanT2VEngine(WanShared):
                 encoder_hidden_states=prompt_embeds,
                 attention_kwargs=attention_kwargs,
                 enhance_kwargs=enhance_kwargs,
+                rope_on_cpu=rope_on_cpu,
             ),
             unconditional_transformer_kwargs=(
                 dict(
                     encoder_hidden_states=negative_prompt_embeds,
                     attention_kwargs=attention_kwargs,
                     enhance_kwargs=enhance_kwargs,
+                    rope_on_cpu=rope_on_cpu,
                 )
                 if negative_prompt_embeds is not None
                 else None

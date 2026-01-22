@@ -513,10 +513,10 @@ class VAE(nn.Module):
         return dec
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
-        return (x - self.data_mean) / self.data_std
+        return (x - self.data_mean.to(device=x.device, dtype=x.dtype)) / self.data_std.to(device=x.device, dtype=x.dtype)
 
     def unnormalize(self, x: torch.Tensor) -> torch.Tensor:
-        return x * self.data_std + self.data_mean
+        return x * self.data_std.to(device=x.device, dtype=x.dtype) + self.data_mean.to(device=x.device, dtype=x.dtype)
 
     def forward(
         self,

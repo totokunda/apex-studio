@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from diffusers.models.attention import Attention
 from src.utils.dtype import supports_double
 from src.attention.functions import attention_register
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
 
 
 def causal_rope_apply(x, grid_sizes, freqs, start_frame=0):
@@ -67,6 +68,8 @@ class CausalWanAttnProcessor2_0:
         local_attn_size: int = -1,
         sink_size: int = 0,
     ) -> torch.Tensor:
+        hidden_states = unwrap_single_item_list(hidden_states)
+        encoder_hidden_states = unwrap_single_item_list(encoder_hidden_states)
 
         current_start = 0
         grid_sizes = None

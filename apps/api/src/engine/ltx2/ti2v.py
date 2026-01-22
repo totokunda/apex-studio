@@ -561,9 +561,9 @@ class LTX2TI2VEngine(LTX2Shared):
         last_image_strength: Optional[float] = None,
         use_gradient_estimation: bool = False,
         ge_gamma: float = 2.0,
-        empty_cache_after_step: bool = True,
-        cfg_sequential: bool = False,
+        cfg_sequential: bool = True,
         chunking_profile: str = "none",
+        rope_on_cpu: bool = True,
         progress_callback: Optional[Callable[[float, str], None]] = None,
         **kwargs,
     ):
@@ -629,6 +629,7 @@ class LTX2TI2VEngine(LTX2Shared):
         effective_image_pixel_frame_indices: Optional[Union[int, List[int]]] = (
             image_pixel_frame_indices
         )
+        
         if last_image is not None:
             latent_num_frames_for_idx = (num_frames - 1) // int(
                 self.vae_temporal_compression_ratio
@@ -747,6 +748,7 @@ class LTX2TI2VEngine(LTX2Shared):
 
         device = self.device
 
+
         # Configure VAE tiling/framewise settings for this run.
         # This is used by BaseEngine.vae_encode/vae_decode via `enable_vae_tiling(...)`.
         vae_tiling_kwargs: Dict[str, Any] = {
@@ -777,7 +779,6 @@ class LTX2TI2VEngine(LTX2Shared):
             self.preloaded_loras["ltx-2-19b-distilled-lora-384"].scale = 0.0
 
         # 3. Prepare text embeddings
-
         safe_emit_progress(stage1_progress_callback, 0.08, "Encoding prompt")
         (
             prompt_embeds,
@@ -797,7 +798,7 @@ class LTX2TI2VEngine(LTX2Shared):
             device=device,
             offload=offload,
         )
-
+        
         if self.do_classifier_free_guidance:
             # We still build the combined [uncond; cond] embedding stack for connectors, but optionally
             # avoid duplicating the *latents* batch during denoising by running two forward passes.
@@ -805,44 +806,51 @@ class LTX2TI2VEngine(LTX2Shared):
             prompt_attention_mask = torch.cat(
                 [negative_prompt_attention_mask, prompt_attention_mask], dim=0
             )
-
-        connectors = self.helpers["connectors"]
-        self.to_device(connectors)
-        # dtype of prompt_embeds and prompt_attention_mask should be the same
-        connectors_dtype = connectors.dtype
-
+        
+        prompt_embeds_dtype = prompt_embeds.dtype
+        connectors = self.helpers["connectors"].to(prompt_embeds_dtype)
+        # Extremely large magnitudes (e.g. -1e6) can become `-inf` in fp16/bf16 and may destabilize some
+        # attention backends at large problem sizes.
         additive_attention_mask = (
-            1 - prompt_attention_mask.to(connectors_dtype)
-        ) * -1000000.0
+            1 - prompt_attention_mask.to(prompt_embeds_dtype)
+        ) * -10000.0
         safe_emit_progress(stage1_progress_callback, 0.12, "Running connector(s)")
         (
             connector_prompt_embeds,
             connector_audio_prompt_embeds,
             connector_attention_mask,
         ) = connectors(
-            prompt_embeds.to(connectors_dtype),
+            prompt_embeds,
             additive_attention_mask,
-            additive_mask=True,
+            additive_mask=True
         )
         #
-        connector_prompt_embeds = connector_prompt_embeds.to(prompt_embeds.dtype)
+        connector_prompt_embeds = connector_prompt_embeds.to(prompt_embeds_dtype)
         connector_audio_prompt_embeds = connector_audio_prompt_embeds.to(
-            prompt_embeds.dtype
+            prompt_embeds_dtype
         )
-        connector_attention_mask = connector_attention_mask.to(prompt_embeds.dtype)
+        connector_attention_mask = connector_attention_mask.to(prompt_embeds_dtype)
+        
+        del prompt_embeds
+        del additive_attention_mask
+        
+        if negative_prompt_embeds is not None:
+            del negative_prompt_embeds
+            del negative_prompt_attention_mask
 
         del connectors
         if offload:
             # Connectors are ~3GB; always offload when requested to prevent
             # them from staying resident across stage boundaries.
-            self._offload("connectors", offload_type="cpu")
+            self._offload("connectors")
+            
+        
 
         # 4. Prepare latent variables
         safe_emit_progress(stage1_progress_callback, 0.18, "Preparing latents")
         latent_num_frames = (num_frames - 1) // self.vae_temporal_compression_ratio + 1
         latent_height = height // self.vae_spatial_compression_ratio
         latent_width = width // self.vae_spatial_compression_ratio
-        video_sequence_length = latent_num_frames * latent_height * latent_width
 
         transformer_config = self.load_config_by_type("transformer")
         num_channels_latents = transformer_config.in_channels
@@ -965,12 +973,19 @@ class LTX2TI2VEngine(LTX2Shared):
                 offload,
             )
             denoise_mask_model = None
+            
+        
+        #
+        # Compute the *actual* token sequence length from packed latents.
+        # This is the correct quantity for FlowMatch dynamic shifting (and respects patch sizes).
+        video_sequence_length = int(latents.shape[1])
 
         num_mel_bins = (
             self.audio_vae.config.mel_bins
             if getattr(self, "audio_vae", None) is not None
             else 64
         )
+        
         latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
 
         num_channels_latents_audio = (
@@ -1088,18 +1103,22 @@ class LTX2TI2VEngine(LTX2Shared):
             lora.scale = getattr(self, "_previous_lora_scale", 1.0)
             self.apply_loras([(lora.source, lora.scale)], adapter_names=[lora.name])
 
-        # Pre-compute video and audio positional ids as they will be the same at each step of the denoising loop
+        # Pre-compute video and audio positional ids as they will be the same at each step of the denoising loop.
+        #
+        # Memory optimization: keep coords on CPU so the transformer can keep RoPE freqs on CPU and only
+        # transfer to GPU at the exact moment RoPE is applied.
+        cpu = torch.device("cpu")
         video_coords = self.transformer.rope.prepare_video_coords(
             latents.shape[0],
             latent_num_frames,
             latent_height,
             latent_width,
-            latents.device,
+            cpu,
             fps=fps,
         )
 
         audio_coords = self.transformer.audio_rope.prepare_audio_coords(
-            audio_latents.shape[0], audio_num_frames, audio_latents.device, fps=fps
+            audio_latents.shape[0], audio_num_frames, cpu, fps=fps
         )
 
         # 7. Denoising loop
@@ -1165,8 +1184,8 @@ class LTX2TI2VEngine(LTX2Shared):
                         uncond_idx = slice(0, bsz)
                         cond_idx = slice(bsz, 2 * bsz)
 
-                        latent_model_input = latents.to(prompt_embeds.dtype)
-                        audio_latent_model_input = audio_latents.to(prompt_embeds.dtype)
+                        latent_model_input = latents.to(prompt_embeds_dtype)
+                        audio_latent_model_input = audio_latents.to(prompt_embeds_dtype)
 
                         timestep_2b = t.expand(2 * bsz)
                         if denoise_mask_model is not None:
@@ -1233,6 +1252,7 @@ class LTX2TI2VEngine(LTX2Shared):
                                 audio_num_frames=audio_num_frames,
                                 video_coords=video_coords,
                                 audio_coords=audio_coords,
+                                rope_on_cpu=rope_on_cpu,
                                 attention_kwargs=attention_kwargs,
                                 return_dict=False,
                             )
@@ -1249,14 +1269,14 @@ class LTX2TI2VEngine(LTX2Shared):
                             if self.do_classifier_free_guidance
                             else latents
                         )
-                        latent_model_input = latent_model_input.to(prompt_embeds.dtype)
+                        latent_model_input = latent_model_input.to(prompt_embeds_dtype)
                         audio_latent_model_input = (
                             torch.cat([audio_latents] * 2)
                             if self.do_classifier_free_guidance
                             else audio_latents
                         )
                         audio_latent_model_input = audio_latent_model_input.to(
-                            prompt_embeds.dtype
+                            prompt_embeds_dtype
                         )
 
                         timestep_2b = t.expand(latent_model_input.shape[0])
@@ -1481,8 +1501,7 @@ class LTX2TI2VEngine(LTX2Shared):
                             f"Denoising step {i + 1}/{num_steps}",
                         )
 
-                    if empty_cache_after_step:
-                        empty_cache()
+                  
         else:
             # Default (traditional Euler) scheduler stepping.
             # For now, duplicate the scheduler for use with the audio latents
@@ -1516,8 +1535,8 @@ class LTX2TI2VEngine(LTX2Shared):
                         uncond_idx = slice(0, bsz)
                         cond_idx = slice(bsz, 2 * bsz)
 
-                        latent_model_input = latents.to(prompt_embeds.dtype)
-                        audio_latent_model_input = audio_latents.to(prompt_embeds.dtype)
+                        latent_model_input = latents.to(prompt_embeds_dtype)
+                        audio_latent_model_input = audio_latents.to(prompt_embeds_dtype)
 
                         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                         timestep_2b = t.expand(2 * bsz)
@@ -1607,14 +1626,14 @@ class LTX2TI2VEngine(LTX2Shared):
                             if self.do_classifier_free_guidance
                             else latents
                         )
-                        latent_model_input = latent_model_input.to(prompt_embeds.dtype)
+                        latent_model_input = latent_model_input.to(prompt_embeds_dtype)
                         audio_latent_model_input = (
                             torch.cat([audio_latents] * 2)
                             if self.do_classifier_free_guidance
                             else audio_latents
                         )
                         audio_latent_model_input = audio_latent_model_input.to(
-                            prompt_embeds.dtype
+                            prompt_embeds_dtype
                         )
 
                         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
@@ -1650,6 +1669,7 @@ class LTX2TI2VEngine(LTX2Shared):
                                 audio_num_frames=audio_num_frames,
                                 video_coords=video_coords,
                                 audio_coords=audio_coords,
+                                rope_on_cpu=rope_on_cpu,
                                 attention_kwargs=attention_kwargs,
                                 return_dict=False,
                             )
@@ -1761,9 +1781,7 @@ class LTX2TI2VEngine(LTX2Shared):
                             f"Denoising step {i + 1}/{num_inference_steps}",
                         )
 
-                    if empty_cache_after_step:
-                        empty_cache()
-
+                  
         if upsample:
             safe_emit_progress(
                 stage1_progress_callback, 0.92, "Upsampling latents (stage-2 prep)"
@@ -1821,6 +1839,12 @@ class LTX2TI2VEngine(LTX2Shared):
             safe_emit_progress(
                 stage1_progress_callback, 0.98, "Starting stage-2 refinement"
             )
+            
+            del connector_prompt_embeds
+            del connector_audio_prompt_embeds
+            del connector_attention_mask
+
+            
             return self.run(
                 image=image,
                 audio=audio,
@@ -1895,7 +1919,7 @@ class LTX2TI2VEngine(LTX2Shared):
         )
 
         latents = self.video_vae.denormalize_latents(latents)
-        latents = latents.to(prompt_embeds.dtype)
+        latents = latents.to(prompt_embeds_dtype)
         if not self.video_vae.config.timestep_conditioning:
             timestep = None
         else:

@@ -215,10 +215,14 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
             self.load_component_by_name("transformer")
 
         self.to_device(self.transformer)
+        defaults = getattr(self.transformer, "_apex_forward_kwargs_defaults", {}) or {}
+        if defaults.get("chunking_profile") and chunking_profile == "none":
+            chunking_profile = defaults["chunking_profile"]
         if chunking_profile != "none" and hasattr(
             self.transformer, "set_chunking_profile"
         ):
             self.transformer.set_chunking_profile(chunking_profile)
+        rope_on_cpu = kwargs.get("rope_on_cpu", defaults.get("rope_on_cpu", False))
 
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.50, 0.90)
         safe_emit_progress(
@@ -267,6 +271,7 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
                             image_embeds=image_embeds,
                             timestep=timestep,
                             attention_kwargs=self.attention_kwargs,
+                            rope_on_cpu=rope_on_cpu,
                             return_dict=False,
                             **uncond_kwargs,
                         )[0]
@@ -277,6 +282,7 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
                             image_embeds=image_embeds,
                             timestep=timestep,
                             attention_kwargs=self.attention_kwargs,
+                            rope_on_cpu=rope_on_cpu,
                             return_dict=False,
                             **cond_kwargs,
                         )[0]
@@ -305,6 +311,7 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
                             image_embeds=image_embeds,
                             timestep=timestep,
                             attention_kwargs=self.attention_kwargs,
+                        rope_on_cpu=rope_on_cpu,
                             return_dict=False,
                             **cond_kwargs,
                         )[0]

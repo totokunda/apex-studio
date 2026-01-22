@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 import hashlib
 from threading import local
@@ -69,10 +70,14 @@ import inspect
 from src.lora import LoraManager, LoraItem
 from src.helpers.helpers import helpers
 from src.utils.torch_patches import patch_torch_linalg_solve_for_cusolver
-from src.memory_management import apply_group_offloading
+from src.memory_management import apply_group_offloading, apply_budget_offloading
 from src.memory_management.group_offloading import (
     _maybe_remove_and_reapply_group_offloading,
     _is_group_offload_enabled,
+)
+from src.memory_management.budget_offloading import (
+    _maybe_remove_and_reapply_budget_offloading,
+    _is_budget_offload_enabled,
 )
 import types
 
@@ -933,7 +938,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         config.pop("type")
         config.pop("name", None)
         module = config.pop("module", None)
-
+    
         def get_helper(base: str):
             try:
                 helper_class = helpers.get(base)
@@ -965,7 +970,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             helper_class = get_helper(base)
 
             # check if helper has the method for from_pretrained
-            if hasattr(helper_class, "from_pretrained"):
+            if hasattr(helper_class, "from_pretrained") and helper is None:
                 try:
                     helper = helper_class.from_pretrained(
                         config.get("model_path", None), trust_remote_code=True
@@ -997,7 +1002,66 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             config.pop("key_map", None)
             helper = helper_class(**config)
 
-        # Store helper with multiple keys for easier access
+        # If memory management is configured for this helper, ensure budget/group
+        # offloading is applied even when the helper was instantiated via
+        # `helper_class.from_pretrained(...)` (which bypasses LoaderMixin._load_model).
+        mm_config = self._resolve_memory_config_for_component(component)
+        if mm_config is not None and isinstance(helper, torch.nn.Module):
+            helper_label = component.get("name") or base or "helper"
+            offload_mode = getattr(mm_config, "offload_mode", "budget") or "budget"
+            offloading_module = component.get("offloading_module", None)
+            ignore_offloading_modules = component.get("ignore_offloading_modules", None)
+            block_modules = component.get("block_modules", None)
+            # Avoid mutating shared MemoryConfig instances; apply per-component
+            # overrides on a copy (mirrors LoaderMixin behavior).
+            effective_mm_config = dataclasses.replace(
+                mm_config,
+                ignore_modules=ignore_offloading_modules,
+                block_modules=block_modules,
+            )
+            try:
+                model_to_offload = (
+                    helper.get_submodule(offloading_module)
+                    if offloading_module
+                    else helper
+                )
+            except Exception:
+                model_to_offload = helper
+            try:
+                if offload_mode == "budget":
+                    if not _is_budget_offload_enabled(model_to_offload):
+                        self._apply_budget_offloading(
+                            model_to_offload,
+                            effective_mm_config,
+                            module_label=helper_label,
+                        )
+                else:
+                    if not _is_group_offload_enabled(model_to_offload):
+                        self._apply_group_offloading(
+                            model_to_offload,
+                            effective_mm_config,
+                            module_label=helper_label,
+                        )
+            except Exception as e:
+                if hasattr(self, "logger"):
+                    self.logger.warning(
+                        f"Failed to enable {offload_mode} offloading for helper '{helper_label}': {e}"
+                    )
+
+        if hasattr(helper, "to") and self.device is not None:
+            try:
+                if next(helper.parameters()).device.type != device:
+                   
+                    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                    self.to_device(helper)
+            except StopIteration:
+                try:
+                    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                    self.to_device(helper)
+                except Exception:
+                    pass
+    
+         # Store helper with multiple keys for easier access
         helper_name = component.get("name", base)
         self._helpers[base] = helper
         if helper_name != base:
@@ -1006,19 +1070,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             if "/" in helper_name:
                 short_name = helper_name.split("/")[-1]
                 self._helpers[short_name] = helper
-
-        # Move helper to device if possible
-        if hasattr(helper, "to") and self.device is not None:
-            try:
-                if next(helper.parameters()).device.type != device:
-                    helper = helper.to(device)
-            except StopIteration:
-                try:
-                    helper = helper.to(device)
-                except Exception:
-                    pass
-
-        mm_config = self._resolve_memory_config_for_component(component)
 
         if mm_config is not None:
             helper._resolve_memory_config_for_component = types.MethodType(
@@ -1065,12 +1116,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         self.logger.info(
                             f"Auto-loaded helper '{helper_key}' from configuration"
                         )
-                        # Move helper to device
-                        self.to_device(helper)
                         return helper
                     except Exception as e:
                         import traceback
-
                         self.logger.error(traceback.format_exc())
                         self.logger.warning(
                             f"Failed to auto-load helper '{helper_key}': {e}"
@@ -1426,17 +1474,19 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             block_modules = component.get("block_modules", None)
             mm_config.ignore_modules = ignore_offloading_modules
             mm_config.block_modules = block_modules
+            offload_mode = getattr(mm_config, "offload_mode", "budget") or "budget"
             # If this engine will apply LoRAs/adapters later (e.g. Lynx), defer.
             should_defer = bool(
                 (not getattr(self, "auto_apply_loras", True))
                 and getattr(self, "preloaded_loras", None)
             )
             if should_defer:
-                setattr(
-                    transformer,
-                    "_apex_pending_group_offloading",
-                    (mm_config, label, offloading_module),
+                pending_attr = (
+                    "_apex_pending_budget_offloading"
+                    if offload_mode == "budget"
+                    else "_apex_pending_group_offloading"
                 )
+                setattr(transformer, pending_attr, (mm_config, label, offloading_module))
             else:
                 try:
 
@@ -1445,17 +1495,22 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         if offloading_module
                         else transformer
                     )
-                    print(
-                        f"\n\nTransformer group offloading model to offload resolved\n\n"
-                    )
-                    self._apply_group_offloading(
-                        model_to_offload, mm_config, module_label=label
-                    )
-                    print(f"\n\nTransformer group offloading applied\n\n")
+                    if offload_mode == "budget":
+                        self._apply_budget_offloading(
+                            model_to_offload, mm_config, module_label=label
+                        )
+                    else:
+                        print(
+                            f"\n\nTransformer group offloading model to offload resolved\n\n"
+                        )
+                        self._apply_group_offloading(
+                            model_to_offload, mm_config, module_label=label
+                        )
+                        print(f"\n\nTransformer group offloading applied\n\n")
                 except Exception as e:
                     if hasattr(self, "logger"):
                         self.logger.warning(
-                            f"Failed to enable group offloading for '{label}': {e}"
+                            f"Failed to enable {offload_mode} offloading for '{label}': {e}"
                         )
 
         # Optionally compile the fully initialized module according to config.
@@ -1484,6 +1539,28 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             # Always clear the pending marker to avoid repeated attempts.
             try:
                 delattr(module, "_apex_pending_group_offloading")
+            except Exception:
+                pass
+
+        return True
+
+    def _apply_pending_budget_offloading(self, module: torch.nn.Module) -> bool:
+        """If `module` has deferred budget offloading config, apply it now."""
+        pending = getattr(module, "_apex_pending_budget_offloading", None)
+        if not pending:
+            return False
+
+        mm_config, label, offloading_module = pending
+        try:
+            model_to_offload = (
+                module.get_submodule(offloading_module) if offloading_module else module
+            )
+            self._apply_budget_offloading(
+                model_to_offload, mm_config, module_label=label
+            )
+        finally:
+            try:
+                delattr(module, "_apex_pending_budget_offloading")
             except Exception:
                 pass
 
@@ -2260,6 +2337,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     # Memory management helpers
     # -------------------------
     _MEMORY_CONFIG_KEYS = (
+        "offload_mode",
         "group_offload_type",
         "group_offload_num_blocks_per_group",
         "group_offload_use_stream",
@@ -2268,6 +2346,14 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         "group_offload_low_cpu_mem_usage",
         "group_offload_offload_device",
         "group_offload_disk_path",
+        "budget_mb",
+        "async_transfers",
+        "prefetch",
+        "pin_cpu_memory",
+        "vram_safety_coefficient",
+        "offload_after_forward",
+        "ignore_modules",
+        "block_modules",
     )
 
     def _has_memory_management_parameters(self, value: Dict[str, Any]) -> bool:
@@ -2393,15 +2479,65 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         return True
 
+    def _apply_budget_offloading(
+        self,
+        module: Any,
+        config: Optional[MemoryConfig],
+        *,
+        module_label: str,
+    ) -> bool:
+        if module is None or config is None:
+            return False
+
+        if getattr(module, "_apex_budget_offloading_enabled", False):
+            return True
+
+        onload_device = self._group_offload_onload_device()
+
+        try:
+            apply_budget_offloading(
+                module,
+                onload_device=onload_device,
+                offload_device=config.group_offload_offload_device,
+                block_modules=config.block_modules,
+                ignore_modules=config.ignore_modules,
+                budget_mb=config.budget_mb,
+                async_transfers=config.async_transfers,
+                prefetch=config.prefetch,
+                pin_cpu_memory=config.pin_cpu_memory,
+                vram_safety_coefficient=config.vram_safety_coefficient,
+                offload_after_forward=config.offload_after_forward,
+            )
+
+        except Exception as exc:
+            self.logger.warning(
+                f"Failed to enable budget offloading for '{module_label}': {exc}"
+            )
+            return False
+
+        self.logger.info(
+            f"Enabled budget offloading for '{module_label}' "
+            f"(budget={config.budget_mb})"
+        )
+        return True
+
     def _maybe_apply_memory_management(self, component: Dict[str, Any], module: Any):
         mm_config = self._resolve_memory_config_for_component(component)
         if mm_config is None:
             return
         key = component.get("name") or component.get("type")
         module_label = key or component.get("base") or type(module).__name__
-        if not self._apply_group_offloading(
-            module, mm_config, module_label=module_label
-        ):
+        offload_mode = getattr(mm_config, "offload_mode", "group") or "group"
+        applied = False
+        if offload_mode == "budget":
+            applied = self._apply_budget_offloading(
+                module, mm_config, module_label=module_label
+            )
+        else:
+            applied = self._apply_group_offloading(
+                module, mm_config, module_label=module_label
+            )
+        if not applied:
             return
         # Replace references on engine for known types to ensure we reuse the same instance.
         ctype = component.get("type")
@@ -2518,6 +2654,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         if _is_group_offload_enabled(model):
             _maybe_remove_and_reapply_group_offloading(model)
+        if _is_budget_offload_enabled(model):
+            _maybe_remove_and_reapply_budget_offloading(model)
 
     def _load_loras(self):
         """If the YAML config includes a top-level `loras` list, apply them on init.
@@ -3254,9 +3392,46 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         base_shift: float = 0.5,
         max_shift: float = 1.15,
     ):
+        """
+        Compute the dynamic shifting parameter `mu` for FlowMatch schedulers.
+
+        IMPORTANT: For large resolutions the token sequence length can far exceed `max_seq_len`.
+        Linearly extrapolating beyond the calibrated range can push `mu` well past `max_shift`, which
+        destabilizes sampling and often yields garbage outputs. We therefore clamp both the input
+        `image_seq_len` and the resulting `mu` into the configured range.
+        """
+        # Defensive casts
+        try:
+            seq = float(image_seq_len)
+        except Exception:
+            seq = float(base_seq_len)
+
+        base_seq_len = float(base_seq_len)
+        max_seq_len = float(max_seq_len)
+        base_shift = float(base_shift)
+        max_shift = float(max_shift)
+
+        # Handle degenerate configs gracefully
+        if max_seq_len <= base_seq_len:
+            return max(min(base_shift, max_shift), min(max_shift, base_shift))
+
+        # Clamp seq_len to the calibrated interval.
+        if seq < base_seq_len:
+            seq = base_seq_len
+        if seq > max_seq_len:
+            seq = max_seq_len
+
         m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
         b = base_shift - m * base_seq_len
-        mu = image_seq_len * m + b
+        mu = seq * m + b
+
+        # Clamp mu to the shift interval.
+        lo = min(base_shift, max_shift)
+        hi = max(base_shift, max_shift)
+        if mu < lo:
+            mu = lo
+        if mu > hi:
+            mu = hi
         return mu
 
     def _parse_num_frames(

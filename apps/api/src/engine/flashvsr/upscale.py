@@ -221,6 +221,9 @@ class FlashVSRUpscaleEngine(FlashVSRShared):
         tile_sample_stride_width: int = 52,
         continuous_decode: bool = False,
         progress_callback: Callable[[float, str], None] | None = None,
+        chunking_profile: str = "none",
+        rope_on_cpu: bool = False,
+        rotary_emb_chunk_size: Optional[int] = None,
         **kwargs,
     ):
 
@@ -308,6 +311,9 @@ class FlashVSRUpscaleEngine(FlashVSRShared):
         # Reserve inference progress span [0.30, 0.88]
         infer_progress = make_mapped_progress(progress_callback, 0.30, 0.88)
         infer_progress(0.0, "Starting FlashVSR inference")
+        
+        if chunking_profile != "none":
+            self.transformer.set_chunking_profile(chunking_profile)
 
         with self._progress_bar(total=process_total_num) as progress_bar:
 
@@ -380,13 +386,11 @@ class FlashVSRUpscaleEngine(FlashVSRShared):
                         :, :, 4 + cur_process_idx * 2 : 6 + cur_process_idx * 2, :, :
                     ]
 
-                # 推理（无 motion_controller / vace）
-                noise_pred_posi, pre_cache_k, pre_cache_v = self.inference_step(
+                # 推理（无 motion_controller / vace）: use the transformer's `forward()` directly.
+                noise_pred_posi, pre_cache_k, pre_cache_v = self.transformer(
                     x=cur_latents,
                     timestep=self.timestep,
                     context=None,
-                    tea_cache=None,
-                    use_unified_sequence_parallel=False,
                     LQ_latents=LQ_latents,
                     is_full_block=is_full_block,
                     is_stream=is_stream,
@@ -398,6 +402,8 @@ class FlashVSRUpscaleEngine(FlashVSRShared):
                     t_mod=self.t_mod,
                     t=self.t,
                     local_range=local_range,
+                    rope_on_cpu=rope_on_cpu,
+                    rotary_emb_chunk_size=rotary_emb_chunk_size,
                 )
 
                 # 更新 latent

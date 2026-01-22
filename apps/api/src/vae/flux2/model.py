@@ -617,7 +617,7 @@ class AutoencoderKLFlux2(
         )
         latents_bn_std = torch.sqrt(
             self.bn.running_var.view(1, -1, 1, 1) + self.config.batch_norm_eps
-        )
+        ).to(latents.device, latents.dtype)
         latents = (latents - latents_bn_mean) / latents_bn_std
         return latents
 

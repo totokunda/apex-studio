@@ -1040,11 +1040,13 @@ class WanLynxHelper(BaseHelper):
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
         if self.resampler is None:
             raise RuntimeError("Resampler not initialized before building IP states.")
+
         face_tensor = torch.tensor(face_embeds, device=device, dtype=dtype).view(
             1, 1, -1
         )
         ip_hidden_states = [self.resampler(face_tensor)]
         ip_hidden_states_uncond = [self.resampler(torch.zeros_like(face_tensor))]
+        
         return ip_hidden_states, ip_hidden_states_uncond
 
     def cal_mean_and_std(self, vae, device, dtype):

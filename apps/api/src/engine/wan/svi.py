@@ -251,6 +251,8 @@ class WanSVIEngine(WanShared):
         easy_cache_thresh: float = 0.00,
         easy_cache_ret_steps: int = 10,
         easy_cache_cutoff_steps: int | None = None,
+        chunking_profile: str = "none",
+        rope_on_cpu: bool = False,
         **kwargs,
     ):
         """
@@ -541,6 +543,8 @@ class WanSVIEngine(WanShared):
                 easy_cache_thresh=easy_cache_thresh,
                 easy_cache_ret_steps=easy_cache_ret_steps,
                 easy_cache_cutoff_steps=easy_cache_cutoff_steps,
+                chunking_profile=chunking_profile,
+                rope_on_cpu=rope_on_cpu,
             )
 
             safe_emit_progress(

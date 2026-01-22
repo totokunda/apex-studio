@@ -45,6 +45,7 @@ from src.transformer.wan.base.model import (
     _chunked_norm,
     _chunked_feed_forward,
 )
+from src.transformer.efficiency.mod import InplaceRMSNorm
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -472,8 +473,8 @@ class WanAnimateFaceBlockCrossAttention(nn.Module, AttentionModuleMixin):
 
         # 3. QK Norm
         # NOTE: this is applied after the reshape, so only over dim_head rather than dim_head * heads
-        self.norm_q = torch.nn.RMSNorm(dim_head, eps=eps, elementwise_affine=True)
-        self.norm_k = torch.nn.RMSNorm(dim_head, eps=eps, elementwise_affine=True)
+        self.norm_q = InplaceRMSNorm(dim_head, eps=eps, elementwise_affine=True)
+        self.norm_k = InplaceRMSNorm(dim_head, eps=eps, elementwise_affine=True)
 
         # 4. Set attention processor
         if processor is None:
@@ -530,10 +531,10 @@ class WanAttention(torch.nn.Module, AttentionModuleMixin):
                 torch.nn.Dropout(dropout),
             ]
         )
-        self.norm_q = torch.nn.RMSNorm(
+        self.norm_q = InplaceRMSNorm(
             dim_head * heads, eps=eps, elementwise_affine=True
         )
-        self.norm_k = torch.nn.RMSNorm(
+        self.norm_k = InplaceRMSNorm(
             dim_head * heads, eps=eps, elementwise_affine=True
         )
 
@@ -545,7 +546,7 @@ class WanAttention(torch.nn.Module, AttentionModuleMixin):
             self.add_v_proj = torch.nn.Linear(
                 added_kv_proj_dim, self.inner_dim, bias=True
             )
-            self.norm_added_k = torch.nn.RMSNorm(dim_head * heads, eps=eps)
+            self.norm_added_k = InplaceRMSNorm(dim_head * heads, eps=eps)
 
         self.is_cross_attention = cross_attention_dim_head is not None
 
