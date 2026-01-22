@@ -102,23 +102,23 @@ async def lifespan(app: FastAPI):
     # Startup: initialize Ray and related services in the background (non-blocking)
     startup_task = asyncio.create_task(_start_background_services())
 
-    # Start event-driven forwarding of Ray websocket updates (no polling)
-    from .ws_manager import forward_ray_ws_updates
+    # Start background task for polling Ray updates
+    from .preprocessor import poll_ray_updates
 
-    ws_forward_task = asyncio.create_task(forward_ray_ws_updates())
+    poll_task = asyncio.create_task(poll_ray_updates())
     
     yield
 
-    # Shutdown: cancel background tasks and close Ray
+    # Shutdown: Cancel polling task and close Ray
     startup_task.cancel()
-    ws_forward_task.cancel()
+    poll_task.cancel()
 
     try:
         await startup_task
     except asyncio.CancelledError:
         pass
     try:
-        await ws_forward_task
+        await poll_task
     except asyncio.CancelledError:
         pass
     shutdown_ray()
