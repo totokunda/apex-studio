@@ -923,9 +923,29 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         else:
             raise ValueError(f"Component type {component_type} not supported")
         try:
-            name = component.get("name") or component_type
-            self._register_tracked_module(component_module, name, {component_type})
-            self._install_preforward_hook(component_module, name)
+            # IMPORTANT:
+            # The memory manager "leases" components so pressure eviction cannot
+            # discard/offload them until the engine explicitly calls `_offload(...)`.
+            #
+            # To ensure `_offload("vae")` / `_offload("transformer")` releases the
+            # correct lease, we must use stable labels for core engine-owned
+            # components (by `type`, not optional `name`).
+            #
+            # For helpers, prefer a unique human label (name/base) rather than
+            # the generic "helper" type so leases can be released deterministically.
+            if component_type == "helper":
+                label = component.get("name") or component.get("base") or component_type
+            else:
+                label = component.get("name") or component_type
+                
+            self._register_tracked_module(component_module, label, {component_type})
+            self._install_preforward_hook(component_module, label)
+
+            manager = getattr(self, "_component_memory_manager", None) or get_memory_manager()
+            if manager is not None and hasattr(manager, "ensure_component_pinned"):
+                # Ensure at least one "lease" exists; explicit `_offload(...)`
+                # will release it when the pipeline is truly done with the component.
+                manager.ensure_component_pinned(label, min_pins=1, reason="load_component")
         except Exception:
             pass
         empty_cache()
@@ -1076,8 +1096,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 lambda self, x: mm_config, helper
             )
 
+        # Helpers follow the same lease guarantee as core components:
+        # once loaded, they must not be pressure-evicted until an explicit
+        # engine `_offload(...)` indicates they're safe to discard.
         try:
             self._register_tracked_module(helper, helper_name, {"helper"})
+            manager = getattr(self, "_component_memory_manager", None) or get_memory_manager()
+            if manager is not None and hasattr(manager, "ensure_component_pinned"):
+                manager.ensure_component_pinned(
+                    str(helper_name), min_pins=1, reason="load_helper"
+                )
         except Exception:
             pass
 
@@ -2560,6 +2588,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 )
 
                 setattr(self, component.get("type"), component_module)
+                
                 break
 
     def load_component_by_name(self, component_name: str, component_type: str = None):
@@ -2580,6 +2609,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 )
                 setattr(self, component.get("name"), component_module)
                 loaded_component = True
+                
                 return component_module
 
         if not loaded_component and component_type:

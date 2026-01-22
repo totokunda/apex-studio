@@ -47,6 +47,7 @@ import { cancelRayJob } from "@/lib/jobs/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { refreshManifestPart } from "@/lib/manifest/queries";
 import { toast } from "sonner";
+import { TbCancel } from "react-icons/tb";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 
@@ -604,7 +605,7 @@ const ModelPathItem: React.FC<{
           `spec.components.${componentIndex}`,
           queryClient,
         ),
-        refreshManifestPart(manifestId, `downloaded`, queryClient, true),
+        //refreshManifestPart(manifestId, `downloaded`, queryClient, true),
       ]);
     } catch {}
   }, [clearDownloadTracking, componentIndex, jobId, manifestId, path.path, queryClient]);
@@ -890,7 +891,7 @@ const DownloadProgressSection: React.FC<{
             "text-[10px] text-brand-light/90 w-full flex items-center justify-center gap-x-1.5 font-medium hover:text-brand-light transition-all duration-200 bg-brand hover:bg-brand/70 border border-brand-light/10 rounded-[6px] px-2 py-2",
           )}
         >
-          {isCancelling ? <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" /> : <LuX className="w-3.5 h-3.5 text-brand-light/70" />}
+          {isCancelling ? <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" /> : <TbCancel className="w-3.5 h-3.5 text-brand-light/70" />}
           <span>{isCancelling ? "Cancelling..." : "Cancel"}</span>
         </button>
         

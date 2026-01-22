@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 
 from .ws_manager import get_ray_ws_bridge
-from .job_store import register_job, job_store as unified_job_store
+from .job_store import submit_tracked_job, job_store as unified_job_store
 from .ray_tasks import download_unified
 from src.utils.defaults import get_components_path, get_lora_path, get_preprocessor_path
 from src.mixins.download_mixin import DownloadMixin
@@ -281,25 +281,24 @@ def start_unified_download(request: UnifiedDownloadRequest):
         else:
             resources = {}
 
-        ref = download_unified.options(**resources).remote(
-            request.item_type,
-            request.source,
-            job_id,
-            bridge,
-            request.save_path,
-            request.manifest_id,
-            request.lora_name,
-        )
-        register_job(
-            job_id,
-            ref,
-            "download",
-            {
+        ref = submit_tracked_job(
+            job_id=job_id,
+            job_type="download",
+            meta={
                 "item_type": request.item_type,
                 "source": request.source,
                 "save_path": request.save_path,
                 "request_key": req_key,
             },
+            submit=lambda: download_unified.options(**resources).remote(
+                request.item_type,
+                request.source,
+                job_id,
+                bridge,
+                request.save_path,
+                request.manifest_id,
+                request.lora_name,
+            ),
         )
         _request_key_to_job_id[req_key] = job_id
         logger.info(f"Started unified download job {job_id} for {request.item_type}")

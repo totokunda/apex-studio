@@ -335,12 +335,10 @@ def get_ray_ws_bridge():
     """Get or create the Ray websocket bridge actor"""
     global _ray_ws_bridge
     if _ray_ws_bridge is None:
-        import ray
+        # Ensure Ray is *fully* initialized before creating actors. Using
+        # `ray.is_initialized()` here is not sufficient under rare startup races.
+        from .ray_app import get_ray_app
 
-        if not ray.is_initialized():
-            # Lazily initialize Ray if not already done (avoids race on first request)
-            from .ray_app import get_ray_app
-
-            get_ray_app()
+        get_ray_app()
         _ray_ws_bridge = RayWebSocketBridge.remote()
     return _ray_ws_bridge
