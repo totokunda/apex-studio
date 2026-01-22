@@ -206,7 +206,6 @@ def start(
 
     mode = "dev" if procfile_path.name.endswith(".dev") else "prod"
     create_procfile(procfile_path, mode)
-
     # Helpful connection hint: 0.0.0.0 is a *bind address* (server-side), not a client URL.
     # Most users should connect via 127.0.0.1 (or localhost).
     effective_host = os.getenv("APEX_HOST") or (
@@ -239,6 +238,7 @@ def start(
     if daemon and log_path is not None:
         with open(log_path, "a", buffering=1) as f:
             f.write("Honcho not available; running Procfile 'api' command directly.\n")
+    
     _run(cmd, cwd=cwd, daemon=daemon, log_path=log_path)
 
 

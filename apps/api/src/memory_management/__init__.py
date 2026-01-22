@@ -66,6 +66,11 @@ class ManagedComponent:
     last_used: float = field(default_factory=lambda: time.time())
     in_forward: bool = False
     pinned: bool = False
+    # "Lease" pins acquired by engine.load_component(). These prevent the manager
+    # from accidentally evicting/discarding the component mid-run. They are
+    # released only when an explicit engine._offload(...) is called for that
+    # label (or when force_offload_engine_components is invoked).
+    load_pin_count: int = 0
     device: Optional[torch.device] = None
 
     def module(self) -> Optional[torch.nn.Module]:
@@ -96,6 +101,91 @@ class ComponentMemoryManager:
         self._evicting_flag = (
             threading.local()
         )  # Track if we are currently forcing eviction
+
+    # --------- pin/lease helpers ----------
+    def _is_effectively_pinned(self, comp: ManagedComponent) -> bool:
+        # Static pins (e.g. scheduler) and dynamic pins (load_component leases).
+        try:
+            return bool(comp.pinned) or int(getattr(comp, "load_pin_count", 0)) > 0
+        except Exception:
+            return bool(getattr(comp, "pinned", False))
+
+    def pin_component(self, label: str, *, reason: str = "load_component") -> None:
+        """
+        Pin a registered component so it cannot be evicted by pressure handling.
+        Intended to be called after a successful engine.load_component(...).
+        """
+        if not label:
+            return
+        with self._lock:
+            comp = self._components.get(label)
+            if comp is None:
+                return
+            comp.load_pin_count = int(getattr(comp, "load_pin_count", 0)) + 1
+            comp.last_used = time.time()
+            self._log_debug(
+                f"[mem] pin '{label}' (count={comp.load_pin_count}, reason={reason})"
+            )
+
+    def release_component_pin(
+        self, label: str, *, reason: str = "_offload"
+    ) -> None:
+        """
+        Release one pin lease for a component. If pins reach 0, it becomes
+        eligible for eviction again.
+        """
+        if not label:
+            return
+        with self._lock:
+            comp = self._components.get(label)
+            if comp is None:
+                return
+            current = int(getattr(comp, "load_pin_count", 0))
+            if current <= 0:
+                return
+            comp.load_pin_count = current - 1
+            comp.last_used = time.time()
+            self._log_debug(
+                f"[mem] unpin '{label}' (count={comp.load_pin_count}, reason={reason})"
+            )
+
+    def clear_component_pins(self, label: str, *, reason: str = "force_offload") -> None:
+        """
+        Clear all dynamic pins for a component (used by forced cleanup paths).
+        """
+        if not label:
+            return
+        with self._lock:
+            comp = self._components.get(label)
+            if comp is None:
+                return
+            if int(getattr(comp, "load_pin_count", 0)) <= 0:
+                return
+            comp.load_pin_count = 0
+            comp.last_used = time.time()
+            self._log_debug(f"[mem] clear pins '{label}' (reason={reason})")
+
+    def ensure_component_pinned(
+        self, label: str, *, min_pins: int = 1, reason: str = "install"
+    ) -> None:
+        """
+        Ensure a component has at least `min_pins` dynamic leases.
+        Useful when the manager is installed after components were already loaded.
+        """
+        if not label or min_pins <= 0:
+            return
+        with self._lock:
+            comp = self._components.get(label)
+            if comp is None:
+                return
+            current = int(getattr(comp, "load_pin_count", 0))
+            if current >= min_pins:
+                return
+            comp.load_pin_count = int(min_pins)
+            comp.last_used = time.time()
+            self._log_debug(
+                f"[mem] ensure pin '{label}' (count={comp.load_pin_count}, reason={reason})"
+            )
 
     # --------- environment helpers ----------
     @staticmethod
@@ -315,7 +405,8 @@ class ComponentMemoryManager:
         try:
 
             def _pre(_mod, _inputs):
-                self._on_forward_start(label, _mod)
+                # Allow returning modified inputs from the hook.
+                return self._on_forward_start(label, _mod, _inputs)
 
             def _post(_mod, _inputs, _outputs):
                 self._on_forward_end(label, _mod)
@@ -327,20 +418,104 @@ class ComponentMemoryManager:
         return tuple(handles)
 
     # --------- lifecycle ----------
-    def _on_forward_start(self, label: str, module: torch.nn.Module) -> None:
+    def _infer_first_tensor_device(self, obj: Any) -> Optional[torch.device]:
+        """
+        Best-effort: find the first tensor device within a nested input structure.
+        """
+        try:
+            if torch.is_tensor(obj):
+                return obj.device
+        except Exception:
+            pass
+        if isinstance(obj, (list, tuple)):
+            for it in obj:
+                dev = self._infer_first_tensor_device(it)
+                if dev is not None:
+                    return dev
+        if isinstance(obj, dict):
+            for it in obj.values():
+                dev = self._infer_first_tensor_device(it)
+                if dev is not None:
+                    return dev
+        return None
+
+    def _move_tensors_to_device(self, obj: Any, device: torch.device) -> Any:
+        """
+        Recursively move tensors inside `obj` to `device`.
+        Non-tensors are preserved.
+        """
+        try:
+            if torch.is_tensor(obj):
+                return obj.to(device)
+        except Exception:
+            pass
+        if isinstance(obj, tuple):
+            return tuple(self._move_tensors_to_device(x, device) for x in obj)
+        if isinstance(obj, list):
+            return [self._move_tensors_to_device(x, device) for x in obj]
+        if isinstance(obj, dict):
+            return {k: self._move_tensors_to_device(v, device) for k, v in obj.items()}
+        return obj
+
+    def _on_forward_start(
+        self, label: str, module: torch.nn.Module, inputs: Any
+    ) -> Any:
         comp = self._components.get(label)
         if comp is None:
-            return
+            return None
         comp.in_forward = True
         comp.last_used = time.time()
-        device = self._module_device(module)
-        comp.device = device
+        module_device = self._module_device(module)
+
+        # -----------------------------
+        # Device alignment guard
+        # -----------------------------
+        # If an input tensor is on a different device than the module weights,
+        # fix it *before* the forward to avoid runtime errors like:
+        #   "weight is on cpu but expected on mps".
+        input_device = self._infer_first_tensor_device(inputs)
+        if (
+            input_device is not None
+            and isinstance(input_device, torch.device)
+            and input_device.type != module_device.type
+        ):
+            # Prefer moving the module to the input device (keeps the fast path fast).
+            reserve = max(comp.estimated_bytes, 0)
+            reserve = int(reserve * self._env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20))
+            reserve += self._env_int(
+                "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
+            )
+            try:
+                # Ensure we have headroom on the *target* device before moving.
+                self._ensure_room(input_device, reserve, exclude_label=label)
+                engine = comp.engine()
+                if engine is not None and hasattr(engine, "to_device"):
+                    engine.to_device(module, device=input_device)
+                else:
+                    module.to(input_device)
+                module_device = self._module_device(module)
+            except Exception as exc:
+                # If moving weights fails (e.g. OOM), fall back to moving inputs.
+                self._log_debug(
+                    f"[mem] device align failed for '{label}' "
+                    f"({module_device} -> {input_device}): {exc}; falling back to input move"
+                )
+                try:
+                    moved = self._move_tensors_to_device(inputs, module_device)
+                    inputs = moved
+                except Exception:
+                    pass
+
+        comp.device = module_device
 
         reserve = max(comp.estimated_bytes, 0)
         reserve = int(reserve * self._env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20))
         reserve += self._env_int("APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2)
 
-        self._ensure_room(device, reserve, exclude_label=label)
+        self._ensure_room(module_device, reserve, exclude_label=label)
+
+        # If we modified inputs, return them to the hook caller.
+        return inputs
 
     def _on_forward_end(self, label: str, module: torch.nn.Module) -> None:
         comp = self._components.get(label)
@@ -445,7 +620,9 @@ class ComponentMemoryManager:
                 eng = comp.engine()
                 if eng is None or eng is not engine:
                     continue
-                self._offload_component(comp, offload_type=offload_type)
+                self._offload_component(
+                    comp, offload_type=offload_type, ignore_pins=True
+                )
                 results[str(comp.label)] = str(offload_type)
             except Exception as exc:
                 results[str(getattr(comp, "label", "unknown"))] = f"error:{exc}"
@@ -564,7 +741,7 @@ class ComponentMemoryManager:
         for label, comp in self._components.items():
             if exclude_label is not None and label == exclude_label:
                 continue
-            if comp.in_forward or comp.pinned:
+            if comp.in_forward or self._is_effectively_pinned(comp):
                 continue
             if comp.device is not None and comp.device.type != device.type:
                 continue
@@ -574,9 +751,19 @@ class ComponentMemoryManager:
         return [label for _, label in comps]
 
     def _offload_component(
-        self, comp: ManagedComponent, offload_type: str = "cpu"
+        self,
+        comp: ManagedComponent,
+        offload_type: str = "cpu",
+        *,
+        ignore_pins: bool = False,
     ) -> None:
-        
+        if (not ignore_pins) and self._is_effectively_pinned(comp):
+            # Never evict components that were explicitly loaded and still "leased".
+            # This is the core guarantee: load_component() cannot be accidentally
+            # discarded/offloaded by pressure management.
+            self._log_debug(f"[mem] skip offload pinned '{comp.label}' ({offload_type})")
+            return
+
         module = comp.module()
         if module is None and offload_type != "discard":
             return
@@ -586,6 +773,12 @@ class ComponentMemoryManager:
         # Set thread-local flag to signal that this offload is FORCED by the manager
         self._evicting_flag.is_evicting = True
         try:
+            if ignore_pins:
+                # Forced cleanup explicitly overrides load_component leases.
+                try:
+                    self.clear_component_pins(comp.label, reason="force_offload")
+                except Exception:
+                    pass
             engine = comp.engine()
             try:
                 if engine is not None and hasattr(engine, "_offload"):
@@ -735,6 +928,31 @@ class ComponentMemoryManager:
                 except Exception:
                     pass
 
+            # Explicit offload indicates the caller is done using this component.
+            # Release any lease pins so future pressure handling can evict/discard it.
+            #
+            # IMPORTANT: when `_offload(...)` is called with a string (common for helpers),
+            # we must resolve to the *registered* label (via module id) to release the
+            # correct lease.
+            if manager:
+                try:
+                    label_to_release = None
+                    if isinstance(module, str):
+                        if mod_obj is not None and hasattr(manager, "_module_to_label"):
+                            label_to_release = manager._module_to_label.get(id(mod_obj))
+                        label_to_release = label_to_release or module
+                    else:
+                        if hasattr(manager, "_module_to_label"):
+                            label_to_release = manager._module_to_label.get(id(module))
+                        label_to_release = label_to_release or manager._resolve_label(module)
+
+                    if label_to_release:
+                        manager.release_component_pin(
+                            str(label_to_release), reason="_offload"
+                        )
+                except Exception:
+                    pass
+
             # 2. Downgrade Discard -> CPU if RAM allows
             if final_offload_type == "discard" and manager and mod_obj is not None:
                 try:
@@ -806,6 +1024,68 @@ class ComponentMemoryManager:
         engine._offload = types.MethodType(_wrapped_offload, engine)
         engine._apex_mem_offload_wrapped = True
 
+    def _wrap_load_component(self, engine: Any) -> None:
+        """
+        Ensure engine.load_component() creates a non-evictable lease for the loaded
+        component. This prevents mid-run surprises like `engine.transformer` being
+        set to None by pressure eviction before explicit offload.
+        """
+        if getattr(engine, "_apex_mem_load_component_wrapped", False):
+            return
+        if not hasattr(engine, "load_component"):
+            return
+        original = engine.load_component
+
+        def _wrapped_load_component(self, component, *args, **kwargs):
+            module = original(component, *args, **kwargs)
+            # If a component loader returned None, that's a hard error: callers
+            # expect a usable module, and we must not allow silent "None".
+            if module is None:
+                raise RuntimeError(
+                    f"load_component returned None for component={component}"
+                )
+
+            # Mirror BaseEngine.load_component labeling rules.
+            label = None
+            tags: Set[str] | None = None
+            try:
+                if isinstance(component, dict):
+                    ctype = component.get("type")
+                    # Use stable labels for core engine-owned components so
+                    # `_offload("vae")` / `_offload("transformer")` releases the
+                    # correct lease. For non-core components, fall back to name.
+                    core_labels = {"transformer", "vae", "text_encoder", "scheduler"}
+                    if ctype in core_labels:
+                        label = ctype
+                    elif ctype == "helper":
+                        label = component.get("name") or component.get("base") or ctype
+                    else:
+                        label = component.get("name") or ctype
+                    if ctype:
+                        tags = {str(ctype)}
+            except Exception:
+                label = None
+                tags = None
+
+            # Best-effort: ensure it's registered, then pin it.
+            manager = getattr(self, "_component_memory_manager", None)
+            if manager and label:
+                try:
+                    if hasattr(self, "_register_tracked_module"):
+                        self._register_tracked_module(module, label, tags or {label})
+                except Exception:
+                    pass
+                try:
+                    # Ensure at least one lease exists (do not increment endlessly).
+                    manager.ensure_component_pinned(label, min_pins=1, reason="load_component")
+                except Exception:
+                    pass
+
+            return module
+
+        engine.load_component = types.MethodType(_wrapped_load_component, engine)
+        engine._apex_mem_load_component_wrapped = True
+
     def _register_existing_components(self, engine: Any) -> None:
         for name in ("transformer", "vae", "text_encoder", "scheduler"):
             mod = getattr(engine, name, None)
@@ -813,12 +1093,23 @@ class ComponentMemoryManager:
                 self.register_component(
                     mod, name, {name}, engine=engine, pinned=name == "scheduler"
                 )
+                # If the engine already has these core modules loaded by the time
+                # the manager is installed, treat them as leased: they must not
+                # be accidentally discarded by pressure eviction mid-run.
+                if name in {"transformer", "vae", "text_encoder"}:
+                    self.ensure_component_pinned(name, min_pins=1, reason="install")
         helpers = getattr(engine, "_helpers", None) or getattr(engine, "helpers", None)
         if isinstance(helpers, dict):
             for key, helper in helpers.items():
                 self.register_component(
                     helper, key, {"helper"}, engine=engine, pinned=False
                 )
+                # Treat pre-existing helpers as leased: do not allow pressure
+                # eviction until an explicit engine `_offload(...)` happens.
+                try:
+                    self.ensure_component_pinned(str(key), min_pins=1, reason="install")
+                except Exception:
+                    pass
 
     def install_for_engine(self, engine: Any) -> None:
         """
@@ -829,6 +1120,7 @@ class ComponentMemoryManager:
         self._register_existing_components(engine)
         self._wrap_to_device(engine)
         self._wrap_offload(engine)
+        self._wrap_load_component(engine)
 
         # Expose helpers for BaseEngine.load_component path.
         def _register_tracked_module(self_obj, module, label, tags=None):

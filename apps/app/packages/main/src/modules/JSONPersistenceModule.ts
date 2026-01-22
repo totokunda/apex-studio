@@ -1295,14 +1295,55 @@ export class JSONPersistenceModule implements AppModule {
           }
 
           const filePath = this.getProjectPath(id);
+          // Best-effort: read the project JSON first so we can remove its media folder
+          // (keyed by meta.id / folderUuid) alongside the project file.
+          let folderUuid: string | null = null;
+          try {
+            const raw = await fs.readFile(filePath, "utf8");
+            const parsed = JSON.parse(raw);
+            const metaId = parsed?.meta?.id;
+            if (typeof metaId === "string" && metaId.trim().length > 0) {
+              folderUuid = metaId.trim();
+            }
+          } catch {
+            // ignore (missing/invalid JSON)
+          }
+
           try {
             await fs.unlink(filePath);
           } catch (err: any) {
             if (err && (err as any).code === "ENOENT") {
               // File already removed – treat as success.
+              // Still attempt to clean up the media folder if we managed to read it earlier.
+              if (folderUuid) {
+                try {
+                  const safeFolderUuid = folderUuid.replace(/[^a-zA-Z0-9_-]/g, "_");
+                  if (safeFolderUuid.length > 0) {
+                    const userDataDir = path.dirname(this.projectsDir);
+                    const mediaDir = path.join(userDataDir, "media", safeFolderUuid);
+                    await fs.rm(mediaDir, { recursive: true, force: true });
+                  }
+                } catch {
+                  // ignore
+                }
+              }
               return { success: true, data: { id } };
             }
             throw err;
+          }
+
+          // Best-effort: delete the project's media folder (<userData>/media/<folderUuid>).
+          if (folderUuid) {
+            try {
+              const safeFolderUuid = folderUuid.replace(/[^a-zA-Z0-9_-]/g, "_");
+              if (safeFolderUuid.length > 0) {
+                const userDataDir = path.dirname(this.projectsDir);
+                const mediaDir = path.join(userDataDir, "media", safeFolderUuid);
+                await fs.rm(mediaDir, { recursive: true, force: true });
+              }
+            } catch {
+              // ignore
+            }
           }
 
           return { success: true, data: { id } };

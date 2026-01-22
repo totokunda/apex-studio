@@ -12,7 +12,7 @@ import shutil
 import json
 import ray
 from .ray_tasks import run_preprocessor
-from .job_store import register_job, job_store
+from .job_store import submit_tracked_job, job_store
 from .preprocessor_registry import list_preprocessors, get_preprocessor_details
 from .params import validate_and_convert_params
 from .ray_resources import get_best_gpu, get_ray_resources
@@ -49,7 +49,9 @@ async def poll_ray_updates():
                     # Don't trigger Ray initialization from this polling loop.
                     # Ray is started asynchronously during app startup; until it's ready
                     # we simply sleep and retry.
-                    if not ray.is_initialized():
+                    from .ray_app import is_ray_ready
+
+                    if not is_ray_ready():
                         await asyncio.sleep(0.5)
                         continue
                     bridge = get_ray_ws_bridge()
@@ -290,26 +292,25 @@ def trigger_run(request: RunRequest):
     # Submit Ray task
     try:
         job_id = request.job_id or str(uuid.uuid4())
+        bridge = get_ray_ws_bridge()
 
         # Submit task with resource constraints
-        task_ref = run_preprocessor.options(**resources).remote(
-            request.preprocessor_name,
-            request.input_path,
-            job_id, 
-            request.start_frame,
-            request.end_frame,
-            **kwargs,
-        )
-
-        # Register with unified job store
-        register_job(
-            job_id,
-            task_ref,
-            "preprocessor",
-            {
+        task_ref = submit_tracked_job(
+            job_id=job_id,
+            job_type="preprocessor",
+            meta={
                 "preprocessor_name": request.preprocessor_name,
                 "input_path": request.input_path,
             },
+            submit=lambda: run_preprocessor.options(**resources).remote(
+                request.preprocessor_name,
+                request.input_path,
+                job_id,
+                bridge,
+                request.start_frame,
+                request.end_frame,
+                **kwargs,
+            ),
         )
         legacy_job_store[job_id] = task_ref
 
