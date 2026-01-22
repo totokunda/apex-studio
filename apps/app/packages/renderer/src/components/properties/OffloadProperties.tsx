@@ -252,9 +252,11 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
       const map = (clip.offload || {}) as NonNullable<ModelClipProps["offload"]>;
       const existing = map[key] || {};
       const enabled = !!existing.enabled;
+      // Defaults: prefer Budget mode (new default). If explicitly set to group, respect it.
       const offload_mode: OffloadMode =
-        (existing as any)?.offload_mode === "budget" ? "budget" : "group";
-      const level: OffloadLevel = (existing.level as OffloadLevel) || "leaf";
+        (existing as any)?.offload_mode === "group" ? "group" : "budget";
+      // Group mode default: block level (new default).
+      const level: OffloadLevel = (existing.level as OffloadLevel) || "block";
       // Defaults: stream + record + low CPU memory ON unless explicitly disabled
       const use_stream = existing.use_stream ?? true;
       const record_stream = existing.record_stream ?? true;
@@ -322,10 +324,12 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
     let nextEntry = { ...prevEntry, ...patch };
 
     // Normalize/clamp
+    // Defaults: prefer Budget mode unless explicitly set to group.
     const mode: OffloadMode =
-      (nextEntry as any)?.offload_mode === "budget" ? "budget" : "group";
+      (nextEntry as any)?.offload_mode === "group" ? "group" : "budget";
     const useStream = nextEntry.use_stream ?? true;
-    const level = (nextEntry.level as OffloadLevel) || "leaf";
+    // Group mode default: block level (new default).
+    const level = (nextEntry.level as OffloadLevel) || "block";
     let numBlocks = typeof nextEntry.num_blocks === "number" ? nextEntry.num_blocks : 1;
     numBlocks = Math.max(1, Math.floor(Number.isFinite(numBlocks) ? numBlocks : 1));
     const lowCpuMemUsage = nextEntry.low_cpu_mem_usage ?? true;
