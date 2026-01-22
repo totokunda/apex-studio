@@ -19,6 +19,7 @@ from src.mixins.download_mixin import DownloadMixin
 from .preprocessor_registry import check_preprocessor_downloaded
 from .ray_resources import get_ray_resources
 from .ray_resources import get_best_gpu
+from .engine_resource_guard import maybe_release_warm_engine_for_non_engine_request
 
 router = APIRouter(prefix="/download", tags=["download"])
 
@@ -267,6 +268,12 @@ def start_unified_download(request: UnifiedDownloadRequest):
             pass
 
         if request.item_type == "lora":
+            # If a warm engine is idling on the GPU, release it so this non-engine job can run.
+            # If an engine job is active/queued, we do nothing (Ray will queue naturally).
+            try:
+                maybe_release_warm_engine_for_non_engine_request()
+            except Exception:
+                pass
             device_index, device_type = get_best_gpu()
             resources = get_ray_resources(
                 device_index, device_type, load_profile="light"
