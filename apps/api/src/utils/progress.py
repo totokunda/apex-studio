@@ -86,23 +86,8 @@ def safe_emit_progress(
         p = 0.0
 
     msg = message if message is not None else ""
-
-    # Fire-and-forget + ordered:
-    # Enqueue to a single worker that processes events FIFO, so callback invocation order
-    # matches the order of safe_emit_progress() calls, without blocking model execution.
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    try:
-        _ensure_progress_worker_started()
-        _PROGRESS_QUEUE.put(
-            _ProgressEvent(callback=progress_callback, p=p, msg=msg, loop=loop)  # type: ignore[arg-type]
-        )
-    except Exception:
-        # Swallow callback errors to avoid interrupting pipelines
-        pass
+    progress_callback(p, msg)
+    
 
 
 def make_mapped_progress(

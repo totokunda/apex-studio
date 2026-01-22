@@ -105,9 +105,16 @@ def run_engine(request: RunEngineRequest):
     bridge = get_ray_ws_bridge()
 
     try:
-        from .ray_tasks import run_engine_from_manifest  # lazy import to avoid cycles
+        from .ray_tasks import get_engine_runner_actor  # lazy import to avoid cycles
+        from .ray_app import get_ray_app
 
-        ref = run_engine_from_manifest.options(**resources).remote(
+        # Ensure Ray is initialized (warm actor lookup/creation requires it).
+        get_ray_app()
+
+        runner = get_engine_runner_actor(
+            device_index=device_index, device_type=device_type, resources=resources
+        )
+        ref = runner.run_engine_from_manifest.remote(
             manifest_path,
             job_id,
             bridge,
@@ -157,13 +164,24 @@ def warmup_engine(request: WarmupEngineRequest):
         resources = get_ray_resources(device_index, device_type, load_profile="light")
 
     try:
-        from .ray_tasks import warmup_engine_from_manifest  # lazy import
+        from .ray_app import get_ray_app
+        from .ray_tasks import get_engine_runner_actor, warmup_engine_from_manifest  # lazy import
 
-        ref = warmup_engine_from_manifest.options(**resources).remote(
-            manifest_path,
-            request.selected_components or {},
-            mode=mode,
-        )
+        # Ensure Ray is initialized (warm actor lookup/creation requires it).
+        get_ray_app()
+
+        if mode == "disk":
+            # Disk warmup is CPU-only and doesn't need to go through the GPU actor.
+            ref = warmup_engine_from_manifest.options(**resources).remote(
+                manifest_path, request.selected_components or {}, mode=mode
+            )
+        else:
+            runner = get_engine_runner_actor(
+                device_index=device_index, device_type=device_type, resources=resources
+            )
+            ref = runner.warmup_engine_from_manifest.remote(
+                manifest_path, request.selected_components or {}, mode=mode
+            )
         register_job(
             job_id, ref, "engine_warmup", {"manifest_path": manifest_path, "mode": mode}
         )
