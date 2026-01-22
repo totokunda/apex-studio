@@ -41,7 +41,6 @@ spec:
     - cuda
     - cpu
     - metal
-  
   loras:
   - name: Wan 2.2 5B FastWan LoRA
     label: Wan 2.2 5B FastWan LoRA
@@ -101,42 +100,82 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 19999308424
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 5400179040
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q6_K.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 4211683680
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q5_K_M.gguf
       variant: GGUF_Q5_K_M
       precision: q5_k_m
       type: gguf
+      file_size: 3810603360
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q5_K_S.gguf
       variant: GGUF_Q5_K_S
       precision: q5_1
       type: gguf
+      file_size: 3559928160
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q4_K_M.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
+      file_size: 3433116000
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q4_K_S.gguf
       variant: GGUF_Q4_K_S
       precision: q4_k_s
       type: gguf
+      file_size: 3116380512
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q3_K_M.gguf
       variant: GGUF_Q3_K_M
       precision: q3_k_m
       type: gguf
+      file_size: 2547790176
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q3_K_S.gguf
       variant: GGUF_Q3_K_S
       precision: q3_k_s
       type: gguf
+      file_size: 2294755680
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
     - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q2_K.gguf
       variant: GGUF_Q2_K
       precision: q2_k
       type: gguf
+      file_size: 1853862240
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
     config_path: Wan-AI/Wan2.2-TI2V-5B-Diffusers/transformer/config.json
   defaults:
     run:
@@ -308,7 +347,8 @@ spec:
       step: 0.5
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

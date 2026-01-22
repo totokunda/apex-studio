@@ -65,7 +65,6 @@ spec:
     - embed_tokens
     block_modules:
     - model
-    config_path: black-forest-labs/FLUX.2-klein-4B/text_encoder/config.json
     model_path:
     - path: black-forest-labs/FLUX.2-klein-4B/text_encoder
       variant: default
@@ -100,6 +99,198 @@ spec:
       resource_requirements:
         min_vram_gb: 22
         recommended_vram_gb: 30
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-BF16.gguf
+      variant: GGUF_BF16
+      precision: bf16
+      type: gguf
+      file_size: 7751115328
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-F16.gguf
+      variant: GGUF_F16
+      precision: f16
+      type: gguf
+      file_size: 7751115328
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 4300644928
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 3409273408
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q5_1.gguf
+      variant: GGUF_Q5_1
+      precision: q5_1
+      type: gguf
+      file_size: 3150488128
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 3073368640
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 2920456768
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 3050807872
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q4_1.gguf
+      variant: GGUF_Q4_1
+      precision: q4_1
+      type: gguf
+      file_size: 2690425408
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 2604311104
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 2460394048
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 2583077440
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-BF16.gguf
+      variant: GGUF_BF16_DISTILLED
+      precision: bf16
+      type: gguf
+      file_size: 7751115328
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-F16.gguf
+      variant: GGUF_F16_DISTILLED
+      precision: f16
+      type: gguf
+      file_size: 7751115328
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q8_0.gguf
+      variant: GGUF_Q8_0_DISTILLED
+      precision: q8_0
+      type: gguf
+      file_size: 4300644928
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q6_K.gguf
+      variant: GGUF_Q6_K_DISTILLED
+      precision: q6_k
+      type: gguf
+      file_size: 3409273408
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q5_1.gguf
+      variant: GGUF_Q5_1_DISTILLED
+      precision: q5_1
+      type: gguf
+      file_size: 3150488128
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M_DISTILLED
+      precision: q5_k_m
+      type: gguf
+      file_size: 3073368640
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q5_0.gguf
+      variant: GGUF_Q5_0_DISTILLED
+      precision: q5_0
+      type: gguf
+      file_size: 2920456768
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S_DISTILLED
+      precision: q5_k_s
+      type: gguf
+      file_size: 3050807872
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_1.gguf
+      variant: GGUF_Q4_1_DISTILLED
+      precision: q4_1
+      type: gguf
+      file_size: 2690425408
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M_DISTILLED
+      precision: q4_k_m
+      type: gguf
+      file_size: 2604311104
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_0.gguf
+      variant: GGUF_Q4_0_DISTILLED
+      precision: q4_0
+      type: gguf
+      file_size: 2460394048
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S_DISTILLED
+      precision: q4_k_s
+      type: gguf
+      file_size: 2583077440
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
   defaults:
     run:
       num_inference_steps: 4
