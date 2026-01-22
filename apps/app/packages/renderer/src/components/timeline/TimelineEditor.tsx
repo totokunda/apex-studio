@@ -45,6 +45,7 @@ import {
   getOtherPreprocessors,
 } from "@/lib/preprocessorHelpers";
 import { convertFrameRange } from "@/lib/media/fps";
+import { getOffloadDefaultsForManifest } from "@app/preload";
 
 import { ManifestWithType } from "@/lib/manifest/api";
 import { useViewportStore } from "@/lib/viewport";
@@ -972,6 +973,34 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
 
         (newClip as ModelClipProps).manifest = manifest;
         addClip(newClip as AnyClipProps);
+
+        // Best-effort: hydrate global offload defaults for this manifest id.
+        // Do this *after* addClip so we can safely update the stored clip without
+        // needing to block the DnD event on IPC.
+        try {
+          const mfId = String((manifest as any)?.metadata?.id || "").trim();
+          if (mfId) {
+            const newClipId = String((newClip as any)?.clipId || "");
+            void (async () => {
+              try {
+                const defaults = await getOffloadDefaultsForManifest(mfId);
+                if (!defaults) return;
+                const store = useClipStore.getState();
+                const existing = store.getClipById(newClipId) as ModelClipProps | undefined;
+                if (!existing || existing.type !== "model") return;
+                const currentOffload = (existing as any).offload;
+                if (currentOffload && typeof currentOffload === "object" && Object.keys(currentOffload).length > 0) {
+                  return;
+                }
+                store.updateClip(newClipId, { offload: defaults } as any);
+              } catch {
+                // ignore
+              }
+            })();
+          }
+        } catch {
+          // ignore
+        }
         cleanup();
       } else {
         addClip(newClip as AnyClipProps);
