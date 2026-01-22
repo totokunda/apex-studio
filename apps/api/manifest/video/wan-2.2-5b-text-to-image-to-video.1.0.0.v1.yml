@@ -148,6 +148,8 @@ spec:
       text_encoder_kwargs:
         use_attention_mask: true
       attention_kwargs: {}
+      rope_on_cpu: false
+      chunking_profile: none
   ui:
     panels:
     - name: input
@@ -187,6 +189,15 @@ spec:
         - - num_inference_steps
         - - guidance_scale
         - - seed
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - rope_on_cpu
+        - - chunking_profile
     inputs:
     - id: image
       label: Image
@@ -295,3 +306,25 @@ spec:
       min: 1.0
       max: 15.0
       step: 0.5
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: none
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
