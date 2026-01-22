@@ -115,7 +115,11 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
         device_index, device_type = get_best_gpu()
         resources = get_ray_resources(device_index, device_type, load_profile="light")
         runner = None
-        if device_type == "cuda" and device_index is not None:
+        # Route free-memory through the long-lived EngineRunner process whenever we
+        # have an accelerator-backed worker (CUDA or Apple MPS). This ensures we
+        # operate on the *correct* per-process warm pool and can actually release
+        # accelerator caches in that worker.
+        if device_type in {"cuda", "mps"} and device_index is not None:
             runner = get_engine_runner_actor(
                 device_index=device_index, device_type=device_type, resources=resources
             )
@@ -129,9 +133,9 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
             )
         worker_result = await _run_blocking(ray.get, ref)
 
-        # If the user asked for a full "free VRAM" and nothing is running, we must
-        # terminate the GPU actor process to release the CUDA context itself.
-        # (Offloading modules + empty_cache does not fully return VRAM to the OS.)
+        # If the user asked for a full "free memory" and nothing is running, we can
+        # terminate the runner actor process to release the accelerator context/caches
+        # in that process (most relevant for CUDA; still helpful for MPS/unified memory).
         actor_killed = False
         try:
             skipped = (
