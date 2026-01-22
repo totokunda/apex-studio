@@ -416,6 +416,14 @@ class Flux2KleinEngine(Flux2Shared):
                 safe_emit_progress(progress_callback, 0.955, "Loading VAE")
                 self.load_component_by_type("vae")
                 safe_emit_progress(progress_callback, 0.96, "VAE loaded")
+            # Critical safety: VAE must not be pressure-evicted while we're about
+            # to use it (some VAE methods here are outside forward hooks).
+            try:
+                mgr = getattr(self, "_component_memory_manager", None)
+                if mgr is not None and hasattr(mgr, "ensure_component_pinned"):
+                    mgr.ensure_component_pinned("vae", min_pins=1, reason="klein_decode")
+            except Exception:
+                pass
             safe_emit_progress(progress_callback, 0.965, "Moving VAE to device")
             self.to_device(self.vae)
 
@@ -444,6 +452,13 @@ class Flux2KleinEngine(Flux2Shared):
 
             if not self.vae:
                 self.load_component_by_type("vae")
+            # Same guarantee for preview decode: do not allow VAE eviction mid-use.
+            try:
+                mgr = getattr(self, "_component_memory_manager", None)
+                if mgr is not None and hasattr(mgr, "ensure_component_pinned"):
+                    mgr.ensure_component_pinned("vae", min_pins=1, reason="klein_preview_decode")
+            except Exception:
+                pass
             self.to_device(self.vae)
 
             unpacked = self.vae.denormalize_latents(unpacked)
