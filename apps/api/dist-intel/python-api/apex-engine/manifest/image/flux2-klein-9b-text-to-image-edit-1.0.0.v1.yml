@@ -1,0 +1,441 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: flux2-klein-9b-text-to-image-edit
+  model: flux2-klein
+  name: Flux Klein 9B Text to Image Edit
+  version: 1.0.0
+  description: Flux Klein is a 9B parameter model for text-to-image and image-to-image
+    generation.
+  tags:
+  - flux2
+  - klein
+  - image-edit
+  - i2i
+  categories:
+  - image-edit
+  - text-to-image
+  author: Black Forest Labs
+  license: Apache-2.0
+  demo_path: models/flux2-klein-9b-text-to-image-edit.png
+spec:
+  engine: flux2
+  model_type: klein
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is used for Flux Dev.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: black-forest-labs/FLUX.2-klein-9B/scheduler/scheduler_config.json
+  - type: vae
+    label: Flux VAE
+    base: flux2
+    model_path:
+    - path: black-forest-labs/FLUX.2-dev/vae
+      variant: default
+      file_size: 336214326
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    name: text_encoder
+    label: Flux2 Text Encoder
+    base: Qwen3ForCausalLM
+    ignore_offloading_modules:
+    - lm_head
+    - embed_tokens
+    block_modules:
+    - model
+    config_path: black-forest-labs/FLUX.2-klein-9B/text_encoder/config.json
+    model_path:
+    - path: black-forest-labs/FLUX.2-klein-9B/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 16381551490
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
+    tokenizer_class: Qwen2Tokenizer
+    tokenizer_name: black-forest-labs/FLUX.2-klein-9B
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: transformer
+    label: Flux Transformer
+    base: flux2.base
+    config_path: black-forest-labs/FLUX.2-klein-9B/transformer/config.json
+    model_path:
+    - path: black-forest-labs/FLUX.2-klein-base-9b/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 18157216287
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: black-forest-labs/FLUX.2-klein-9B/transformer
+      variant: DISTILLED
+      precision: fp16
+      type: safetensors
+      file_size: 18157216297
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-BF16.gguf
+      variant: GGUF_BF16
+      precision: bf16
+      type: gguf
+      file_size: 18157197600
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-F16.gguf
+      variant: GGUF_F16
+      precision: f16
+      type: gguf
+      file_size: 18157197600
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 9978304800
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 7865424160
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q5_1.gguf
+      variant: GGUF_Q5_1
+      precision: q5_1
+      type: gguf
+      file_size: 7252007200
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 7018699040
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 6706747680
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 6938482976
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q4_1.gguf
+      variant: GGUF_Q4_1
+      precision: q4_1
+      type: gguf
+      file_size: 6161488160
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 5909829920
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 5616228640
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 5834332448
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-BF16.gguf
+      variant: GGUF_BF16_DISTILLED
+      precision: bf16
+      type: gguf
+      file_size: 18157197600
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-F16.gguf
+      variant: GGUF_F16_DISTILLED
+      precision: f16
+      type: gguf
+      file_size: 18157197600
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q8_0.gguf
+      variant: GGUF_Q8_0_DISTILLED
+      precision: q8_0
+      type: gguf
+      file_size: 9978304800
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q6_K.gguf
+      variant: GGUF_Q6_K_DISTILLED
+      precision: q6_k
+      type: gguf
+      file_size: 7865424160
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q5_1.gguf
+      variant: GGUF_Q5_1_DISTILLED
+      precision: q5_1
+      type: gguf
+      file_size: 7252007200
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M_DISTILLED
+      precision: q5_k_m
+      type: gguf
+      file_size: 7018699040
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q5_0.gguf
+      variant: GGUF_Q5_0_DISTILLED
+      precision: q5_0
+      type: gguf
+      file_size: 6706747680
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S_DISTILLED
+      precision: q5_k_s
+      type: gguf
+      file_size: 6938482976
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q4_1.gguf
+      variant: GGUF_Q4_1_DISTILLED
+      precision: q4_1
+      type: gguf
+      file_size: 6161488160
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M_DISTILLED
+      precision: q4_k_m
+      type: gguf
+      file_size: 5909829920
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q4_0.gguf
+      variant: GGUF_Q4_0_DISTILLED
+      precision: q4_0
+      type: gguf
+      file_size: 5616228640
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S_DISTILLED
+      precision: q4_k_s
+      type: gguf
+      file_size: 5834332448
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+  defaults:
+    run:
+      num_inference_steps: 4
+      guidance_scale: 1.0
+      return_latents: false
+  ui:
+    panels:
+    - name: images
+      label: Images
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: image
+      label: Images
+      description: The input image to edit.
+      type: image_list
+      panel: input
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+        height: 720
+      - name: Ultra HD
+        value: 1024
+        height: 1024
+      - name: SD
+        value: 480
+        height: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 4
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5

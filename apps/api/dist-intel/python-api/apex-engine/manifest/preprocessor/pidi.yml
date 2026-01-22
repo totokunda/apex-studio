@@ -1,0 +1,60 @@
+category: Line
+class: PidiNetDetector
+description: Pixel Difference Network for high-quality edge detection with minimal
+  parameters. Efficient and accurate edge detector that works well across various
+  image types. Offers safe mode and scribble output options. Good balance between
+  quality and computational efficiency for edge-based applications.
+module: src.preprocess.pidi
+name: PiDiNet Edge Detection
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: false
+  description: When enabled, applies post-processing to reduce noise and produce cleaner
+    edge maps. Recommended for complex or noisy images.
+  display_name: Safe Mode
+  name: safe
+  type: bool
+- default: false
+  description: When enabled, converts edges to a scribble-style artistic representation
+    with simplified, sketch-like lines.
+  display_name: Scribble Style
+  name: scribble
+  type: bool
+- default: false
+  description: When enabled, applies additional filtering to refine edge detection
+    and remove artifacts. Can improve edge quality but may reduce detail.
+  display_name: Apply Filter
+  name: apply_filter
+  type: bool
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_image: true
+supports_video: true
+files:
+- path: lllyasviel/Annotators/table5_pidinet.pth
+  size_bytes: 2871148

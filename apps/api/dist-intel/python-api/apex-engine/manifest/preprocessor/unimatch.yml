@@ -1,0 +1,57 @@
+category: Optical Flow
+class: UnimatchDetector
+description: Unified correspondence matching framework for accurate optical flow with
+  forward, backward, and bidirectional options. State-of-the-art flow estimation handling
+  occlusions and large motions. Supports multiple flow directions for comprehensive
+  motion analysis. Perfect for advanced video effects, motion compensation, and temporal
+  consistency.
+module: src.preprocess.unimatch
+name: UniMatch Optical Flow
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+- default: false
+  description: When enabled, computes optical flow from the current frame to the previous
+    frame (backward in time). Useful for motion analysis and tracking objects moving
+    backward through the sequence.
+  display_name: Predict Backward Flow
+  name: pred_bwd_flow
+  type: bool
+- default: false
+  description: When enabled, computes optical flow in both forward and backward directions
+    simultaneously. Provides complete motion information but requires more processing
+    time and memory.
+  display_name: Predict Bidirectional Flow
+  name: pred_bidir_flow
+  type: bool
+supports_image: false
+supports_video: true
+files:
+- path: hr16/Unimatch/gmflow-scale2-regrefine6-mixdata.pth
+  size_bytes: 29500177

@@ -1,0 +1,24 @@
+proc-side=378
+
+stride-train=14
+stride-test=14
+centered-stride
+
+# Model
+backbone=dinov2-vitl14-reg
+backbone-link-dim=512
+field-hidden-size=384
+field-hidden-layers=1
+field-posenc-dim=1024
+depth=8
+box-size-m=2.2
+
+uncert-bias=0.0
+uncert-bias2=0.001
+fix-uncert-factor
+
+no-weak-perspective
+mix-3d-inside-fov=0.5
+
+no-batch-renorm
+group-norm

@@ -1,0 +1,54 @@
+category: Line
+class: HEDdetector
+description: Holistically-Nested Edge Detection using deep learning to identify object
+  boundaries and meaningful edges. Produces thicker, more object-aware edges than
+  traditional methods. Great for converting photos to sketch-like representations
+  and understanding scene structure.
+module: src.preprocess.hed
+name: HED Edge Detection
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: false
+  description: When enabled, applies additional filtering to remove noise and produce
+    cleaner edge detection results. Recommended for images with complex backgrounds.
+  display_name: Safe Mode
+  name: safe
+  type: bool
+- default: false
+  description: When enabled, converts the edge detection output to a scribble-style
+    drawing with simplified, artistic lines instead of precise edges.
+  display_name: Scribble Style
+  name: scribble
+  type: bool
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_image: true
+supports_video: true
+files:
+- path: lllyasviel/Annotators/ControlNetHED.pth
+  size_bytes: 29444406

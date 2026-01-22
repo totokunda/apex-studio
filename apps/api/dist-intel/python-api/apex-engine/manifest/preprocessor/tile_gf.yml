@@ -1,0 +1,45 @@
+category: Color
+class: TTPlanet_Tile_Detector_GF
+description: Advanced tile processing using guided filter for edge-preserving smoothing.
+  Combines downsampling with intelligent filtering that maintains important edges
+  while blurring textures. Better edge preservation than simple tile methods. Ideal
+  for stylization that needs to keep subject boundaries sharp while simplifying detail.
+module: src.preprocess.tile
+name: Tile Guided Filter
+parameters:
+- default: 2.0
+  description: The downscaling factor before processing. Higher values create more
+    aggressive downsampling and stronger simplification effects. A value of 2.0 reduces
+    dimensions by half.
+  display_name: Scale Factor
+  max: 8.0
+  min: 1.0
+  name: scale_factor
+  type: float
+- default: 1.0
+  description: The strength of Gaussian blur applied during preprocessing. Higher
+    values create smoother, more blurred results. 1.0 is standard blur strength.
+  display_name: Blur Strength
+  max: 5.0
+  min: 0.1
+  name: blur_strength
+  type: float
+- default: 3
+  description: The radius of the guided filter kernel in pixels. Larger radius values
+    preserve more edge structure while smoothing. Typical values are 1-10.
+  display_name: Filter Radius
+  max: 20
+  min: 1
+  name: radius
+  type: int
+- default: 0.01
+  description: The regularization parameter for the guided filter. Controls edge preservation
+    versus smoothing. Lower values preserve more edges, higher values create smoother
+    results.
+  display_name: Filter Epsilon
+  max: 1.0
+  min: 0.001
+  name: eps
+  type: float
+supports_image: true
+supports_video: true

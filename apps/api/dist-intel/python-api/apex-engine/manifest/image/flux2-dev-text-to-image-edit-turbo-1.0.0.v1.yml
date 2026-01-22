@@ -1,0 +1,481 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: flux2-dev-text-to-image-edit-turbo
+  model: flux2
+  name: Flux Dev 2 Turbo
+  version: 1.0.0
+  description: Flux2 Turbo is a 32B parameter model for text-to-image and image-to-image
+    generation.
+  tags:
+  - flux2
+  - dev
+  - image-edit
+  - i2i
+  - turbo
+  categories:
+  - image-edit
+  - text-to-image
+  author: Black Forest Labs
+  license: Apache-2.0
+  demo_path: models/flux-dev-2-text-to-image-edit-turbo.png
+spec:
+  engine: flux2
+  model_type: ti2i
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  loras:
+  - name: Flux Dev 2 Turbo LORA
+    label: Flux Dev 2 Turbo LORA
+    source: fal/FLUX.2-dev-Turbo/flux.2-turbo-lora.safetensors
+    required: true
+    verified: true
+    scale: 1.0
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is used for Flux Dev.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: black-forest-labs/FLUX.2-dev/scheduler/scheduler_config.json
+  - type: vae
+    label: Flux VAE
+    base: flux2
+    model_path:
+    - path: black-forest-labs/FLUX.2-dev/vae
+      variant: default
+      file_size: 336214326
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    name: text_encoder
+    label: Flux2 Text Encoder
+    base: Mistral3ForConditionalGeneration
+    gguf_kwargs:
+      key_map: mistral
+    offloading_module: language_model
+    model_path:
+    - path: black-forest-labs/FLUX.2-dev/text_encoder
+      variant: default
+      file_size: 48329309520
+      resource_requirements:
+        min_vram_gb: 43
+        recommended_vram_gb: 58
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 25054793248
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 19345952288
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 16763997728
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 16304426528
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q4_1.gguf
+      variant: GGUF_Q4_1
+      precision: q4_1
+      type: gguf
+      file_size: 14873120288
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 14333922848
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 13549293088
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 13494242848
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 11474095648
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 10400288288
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q2_K_L.gguf
+      variant: GGUF_Q2_K_L
+      precision: q2_k_l
+      type: gguf
+      file_size: 9047625248
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/Mistral-Small-3.2-24B-Instruct-2506-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      file_size: 8890338848
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    tokenizer_class: PixtralProcessor
+    tokenizer_name: black-forest-labs/FLUX.2-dev
+    tokenizer_kwargs:
+      subfolder: tokenizer
+    config_path: black-forest-labs/FLUX.2-dev/text_encoder/config.json
+  - type: extra_model_path
+    component: text_encoder
+    label: Mistral Text Encoder MMProj
+    name: vision_encoder
+    model_path:
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/mmproj-BF16.gguf
+      variant: GGUF_BF16
+      precision: bf16
+      type: gguf
+      file_size: 879257792
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+    - path: unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/mmproj-F32.gguf
+      variant: GGUF_F32
+      precision: f32
+      type: gguf
+      file_size: 1755867328
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+  - type: transformer
+    label: Flux Transformer
+    base: flux2.base
+    config_path: black-forest-labs/FLUX.2-dev/transformer/config.json
+    model_path:
+    - path: black-forest-labs/FLUX.2-dev/transformer
+      variant: default
+      file_size: 64434820000
+      resource_requirements:
+        min_vram_gb: 53
+        recommended_vram_gb: 71
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-BF16.gguf
+      variant: GGUF_BF16
+      precision: bf16
+      type: gguf
+      file_size: 64446616544
+      resource_requirements:
+        min_vram_gb: 53
+        recommended_vram_gb: 71
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 35002602464
+      resource_requirements:
+        min_vram_gb: 32
+        recommended_vram_gb: 43
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 27396232160
+      resource_requirements:
+        min_vram_gb: 21
+        recommended_vram_gb: 28
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q5_1.gguf
+      variant: GGUF_Q5_1
+      precision: q5_1
+      type: gguf
+      file_size: 25187931104
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 24057238496
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 23224996832
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 22
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 23224996832
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 22
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q4_1.gguf
+      variant: GGUF_Q4_1
+      precision: q4_1
+      type: gguf
+      file_size: 21262062560
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 20082414560
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 19299128288
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 19299128288
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 15960134624
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 15779648480
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: city96/FLUX.2-dev-gguf/flux2-dev-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      file_size: 12858250208
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 4.0
+      sigmas:
+      - 1.0
+      - 0.6509
+      - 0.4374
+      - 0.2932
+      - 0.1893
+      - 0.1108
+      - 0.0495
+      - 0.00031
+      return_latents: false
+  ui:
+    panels:
+    - name: images
+      label: Images
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: image
+      label: Images
+      description: The input image to edit.
+      type: image_list
+      panel: input
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+        height: 720
+      - name: Ultra HD
+        value: 1024
+        height: 1024
+      - name: SD
+        value: 480
+        height: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps. You probably should not change this.
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 8
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 2.5
+      min: 1.0
+      max: 15.0
+      step: 0.5

@@ -1,0 +1,70 @@
+category: Face and Pose
+class: DwposeDetector
+description: Comprehensive whole-body pose estimation capturing body, hands, and facial
+  keypoints in a single unified model. Fast and accurate for real-time applications.
+  Ideal for animation reference, motion analysis, and character pose extraction with
+  granular control over which components to detect.
+module: src.preprocess.dwpose
+name: DWPose
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: true
+  description: When enabled, detects and displays body keypoints including torso,
+    arms, and legs. This is typically the main component of pose estimation.
+  display_name: Include Body
+  name: include_body
+  type: bool
+- default: true
+  description: When enabled, detects and displays detailed hand keypoints for finger
+    and palm positions. Useful for capturing hand gestures and fine hand movements.
+  display_name: Include Hands
+  name: include_hand
+  type: bool
+- default: true
+  description: When enabled, detects and displays facial keypoints including eyes,
+    nose, mouth, and facial landmarks. Useful for capturing facial expressions and
+    head orientation.
+  display_name: Include Face
+  name: include_face
+  type: bool
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+- default: false
+  description: Applies XinSR stick scaling algorithm to normalize the pose skeleton
+    representation. Useful for maintaining consistent pose proportions across different
+    image sizes.
+  display_name: XinSR Stick Scaling
+  name: xinsr_stick_scaling
+  type: bool
+supports_image: true
+supports_video: true
+files:
+- path: yzd-v/DWPose/dw-ll_ucoco_384.onnx
+  size_bytes: 134399116
+- path: yzd-v/DWPose/yolox_l.onnx
+  size_bytes: 216746733

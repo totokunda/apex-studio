@@ -1,0 +1,641 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-2-fun-a14b-control
+  model: wan
+  name: Wan 2.2 Fun A14B Control
+  version: 1.0.0
+  description: Wan 2.2 A14B Fun is a 14B parameter model for controllable video generation.
+  tags:
+  - wan
+  - fun
+  - control
+  - 14b
+  - '2.2'
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/wan-fun-2.2-control.mp4
+  categories:
+  - control
+spec:
+  engine: wan
+  model_type: fun_control
+  engine_type: torch
+  denoise_type: moe
+  default_duration_secs: 5.0
+  min_duration_secs: 1.0
+  fps: 16
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  loras:
+  - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/high_noise_model.safetensors
+    scale: 1.0
+    verified: true
+    name: high_noise_lightning_lora
+    label: High Noise Lightning LoRA
+    component: high_noise_transformer
+  - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/low_noise_model.safetensors
+    scale: 1.0
+    verified: true
+    name: low_noise_lightning_lora
+    label: Low Noise Lightning LoRA
+    component: low_noise_transformer
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchScheduler
+    scheduler_options:
+    - name: FlowMatchScheduler
+      label: FlowMatch Scheduler
+      description: The FlowMatch Scheduler is used for WAN 2.2 A14B Fun Control.
+      base: src.scheduler.FlowMatchScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 5.0
+        base_shift: 0.5
+        max_shift: 1.15
+        base_image_seq_len: 256
+        max_image_seq_len: 4096
+        use_dynamic_shifting: false
+  - type: vae
+    label: WAN VAE
+    name: wan/vae
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae/config.json
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
+  - type: transformer
+    label: High Noise Transformer
+    name: high_noise_transformer
+    base: wan.fun
+    extra_kwargs:
+      load_from_config: true
+    model_path:
+    - path: alibaba-pai/Wan2.2-Fun-A14B-Control/high_noise_model
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28579237670
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
+    - path: Kijai/WanVideo_comfy_fp8_scaled/Fun/Wan2_2-Fun-Control-A14B-HIGH_fp8_e5m2_scaled_KJ_fixed.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 14530492906
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 15418436352
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 12015479552
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q5_1.gguf
+      variant: GGUF_Q5_1
+      precision: q5_1
+      type: gguf
+      file_size: 11027524352
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 10803882752
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 10326289152
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 10149341952
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 9663556352
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q4_1.gguf
+      variant: GGUF_Q4_1
+      precision: q4_1
+      type: gguf
+      file_size: 9271159552
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 8759978752
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 8569924352
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 7187933952
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 6526839552
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/HighNoise/Wan2.2-Fun-A14B-Control_HighNoise-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      file_size: 5312785152
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    config_path: alibaba-pai/Wan2.2-Fun-A14B-Control/high_noise_model/config.json
+    config:
+      _class_name: WanFunTransformer3DModel
+      qk_norm: rms_norm_across_heads
+  - type: transformer
+    label: Low Noise Transformer
+    name: low_noise_transformer
+    base: wan.fun
+    extra_kwargs:
+      load_from_config: true
+    model_path:
+    - path: alibaba-pai/Wan2.2-Fun-A14B-Control/low_noise_model
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28579237670
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
+    - path: Kijai/WanVideo_comfy_fp8_scaled/Fun/Wan2_2-Fun-Control-A14B-LOW_fp8_e5m2_scaled_KJ_fixed.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 14530492906
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 15418436352
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 12015479552
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q5_1.gguf
+      variant: GGUF_Q5_1
+      precision: q5_1
+      type: gguf
+      file_size: 11027524352
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 10803882752
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 10326289152
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 10149341952
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 9663556352
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q4_1.gguf
+      variant: GGUF_Q4_1
+      precision: q4_1
+      type: gguf
+      file_size: 9271159552
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 8759978752
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 8569924352
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 7187933952
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 6526839552
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: QuantStack/Wan2.2-Fun-A14B-Control-GGUF/LowNoise/Wan2.2-Fun-A14B-Control_LowNoise-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      file_size: 5312785152
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    config_path: alibaba-pai/Wan2.2-Fun-A14B-Control/low_noise_model/config.json
+    config:
+      _class_name: WanFunTransformer3DModel
+      qk_norm: rms_norm_across_heads
+  - type: helper
+    base: camera
+  defaults:
+    run:
+      num_inference_steps: 4
+      guidance_scale: 5.0
+      boundary_ratio: 0.9
+      chunking_profile: light
+      return_latents: false
+      text_encoder_kwargs: {}
+      use_attention_mask: true
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: input_images
+      label: Input Images
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - ref_image
+        - - start_image
+        - - end_image
+    - name: input_videos
+      label: Input Videos
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - control_video
+        - - video
+        - - mask_video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - high_noise_guidance_scale
+        - - low_noise_guidance_scale
+        - - seed
+        - - boundary_ratio
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+    inputs:
+    - id: ref_image
+      label: Reference Image
+      description: The reference image to use for the generation.
+      type: image
+      panel: input_images
+      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: start_image
+      label: Start Image
+      description: The start image to use for the generation.
+      type: image
+      panel: input_images
+      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: end_image
+      label: End Image
+      description: The end image to use for the generation.
+      type: image
+      panel: input_images
+      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: control_video
+      label: Control Video
+      description: The control video to use for the generation.
+      type: video
+      panel: input_videos
+      required: true
+    - id: video
+      label: Inpainting Video
+      description: The inpainting video to use for the generation.
+      type: video
+      panel: input_videos
+      required: false
+    - id: mask_video
+      label: Mask Video
+      description: The masked video to use for the generation.
+      type: video
+      panel: input_videos
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: Ultra HD
+        value: 1024
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: '1:1'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 4
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 720
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1280
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: high_noise_guidance_scale
+      label: High Noise Guidance Scale
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.1
+    - id: low_noise_guidance_scale
+      label: Low Noise Guidance Scale
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.1
+    - id: boundary_ratio
+      label: Boundary Ratio
+      description: The ratio of the boundary of the image
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.875
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive

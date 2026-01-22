@@ -1,0 +1,42 @@
+category: Line
+class: ScribbleAnimeDetector
+description: Neural network-based scribble generation optimized for anime and manga
+  aesthetics. Produces loose, sketchy lines that match anime rough draft style. Trained
+  on anime artwork to understand character features and composition. Ideal for anime
+  sketch effects, animation pre-production references, and manga thumbnails.
+module: src.preprocess.scribble_anime
+name: Scribble Anime
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_image: true
+supports_video: true
+files:
+- path: ali-vilab/VACE-Annotators/scribble/anime_style/netG_A_latest.pth
+  size_bytes: 17173511

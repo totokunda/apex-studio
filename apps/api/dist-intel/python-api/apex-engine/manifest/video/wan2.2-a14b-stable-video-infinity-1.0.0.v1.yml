@@ -1,0 +1,618 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: wan-2-2-a14b-stable-video-infinity
+  model: wan
+  name: Wan 2.2 A14B Stable Video Infinity
+  version: 1.0.0
+  description: Wan 2.2 A14B is a 14B parameter model for stable video infinity generation.
+  tags:
+  - wan
+  - svi
+  - 14b
+  - '2.2'
+  author: Wan-AI
+  license: Apache-2.0
+  demo_path: models/wan-22-stable-video-infinity.mp4
+  categories:
+  - image-to-video
+spec:
+  engine: wan
+  model_type: svi
+  engine_type: torch
+  denoise_type: moe
+  fps: 16
+  default_duration_secs: 15.0
+  min_duration_secs: 0.5
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  loras:
+  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors
+    scale: 1.0
+    verified: true
+    name: high_noise_lightning_lora
+    label: High Noise Lightning LoRA
+    component: high_noise_transformer
+    required: true
+  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors
+    scale: 0.5
+    verified: true
+    name: low_noise_lightning_lora
+    label: Low Noise Lightning LoRA
+    component: low_noise_transformer
+    required: true
+  - source: vita-video-gen/svi-model/version-2.0/SVI_Wan2.2-I2V-A14B_high_noise_lora_v2.0_pro.safetensors
+    scale: 1.0
+    verified: true
+    name: high_noise_svi_lora
+    label: High Noise SVI LoRA
+    component: high_noise_transformer
+    required: true
+  - source: vita-video-gen/svi-model/version-2.0/SVI_Wan2.2-I2V-A14B_low_noise_lora_v2.0_pro.safetensors
+    scale: 1.0
+    verified: true
+    name: low_noise_svi_lora
+    label: Low Noise SVI LoRA
+    component: low_noise_transformer
+    required: true
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepScheduler
+    scheduler_options:
+    - name: UniPCMultistepScheduler
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for WAN 2.2 SVI I2V.
+      base: diffusers.UniPCMultistepScheduler
+      config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/scheduler/scheduler_config.json
+      config:
+        flow_shift: 5.0
+    - name: FlowMatchScheduler
+      label: FlowMatch Scheduler
+      description: The FlowMatch Scheduler is used for WAN 2.2 SVI I2V.
+      base: src.scheduler.FlowMatchScheduler
+      config:
+        shift: 8.0
+        sigma_max: 1.0
+        sigma_min: 0.001
+        inverse_timesteps: false
+        extra_one_step: false
+        reverse_sigmas: false
+  - type: vae
+    label: WAN VAE
+    name: wan/vae_2.2
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
+  - type: transformer
+    label: High Noise Transformer
+    name: high_noise_transformer
+    base: wan.base
+    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/transformer/config.json
+    model_path:
+    - path: cbensimon/Wan2.2-I2V-A14B-bf16-Diffusers/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28636379825
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
+    - path: totoku/smooth-mix-wan-2.2-14b/high_noise/high_noise_model.safetensors
+      variant: SMOOTH_MIX
+      precision: fp16
+      type: safetensors
+      file_size: 14293784648
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 15406608896
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 12003652096
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 10792055296
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 10137514496
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 9651728896
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 8748151296
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 8558096896
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 7176106496
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 6515012096
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/HighNoise/smoothMixWan22I2VT2V_i2vHigh-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      file_size: 5300957696
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+  - type: transformer
+    label: Low Noise Transformer
+    name: low_noise_transformer
+    base: wan.base
+    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/transformer_2/config.json
+    model_path:
+    - path: cbensimon/Wan2.2-I2V-A14B-bf16-Diffusers/transformer_2
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28636379825
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
+    - path: totoku/smooth-mix-wan-2.2-14b/high_noise/high_noise_model.safetensors
+      variant: SMOOTH_MIX
+      precision: fp16
+      type: safetensors
+      file_size: 14293784648
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 15406608896
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 12003652096
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 10792055296
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q5_K_S.gguf
+      variant: GGUF_Q5_K_S
+      precision: q5_k_s
+      type: gguf
+      file_size: 10137514496
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 9651728896
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      file_size: 8748151296
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 8558096896
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 7176106496
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q3_K_S.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 6515012096
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: Bedovyy/smoothMixWan22-I2V-GGUF/LowNoise/smoothMixWan22I2VT2V_i2vLow-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      file_size: 5300957696
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+  defaults:
+    run:
+      num_inference_steps: 6
+      guidance_scale: 1.0
+      num_seconds_per_segment: 5.0
+      num_motion_latent: 1
+      num_motion_frame: 4
+      num_overlap_frames: 5
+      return_latents: false
+      timesteps_as_indices: true
+      boundary_ratio: 0.875
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+      rope_on_cpu: false
+      chunking_profile: none
+  ui:
+    panels:
+    - name: input
+      label: Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompts
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - high_noise_guidance_scale
+        - - low_noise_guidance_scale
+        - - seed
+        - - boundary_ratio
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - rope_on_cpu
+        - - chunking_profile
+    - name: video_generation
+      label: Video Generation
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_seconds_per_segment
+        - - num_motion_latent
+        - - num_motion_frame
+        - - num_overlap_frames
+    inputs:
+    - id: image
+      label: Image
+      description: The input image to generate a video from.
+      type: image
+      panel: input
+      required: true
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: prompts
+      label: Prompts
+      description: Describe the video you want to generate, with a prompt for each
+        segment. Prompts will be repeated if there are less prompts than segments.
+      placeholder: A beautiful landscape at golden hour.
+      type: text_list
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: bright tones, overexposed, static, blurred details, subtitles, style,
+        works, paintings, images, static, overall gray, worst quality, low quality,
+        JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands,
+        poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers,
+        still picture, messy background, three legs, many people in the background,
+        walking backwards
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: '1:1'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 6
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: high_noise_guidance_scale
+      label: High Noise Guidance Scale
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.5
+      min: 1.0
+      max: 15.0
+      step: 0.1
+    - id: low_noise_guidance_scale
+      label: Low Noise Guidance Scale
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.5
+      min: 1.0
+      max: 15.0
+      step: 0.1
+    - id: boundary_ratio
+      label: Boundary Ratio
+      description: The ratio of the boundary of the image
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.875
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: num_seconds_per_segment
+      label: Number of Seconds per Segment
+      description: Number of seconds per segment. This will determine your video length,
+        based on the duration and fps.
+      type: number+slider
+      value_type: float
+      panel: video_generation
+      default: 5.0
+      min: 0.1
+      max: 10.0
+      step: 0.1
+    - id: num_motion_latent
+      label: Number of Motion Latents
+      description: Number of motion latent
+      type: number+slider
+      value_type: integer
+      panel: video_generation
+      default: 1
+      min: 0
+      max: 16
+      step: 1
+    - id: num_motion_frame
+      label: Number of Motion Frames
+      description: Number of motion frames to look back for the next input image
+      type: number+slider
+      value_type: integer
+      panel: video_generation
+      default: 4
+      min: 0
+      max: 16
+      step: 1
+    - id: num_overlap_frames
+      label: Number of Overlap Frames
+      description: Number of overlap frames between segments
+      type: number+slider
+      value_type: integer
+      panel: video_generation
+      default: 5
+      min: 0
+      max: 16
+      step: 1
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: none
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive

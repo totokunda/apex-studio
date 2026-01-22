@@ -1,0 +1,277 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: nunchaku-flux-dev-text-to-image
+  model: flux
+  name: Nunchaku Flux Dev Text to Image
+  version: 1.0.0
+  description: Nunchaku Flux Dev is a 12B parameter model for text-to-image generation.
+  tags:
+  - flux
+  - dev
+  - t2i
+  - nunchaku
+  - svdquant
+  - fp4
+  - nf4
+  - int4
+  author: Nunchaku Tech
+  license: Apache-2.0
+  demo_path: models/nunchaku-flux-dev-text-to-image.png
+  categories:
+  - text-to-image
+spec:
+  engine: flux
+  model_type: t2i
+  engine_type: torch
+  denoise_type: base
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    excluded_cuda_architectures:
+    - sm_90
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - efficient_dot_product_attention
+  - xformers
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is used for Flux Dev.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: black-forest-labs/FLUX.1-dev/scheduler/scheduler_config.json
+  - type: vae
+    label: Flux VAE
+    base: auto
+    model_path:
+    - path: black-forest-labs/FLUX.1-dev/vae
+      variant: default
+      file_size: 167667722
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    name: text_encoder
+    label: CLIP Text Encoder
+    base: CLIPTextModel
+    model_path:
+    - path: black-forest-labs/FLUX.1-dev/text_encoder
+      variant: default
+      file_size: 246144965
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    tokenizer_class: CLIPTokenizer
+    tokenizer_name: black-forest-labs/FLUX.1-dev
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: text_encoder
+    name: text_encoder_2
+    label: T5 Text Encoder
+    base: T5EncoderModel
+    model_path:
+    - path: black-forest-labs/FLUX.1-dev/text_encoder_2
+      variant: default
+      file_size: 9524669251
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: black-forest-labs/FLUX.1-dev
+    tokenizer_kwargs:
+      subfolder: tokenizer_2
+  - type: transformer
+    label: Flux Transformer
+    base: flux.nunchaku
+    model_path:
+    - path: nunchaku-tech/nunchaku-flux.1-dev/svdq-int4_r32-flux.1-dev.safetensors
+      variant: int4_r32
+      precision: int4
+      type: safetensors
+      file_size: 6768309832
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: nunchaku-tech/nunchaku-flux.1-dev/svdq-fp4_r32-flux.1-dev.safetensors
+      variant: nf4_r32
+      precision: nf4
+      type: safetensors
+      file_size: 7038706888
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+  defaults:
+    run:
+      num_inference_steps: 40
+      guidance_scale: 5.0
+      true_cfg_scale: 4.0
+      return_latents: false
+      text_encoder_kwargs:
+        clean_text: false
+        max_sequence_length: 77
+        pad_with_zero: false
+      text_encoder_2_kwargs:
+        clean_text: false
+        pad_with_zero: false
+        max_sequence_length: 512
+      joint_attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - true_cfg_scale
+        - - seed
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what you want to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+      - name: Ultra HD
+        value: 1024
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: true_cfg_scale
+      label: True CFG Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.5
+      min: 0.0
+      max: 15.0
+      step: 0.5
+  loras: []

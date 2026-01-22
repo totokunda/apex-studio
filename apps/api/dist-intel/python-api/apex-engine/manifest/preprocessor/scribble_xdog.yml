@@ -1,0 +1,48 @@
+category: Line
+class: ScribbleXDogDetector
+description: Extended Difference of Gaussians algorithm for creating artistic scribble
+  effects with adjustable density. Uses advanced edge detection to produce variable-width
+  sketch lines. Threshold control allows balancing between detailed, dense scribbles
+  and sparse, clean lines. Great for non-photorealistic rendering and artistic stylization.
+module: src.preprocess.scribble
+name: Scribble XDoG
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+- default: 32
+  description: The threshold parameter for the Extended Difference of Gaussians algorithm.
+    Controls the sensitivity of edge detection. Lower values detect more edges and
+    produce denser scribbles, higher values produce sparser, cleaner lines.
+  display_name: Threshold
+  max: 64
+  min: 1
+  name: thr_a
+  type: int
+supports_image: true
+supports_video: true

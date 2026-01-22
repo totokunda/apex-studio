@@ -1,0 +1,59 @@
+category: Color
+class: Recolorizer
+description: Converts images to grayscale while preserving brightness structure using
+  luminance or intensity calculation. Offers gamma correction for brightness adjustment.
+  Useful for preparing images for colorization, creating base layers for artistic
+  effects, or analyzing tonal distribution without color distraction.
+module: src.preprocess.recolor
+name: Recolor
+parameters:
+- default: luminance
+  description: The method for calculating brightness values. 'Luminance' uses perceptually
+    accurate weights for RGB channels. 'Intensity' uses simple averaging of RGB values.
+  display_name: Recolor Mode
+  name: mode
+  options:
+  - name: Luminance
+    value: luminance
+  - name: Intensity
+    value: intensity
+  type: category
+- default: 1.0
+  description: The gamma correction factor applied to the recolored output. Values
+    below 1.0 brighten the image, values above 1.0 darken it. 1.0 applies no correction.
+  display_name: Gamma Correction
+  max: 3.0
+  min: 0.1
+  name: gamma_correction
+  type: float
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_alpha_channel: true
+supports_image: true
+supports_video: true
