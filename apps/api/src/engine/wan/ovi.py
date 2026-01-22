@@ -220,6 +220,8 @@ class OviEngine(WanShared):
         easy_cache_ret_steps: int = 10,
         easy_cache_cutoff_steps: int | None = None,
         chunking_profile: str = "none",
+        rope_on_cpu: bool = False,
+        cache_on_cpu: bool = False,
         **kwargs,
     ):
         safe_emit_progress(
@@ -481,6 +483,8 @@ class OviEngine(WanShared):
                 easy_cache_thresh,
                 easy_cache_ret_steps,
                 easy_cache_cutoff_steps,
+                rope_on_cpu=rope_on_cpu,
+                cache_on_cpu=cache_on_cpu,
             )
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.50, 0.90)
 

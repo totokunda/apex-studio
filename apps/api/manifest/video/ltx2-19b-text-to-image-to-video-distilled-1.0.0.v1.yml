@@ -518,7 +518,7 @@ spec:
       default: 512
       min: 256
       max: 2048
-      step: 32
+      step: 64
     - id: vae_tile_sample_min_width
       label: VAE Tile Min Width
       description: Minimum pixel width before spatial tiling is used.
@@ -528,14 +528,14 @@ spec:
       default: 512
       min: 256
       max: 2048
-      step: 32
+      step: 64
     - id: vae_tile_sample_min_num_frames
       label: VAE Tile Min Frames
       description: Minimum number of frames before temporal tiling is used.
       type: number+slider
       value_type: integer
       panel: vae
-      default: 32
+      default: 8
       min: 1
       max: 256
       step: 1
@@ -545,47 +545,29 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 448
+      default: 384
       min: 64
       max: 2048
-      step: 32
+      step: 64
     - id: vae_tile_sample_stride_width
       label: VAE Tile Stride Width
       description: Spatial tiling stride (controls overlap) in width direction.
       type: number+slider
       value_type: integer
       panel: vae
-      default: 448
+      default: 384
       min: 64
       max: 2048
-      step: 32
+      step: 64
     - id: vae_tile_sample_stride_num_frames
       label: VAE Tile Stride Frames
       description: Temporal tiling stride (controls overlap) in frames.
       type: number+slider
       value_type: integer
       panel: vae
-      default: 16
+      default: 128
       min: 1
-      max: 128
+      max: 512
       step: 1
-    - id: vae_num_sample_frames_batch_size
-      label: VAE Sample Frames Batch Size
-      description: Hint for how many sample frames to decode per chunk (best-effort).
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 16
-      min: 1
-      max: 64
-      step: 1
-    - id: vae_num_latent_frames_batch_size
-      label: VAE Latent Frames Batch Size
-      description: Hint for how many latent frames to decode per chunk (best-effort).
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 2
-      min: 1
-      max: 16
-      step: 1
+
+

@@ -4,6 +4,7 @@ from src.utils.defaults import DEFAULT_HEADERS
 from urllib.parse import urlparse
 from pathlib import Path
 from typing import Dict, Any
+import dataclasses
 import math
 import os
 import json
@@ -27,6 +28,7 @@ from src.types import InputImage, InputVideo, InputAudio
 import types
 import numpy as np
 import mmap
+from mmgp.offload import profile
 
 
 class _LazyModule(types.ModuleType):
@@ -246,7 +248,9 @@ class LoaderMixin(DownloadMixin):
         if mm_config is not None:
             # Should be cpu often times since the model is loaded on the cpu
             load_device = "cpu"
-
+            
+        
+     
         if getter_fn:
             model_class = getter_fn(model_base)
         else:
@@ -879,31 +883,55 @@ class LoaderMixin(DownloadMixin):
             and component.get("type") != "text_encoder"
         ):
             apply_group_offloading = getattr(self, "_apply_group_offloading", None)
-            if callable(apply_group_offloading):
-                label = (
-                    component.get("name")
-                    or component.get("type")
-                    or type(model).__name__
-                )
+            apply_budget_offloading = getattr(self, "_apply_budget_offloading", None)
+            label = component.get("name") or component.get("type") or type(model).__name__
+
+            offload_mode = getattr(mm_config, "offload_mode", "budget") or "budget"
+            apply_offloading = (
+                apply_budget_offloading
+                if offload_mode == "budget"
+                else apply_group_offloading
+            )
+
+            # Fallback to group offloading if budget mode is requested but not supported
+            # by this engine/mixin instance.
+            if (not callable(apply_offloading)) and callable(apply_group_offloading):
+                if offload_mode == "budget" and hasattr(self, "logger"):
+                    self.logger.warning(
+                        f"Budget offloading requested for '{label}', but it is not supported here; "
+                        "falling back to group offloading."
+                    )
+                offload_mode = "group"
+                apply_offloading = apply_group_offloading
+
+            if callable(apply_offloading):
                 offloading_module = component.get("offloading_module", None)
                 ignore_offloading_modules = component.get(
                     "ignore_offloading_modules", None
                 )
                 block_modules = component.get("block_modules", None)
-                mm_config.ignore_modules = ignore_offloading_modules
-                mm_config.block_modules = block_modules
+                # Do NOT mutate the shared MemoryConfig instance (it may be reused
+                # across components via the 'all' entry). Apply per-component
+                # overrides on a copy.
+                effective_mm_config = dataclasses.replace(
+                    mm_config,
+                    ignore_modules=ignore_offloading_modules,
+                    block_modules=block_modules,
+                )
                 if offloading_module:
                     model_to_offload = model.get_submodule(offloading_module)
                 else:
                     model_to_offload = model
                 try:
-                    apply_group_offloading(
-                        model_to_offload, mm_config, module_label=label
+                    apply_offloading(
+                        model_to_offload, effective_mm_config, module_label=label
                     )
+                    #if not offloading_module:
+                        #model = model_to_offload
                 except Exception as e:
                     if hasattr(self, "logger"):
                         self.logger.warning(
-                            f"Failed to enable group offloading for '{label}': {e}"
+                            f"Failed to enable {offload_mode} offloading for '{label}': {e}"
                         )
 
         # Optionally compile the fully initialized module according to config.

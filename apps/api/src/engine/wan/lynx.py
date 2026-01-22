@@ -3,11 +3,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 from PIL import Image
+
+from src.utils.cache import empty_cache
 from .shared import WanShared
 from src.helpers.wan.lynx import WanLynxHelper
 from src.types import InputImage
 from src.utils.progress import make_mapped_progress, safe_emit_progress
-
 
 class LynxEngine(WanShared):
     """Personalized Wan (Lynx) engine with IPA and Ref adapters."""
@@ -72,6 +73,8 @@ class LynxEngine(WanShared):
         progress_callback: Callable | None = None,
         denoise_progress_callback: Callable | None = None,
         output_type: str = "pil",
+        rope_on_cpu: bool = False,
+        chunking_profile: str = "none",
         **kwargs,
     ):
         safe_emit_progress(progress_callback, 0.0, "Starting Lynx pipeline")
@@ -93,6 +96,9 @@ class LynxEngine(WanShared):
             device=self.device,
             load_image_fn=self._load_image,
         )
+        
+        helper.face_encoder = None
+        empty_cache()
 
         safe_emit_progress(progress_callback, 0.08, "Prepared face embeddings")
 
@@ -143,6 +149,7 @@ class LynxEngine(WanShared):
         safe_emit_progress(
             progress_callback, 0.28, "Moving prompt embeddings to device"
         )
+        
         prompt_embeds = prompt_embeds.to(self.device, dtype=transformer_dtype)
         if negative_prompt_embeds is not None:
             negative_prompt_embeds = negative_prompt_embeds.to(
@@ -155,6 +162,7 @@ class LynxEngine(WanShared):
             generator = torch.Generator(device=self.device).manual_seed(seed)
 
         safe_emit_progress(progress_callback, 0.32, "Initializing latent noise")
+
         latents = self._get_latents(
             height,
             width,
@@ -167,6 +175,7 @@ class LynxEngine(WanShared):
             dtype=transformer_dtype,
             generator=generator,
         )
+
         safe_emit_progress(progress_callback, 0.34, "Latent noise initialized")
 
         if self.transformer is None:
@@ -174,46 +183,119 @@ class LynxEngine(WanShared):
             self.load_component_by_type("transformer")
             safe_emit_progress(progress_callback, 0.36, "Transformer loaded")
         safe_emit_progress(progress_callback, 0.37, "Moving transformer to device")
-        self.to_device(self.transformer)
+        
         safe_emit_progress(progress_callback, 0.38, "Transformer on device")
-        # Preserve any deferred group offloading config across adapter wrapping.
-        pending_offload = getattr(
+        # Preserve any deferred offloading config across adapter wrapping.
+        pending_group_offload = getattr(
             self.transformer, "_apex_pending_group_offloading", None
         )
+        pending_budget_offload = getattr(
+            self.transformer, "_apex_pending_budget_offloading", None
+        )
         safe_emit_progress(progress_callback, 0.39, "Loading Lynx adapters")
+        
         self.transformer = helper.load_adapters(
-            self.transformer, adapter_root, device=self.device, dtype=transformer_dtype
+            self.transformer, adapter_root, device=torch.device("cpu"), dtype=transformer_dtype
         )
         safe_emit_progress(progress_callback, 0.40, "Lynx adapters loaded")
         if (
-            pending_offload is not None
+            pending_group_offload is not None
             and getattr(self.transformer, "_apex_pending_group_offloading", None)
             is None
         ):
-            setattr(self.transformer, "_apex_pending_group_offloading", pending_offload)
-
-        lora_items, adapter_names = list(self.preloaded_loras.values()), list(
-            self.preloaded_loras.keys()
-        )
-        if lora_items:
-            safe_emit_progress(
-                progress_callback, 0.41, f"Applying {len(lora_items)} LoRAs"
+            setattr(
+                self.transformer, "_apex_pending_group_offloading", pending_group_offload
             )
-            self.logger.info(f"Applying {len(lora_items)} loras to Lynx transformer")
-            preloaded_loras = [
-                (lora.source, lora.scale, lora.name)
-                for lora in self.preloaded_loras.values()
-                if lora.component is None or lora.component == "transformer"
-            ]
+        if (
+            pending_budget_offload is not None
+            and getattr(self.transformer, "_apex_pending_budget_offloading", None)
+            is None
+        ):
+            setattr(
+                self.transformer,
+                "_apex_pending_budget_offloading",
+                pending_budget_offload,
+            )
+
+        # Apply any preloaded LoRAs (transformer-only) after adapters are attached.
+        # This mirrors BaseEngine's sequencing (mutations first, then offloading).
+        preloaded_transformer_loras = [
+            (lora.source, lora.scale, lora.name)
+            for lora in self.preloaded_loras.values()
+            if lora.component is None or lora.component == "transformer"
+        ]
+        if preloaded_transformer_loras:
+            safe_emit_progress(
+                progress_callback,
+                0.41,
+                f"Applying {len(preloaded_transformer_loras)} LoRAs",
+            )
+            self.logger.info(
+                f"Applying {len(preloaded_transformer_loras)} loras to Lynx transformer"
+            )
             self.apply_loras(
-                [(lora[0], lora[1]) for lora in preloaded_loras],
-                adapter_names=[lora[2] for lora in preloaded_loras],
+                [(src, scale) for (src, scale, _name) in preloaded_transformer_loras],
+                adapter_names=[name for (_src, _scale, name) in preloaded_transformer_loras],
                 model=self.transformer,
             )
-            # Group offloading for transformers must be enabled after LoRA/adapters.
-
-            self._apply_pending_group_offloading(self.transformer)
             safe_emit_progress(progress_callback, 0.42, "LoRAs applied")
+
+        # Offloading for transformers must be enabled *after* any post-load mutations
+        # (adapters and/or LoRAs). Lynx always wraps the transformer, so ensure any
+        # deferred configuration (and any pre-wrap enabled offloading) is applied now.
+        self._apply_pending_group_offloading(self.transformer)
+        self._apply_pending_budget_offloading(self.transformer)
+  
+        # Fallback: if this transformer was offloaded during initial load but got
+        # replaced/wrapped by Lynx adapters, re-apply the configured offloading mode.
+        try:
+            transformer_component = self.get_component_by_type("transformer")
+            mm_config = (
+                self._resolve_memory_config_for_component(transformer_component)
+                if transformer_component is not None
+                else None
+            )
+            if mm_config is not None and transformer_component is not None:
+                label = (
+                    transformer_component.get("name")
+                    or transformer_component.get("type")
+                    or "transformer"
+                )
+                offloading_module = transformer_component.get("offloading_module", None)
+                ignore_offloading_modules = transformer_component.get(
+                    "ignore_offloading_modules", None
+                )
+                block_modules = transformer_component.get("block_modules", None)
+                mm_config.ignore_modules = ignore_offloading_modules
+                mm_config.block_modules = block_modules
+                offload_mode = getattr(mm_config, "offload_mode", "budget") or "budget"
+                model_to_offload = (
+                    self.transformer.get_submodule(offloading_module)
+                    if offloading_module
+                    else self.transformer
+                )
+                if offload_mode == "budget":
+
+                    self._apply_budget_offloading(
+                        model_to_offload, mm_config, module_label=label
+                    )
+                else:
+                    print("Applying group offloading")
+                    exit()
+                    self._apply_group_offloading(
+                        model_to_offload, mm_config, module_label=label
+                    )
+        except Exception:
+            # Best-effort only; Lynx should still run without reapplying here.
+            pass
+        
+        if chunking_profile != "none":
+            self.transformer.set_chunking_profile(chunking_profile)
+        
+ 
+        self.to_device(self.transformer)
+        self.to_device(helper.resampler)
+        
 
         safe_emit_progress(progress_callback, 0.43, "Building IP states")
         ip_states, ip_states_uncond = helper.build_ip_states(
@@ -292,6 +374,7 @@ class LynxEngine(WanShared):
         merged_attention_kwargs_uncond.update({"image_embed": face_token_embeds})
 
         if offload:
+            del helper
             safe_emit_progress(progress_callback, 0.50, "Offloading Lynx helper")
             self._offload("helper")
 
@@ -321,6 +404,7 @@ class LynxEngine(WanShared):
                     encoder_hidden_states=prompt_embeds,
                     attention_kwargs=merged_attention_kwargs,
                     return_dict=False,
+                    rope_on_cpu=rope_on_cpu,
                 )[0]
 
                 if do_cfg:
@@ -330,6 +414,7 @@ class LynxEngine(WanShared):
                         encoder_hidden_states=negative_prompt_embeds,
                         attention_kwargs=merged_attention_kwargs_uncond,
                         return_dict=False,
+                        rope_on_cpu=rope_on_cpu,
                     )[0]
 
                     if guidance_scale_i is not None:
@@ -339,6 +424,7 @@ class LynxEngine(WanShared):
                             encoder_hidden_states=negative_prompt_embeds,
                             attention_kwargs=merged_attention_kwargs,
                             return_dict=False,
+                            rope_on_cpu=rope_on_cpu,
                         )[0]
                         noise_pred = (
                             noise_uncond

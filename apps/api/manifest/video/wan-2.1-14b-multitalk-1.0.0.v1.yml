@@ -41,10 +41,10 @@ spec:
   - metal_flash
   - efficient_dot_product_attention
   loras:
-  - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors
+  - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
     scale: 1.0
-    name: fusionx_lora
-    label: FusionX LoRA
+    name: lightx2v_lora
+    label: Lightx2v LoRA
     component: transformer
     verified: true
   components:

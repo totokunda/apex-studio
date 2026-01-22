@@ -207,7 +207,7 @@ class InflatedCausalConv3d(Conv3d):
                     x_concat, padding, mode="constant", value=0.0
                 )
                 with ignore_padding(self):
-                    return Conv3d.forward(self, padded)
+                    return Conv3d.forward(self, padded.to(self.weight.device))
 
             return retry_on_oom(
                 pad_and_forward,

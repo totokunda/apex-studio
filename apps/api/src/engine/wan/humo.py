@@ -378,6 +378,7 @@ class HuMoEngine(WanShared):
         resolution: int | None = None,
         aspect_ratio: str | None = None,
         chunking_profile: str = "none",
+        rope_on_cpu: bool = False,
         **kwargs,
     ):
 
@@ -461,6 +462,7 @@ class HuMoEngine(WanShared):
         audio_emb = torch.cat([audio_emb, zero_audio_pad], dim=0)
         audio_emb = [audio_emb.to(self.device)]
         audio_emb_neg = [torch.zeros_like(audio_emb[0])]
+        self._rope_on_cpu = rope_on_cpu
 
         safe_emit_progress(progress_callback, 0.13, "Preparing initial noise latents")
         noise = self._get_latents(
@@ -540,6 +542,7 @@ class HuMoEngine(WanShared):
         self.to_device(self.transformer)
         if chunking_profile != "none":
             self.transformer.set_chunking_profile(chunking_profile)
+        
         safe_emit_progress(progress_callback, 0.45, "Transformer ready")
 
         # HuMo has two variants: ~1.7B params and ~17B params.
@@ -594,36 +597,42 @@ class HuMoEngine(WanShared):
                     "audio": audio_emb_neg,
                     "y": y_null,
                     "context": context_null,
+                    "rope_on_cpu": self._rope_on_cpu,
                 }
                 arg_t = {
                     "seq_len": seq_len,
                     "audio": audio_emb_neg,
                     "y": y_null,
                     "context": context,
+                    "rope_on_cpu": self._rope_on_cpu,
                 }
                 arg_i = {
                     "seq_len": seq_len,
                     "audio": audio_emb_neg,
                     "y": y_c,
                     "context": context_null,
+                    "rope_on_cpu": self._rope_on_cpu,
                 }
                 arg_ti = {
                     "seq_len": seq_len,
                     "audio": audio_emb_neg,
                     "y": y_c,
                     "context": context,
+                    "rope_on_cpu": self._rope_on_cpu,
                 }
                 arg_ta = {
                     "seq_len": seq_len,
                     "audio": audio_emb,
                     "y": y_null,
                     "context": context,
+                    "rope_on_cpu": self._rope_on_cpu,
                 }
                 arg_tia = {
                     "seq_len": seq_len,
                     "audio": audio_emb,
                     "y": y_c,
                     "context": context,
+                    "rope_on_cpu": self._rope_on_cpu,
                 }
 
                 for i, t in enumerate(

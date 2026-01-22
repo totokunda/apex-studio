@@ -22,6 +22,11 @@ from diffusers.utils import is_torch_version, logging
 from torch import nn
 
 from src.attention import attention_register
+from src.transformer.efficiency.ops import (
+    apply_scale_shift_inplace,
+    chunked_feed_forward_inplace,
+)
+from src.transformer.efficiency.mod import InplaceRMSNorm
 
 logger = logging.get_logger(__name__)
 
@@ -40,12 +45,14 @@ def _chunked_modulated_norm(
     in_dtype = hidden_states.dtype
 
     if chunk_size is None:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     if S <= chunk_size:
-        out = norm_layer(hidden_states) * (1 + scale) + shift
-        return out.to(in_dtype) if out.dtype != in_dtype else out
+        out = norm_layer(hidden_states).to(in_dtype)
+        apply_scale_shift_inplace(out, scale, shift)
+        return out
 
     out = torch.empty_like(hidden_states)
     scale_per_token = scale.dim() == 3 and scale.shape[1] == S
@@ -61,9 +68,8 @@ def _chunked_modulated_norm(
             scale_chunk = scale
             shift_chunk = shift
 
-        normed = norm_layer(hs_chunk)
-        out[:, i:end, :] = normed * (1 + scale_chunk) + shift_chunk
-        del normed
+        out[:, i:end, :].copy_(norm_layer(hs_chunk))
+        apply_scale_shift_inplace(out[:, i:end, :], scale_chunk, shift_chunk)
 
     return out
 
@@ -71,24 +77,10 @@ def _chunked_modulated_norm(
 def _chunked_feed_forward(
     ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
 ) -> torch.Tensor:
-    """
-    Chunked feed-forward to reduce peak memory.
-    """
-    if chunk_size is None:
-        return ff(hidden_states)
-    if chunk_size <= 0:
-        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-
-    dim_len = hidden_states.shape[chunk_dim]
-    if dim_len <= chunk_size:
-        return ff(hidden_states)
-
-    outputs = []
-    for start in range(0, dim_len, chunk_size):
-        end = min(start + chunk_size, dim_len)
-        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
-        outputs.append(ff(hs_chunk))
-    return torch.cat(outputs, dim=chunk_dim)
+    """Chunked feed-forward to reduce peak memory."""
+    return chunked_feed_forward_inplace(
+        ff, hidden_states, chunk_dim=chunk_dim, chunk_size=chunk_size
+    )
 
 
 def _chunked_norm(
@@ -505,8 +497,16 @@ class WanSelfAttention(nn.Module):
         self.k = nn.Linear(dim, dim)
         self.v = nn.Linear(dim, dim)
         self.o = nn.Linear(dim, dim)
-        self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_q = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
+        self.norm_k = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
 
     def forward(self, x, seq_lens, grid_sizes, freqs, dtype=torch.bfloat16, t=0):
         r"""
@@ -585,7 +585,11 @@ class WanI2VCrossAttention(WanSelfAttention):
         self.k_img = nn.Linear(dim, dim)
         self.v_img = nn.Linear(dim, dim)
         # self.alpha = nn.Parameter(torch.zeros((1, )))
-        self.norm_k_img = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_k_img = (
+            InplaceRMSNorm(dim, eps=eps, elementwise_affine=True)
+            if qk_norm
+            else nn.Identity()
+        )
 
     def forward(self, x, context, context_lens, dtype=torch.bfloat16, t=0):
         r"""
