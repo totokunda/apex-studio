@@ -43,7 +43,7 @@ class PythonBundler:
 
     # Intel macOS (x86_64): latest supported PyTorch stack.
     # These wheels are installed from PyPI (no +cpu suffix on macOS).
-    TORCH_WHEEL_MACOS_INTEL = "https://huggingface.co/datasets/totoku/universal-macos-torch/resolve/main/torch-2.11.0a0%2Bgit1f838e0-cp311-cp311-macosx_15_0_universal2.whl"
+    TORCH_WHEEL_MACOS_INTEL = "https://huggingface.co/datasets/totoku/universal-macos-torch/resolve/main/torch-2.11.0a0%2Bgit51e04aa-cp311-cp311-macosx_15_0_universal2.whl"
     TORCHVISION_WHEEL_MACOS_INTEL = "https://huggingface.co/datasets/totoku/universal-macos-torch/resolve/main/torchvision-0.17.2%2Bc1d70fe-cp311-cp311-macosx_10_9_universal2.whl"
     TORCHAUDIO_WHEEL_MACOS_INTEL = "https://huggingface.co/datasets/totoku/universal-macos-torch/resolve/main/torchaudio-2.11.0a0%2Be123269-cp311-cp311-macosx_10_9_universal2.whl"
 

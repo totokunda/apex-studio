@@ -48,6 +48,7 @@ import {
     TabsList,
     TabsTrigger,
   } from "@/components/ui/tabs";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface SettingsModalProps {
   open: boolean;
@@ -150,6 +151,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [useFastDownload, setUseFastDownload] = useState<boolean>(true);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
   const [isBackendRemote, setIsBackendRemote] = useState<boolean>(false);
+  const queryClient = useQueryClient();
 
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateState | null>(
     null,
@@ -416,6 +418,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setRenderVideoSteps(Boolean(res.data.renderVideoSteps));
       setUseFastDownload(Boolean(res.data.useFastDownload));
       setAutoUpdateEnabled(Boolean(res.data.autoUpdateEnabled));
+
+
+      await queryClient.invalidateQueries({
+        queryKey: ["manifest"]
+      })
+
+      await queryClient.invalidateQueries({
+        queryKey: ["modelTypes"]
+      })
 
       // Switch app runtime (ApexApi/AppDirProtocol) to this backend immediately.
       // This updates remote/local mode in main based on /config/hostname probing.
@@ -1201,7 +1212,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="flex flex-col gap-5 font-poppins text-brand-light h-full">
               <div className="flex flex-col gap-2 rounded-lg border border-brand-light/10 bg-brand-light/5 p-3">
                 <div className="text-[11px] text-brand-light/80 font-medium">
-                  App update (Apex Studio)
+                  App Update
                 </div>
                 <div className="text-[10px] text-brand-light/60">
                   Status:{" "}
@@ -1268,7 +1279,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="flex flex-col gap-2 rounded-lg border border-brand-light/10 bg-brand-light/5 p-3">
                 <div className="text-[11px] text-brand-light/80 font-medium">
-                  Engine update (Apex Engine)
+                  API Engine Update
                 </div>
                 <div className="text-[10px] text-brand-light/60">
                   Status:{" "}

@@ -95,13 +95,36 @@ export class AutoUpdater implements AppModule {
       lastKnownState = { ...lastKnownState, status: "checking" };
       try {
         const res = await updater.checkForUpdates();
+        const now = Date.now();
+
+        // `electron-updater` emits events like "update-available" / "update-not-available"
+        // during `checkForUpdates()`. Our event handlers update `lastKnownState.status`
+        // accordingly. We must not overwrite that richer status here.
+        if (!res) {
+          lastKnownState = {
+            ...lastKnownState,
+            status: lastKnownState.status === "checking" ? "idle" : lastKnownState.status,
+            lastCheckedAt: now,
+          };
+          return null;
+        }
+
+        const updateInfo = (res as any)?.updateInfo ?? null;
+        const isUpdateAvailable = Boolean((res as any)?.isUpdateAvailable);
+
         lastKnownState = {
           ...lastKnownState,
-          status: "idle",
-          updateInfo: (res as any)?.updateInfo,
-          lastCheckedAt: Date.now(),
+          status:
+            lastKnownState.status === "checking"
+              ? isUpdateAvailable
+                ? "available"
+                : "not-available"
+              : lastKnownState.status,
+          updateInfo: updateInfo ?? undefined,
+          lastCheckedAt: now,
         };
-        return (res as any)?.updateInfo ?? null;
+
+        return updateInfo;
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Failed to check for updates";
@@ -121,6 +144,19 @@ export class AutoUpdater implements AppModule {
       const updater = this.getAutoUpdater();
       // This restarts the app. Return value is mostly irrelevant, but keep it predictable.
       updater.quitAndInstall();
+
+      // Explicitly close all windows to ensure they don't linger during
+      // potential shutdown delays (e.g. Python process cleanup).
+      // We assume WindowManager receives the 'before-quit' event from quitAndInstall()
+      // and sets its isQuitting flag, preventing respawns.
+      for (const win of BrowserWindow.getAllWindows()) {
+        try {
+          win.close();
+        } catch {
+          // ignore
+        }
+      }
+
       return { ok: true };
     });
   }

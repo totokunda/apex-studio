@@ -22,12 +22,6 @@ import threading
 import time
 from .stability import install_stability_middleware
 from .log_suppression import install_http_log_suppression
-from fastapi.staticfiles import StaticFiles
-from src.utils.defaults import (
-    get_engine_results_path,
-    get_preprocessor_results_path,
-    get_postprocessor_results_path,
-)
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
@@ -102,23 +96,23 @@ async def lifespan(app: FastAPI):
     # Startup: initialize Ray and related services in the background (non-blocking)
     startup_task = asyncio.create_task(_start_background_services())
 
-    # Start background task for polling Ray updates
-    from .preprocessor import poll_ray_updates
+    # Start event-driven forwarding of Ray websocket updates (no polling)
+    from .ws_manager import forward_ray_ws_updates
 
-    poll_task = asyncio.create_task(poll_ray_updates())
+    ws_forward_task = asyncio.create_task(forward_ray_ws_updates())
     
     yield
 
-    # Shutdown: Cancel polling task and close Ray
+    # Shutdown: cancel background tasks and close Ray
     startup_task.cancel()
-    poll_task.cancel()
+    ws_forward_task.cancel()
 
     try:
         await startup_task
     except asyncio.CancelledError:
         pass
     try:
-        await poll_task
+        await ws_forward_task
     except asyncio.CancelledError:
         pass
     shutdown_ray()
@@ -144,22 +138,6 @@ app.include_router(engine_router)
 app.include_router(files_router)
 app.include_router(download_router)
 app.include_router(ray_router)
-
-app.mount(
-    "/files/engine_results",
-    StaticFiles(directory=get_engine_results_path()),
-    name="engine_results",
-)
-app.mount(
-    "/files/preprocessor_results",
-    StaticFiles(directory=get_preprocessor_results_path()),
-    name="preprocessor_results",
-)
-app.mount(
-    "/files/postprocessor_results",
-    StaticFiles(directory=get_postprocessor_results_path()),
-    name="postprocessor_results",
-)
 
 app.add_middleware(
     CORSMiddleware,

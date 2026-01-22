@@ -187,11 +187,18 @@ const mapOffloadToEngineInputs = (
         string,
         {
           enabled?: boolean;
+          offload_mode?: "group" | "budget";
           level?: string;
           num_blocks?: number;
           use_stream?: boolean;
           record_stream?: boolean;
           low_cpu_mem_usage?: boolean;
+          budget_mb?: number | string | null;
+          async_transfers?: boolean;
+          prefetch?: boolean;
+          pin_cpu_memory?: boolean;
+          vram_safety_coefficient?: number;
+          offload_after_forward?: boolean;
         }
       >
     | undefined,
@@ -200,14 +207,38 @@ const mapOffloadToEngineInputs = (
     const mappedObject: Record<string, any> = {};
     Object.entries(offload).forEach(([key, value]) => {
       if (value.enabled) {
+        const mode = value.offload_mode === "budget" ? "budget" : "group";
+        if (mode === "budget") {
+          const budgetRaw = value.budget_mb;
+          const budget =
+            budgetRaw === "" || budgetRaw === null || budgetRaw === undefined
+              ? undefined
+              : budgetRaw;
+          mappedObject[key] = {
+            offload_mode: "budget",
+            budget_mb: budget,
+            async_transfers: value.async_transfers ?? true,
+            prefetch: value.prefetch ?? true,
+            pin_cpu_memory: value.pin_cpu_memory ?? false,
+            vram_safety_coefficient:
+              typeof value.vram_safety_coefficient === "number" &&
+              Number.isFinite(value.vram_safety_coefficient)
+                ? value.vram_safety_coefficient
+                : 0.8,
+            offload_after_forward: value.offload_after_forward ?? false,
+          };
+          return;
+        }
+
         mappedObject[key] = {
+          offload_mode: "group",
           group_offload_type: value.level === "leaf" ? "leaf_level" : "block_level",
           group_offload_num_blocks_per_group: value.num_blocks,
           // Defaults: treat unset as enabled (UI defaults)
           group_offload_use_stream: value.use_stream ?? true,
           group_offload_record_stream: value.record_stream ?? true,
           group_offload_low_cpu_mem_usage: value.low_cpu_mem_usage ?? true,
-        }
+        };
       }
     });
     return mappedObject;

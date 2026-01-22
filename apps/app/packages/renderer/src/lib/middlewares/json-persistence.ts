@@ -882,6 +882,28 @@ let jsonProjectLoadGeneration = 0;
 let isHydratingFromJson = false;
 let currentHydratedProjectId: string | number | null = null;
 
+const normalizeProjectId = (
+  raw: string | number | null | undefined,
+): string | number | null => {
+  if (raw == null) return null;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (Number.isInteger(n) && n > 0) return n;
+  return s;
+};
+
+const cancelPendingJsonProjectSave = (): void => {
+  // Invalidate any pending debounced save so it cannot fire after a project
+  // switch/hydration and write an "empty" snapshot over another project.
+  jsonSyncGeneration += 1;
+  if (jsonSyncTimeout) {
+    clearTimeout(jsonSyncTimeout);
+    jsonSyncTimeout = null;
+  }
+};
+
 const isLauncherWindow = (): boolean => {
   try {
     return typeof window !== "undefined" && window.location?.hash === "#launcher";
@@ -1675,11 +1697,33 @@ const scheduleJsonProjectSave = (getProjectState: () => JsonProjectSlice) => {
     return;
   }
 
+  const targetProjectId = normalizeProjectId(state.activeProjectId);
+  if (targetProjectId == null) return;
+
   const myGen = ++jsonSyncGeneration;
   if (jsonSyncTimeout) clearTimeout(jsonSyncTimeout);
   jsonSyncTimeout = setTimeout(async () => {
     if (myGen !== jsonSyncGeneration) return;
-    const snapshotResult = buildProjectJsonSnapshot(getProjectState());
+    const latestState = getProjectState();
+    if (!latestState || latestState.activeProjectId == null) return;
+
+    // If the active project changed since we scheduled this save, abort.
+    if (normalizeProjectId(latestState.activeProjectId) !== targetProjectId) {
+      return;
+    }
+    // If hydration is in progress, abort.
+    if (isHydratingFromJson) return;
+    // If we're not fully loaded, abort.
+    if ((latestState as any).projectsLoaded === false) return;
+    // If our in-memory stores are known to correspond to a different project, abort.
+    if (
+      currentHydratedProjectId != null &&
+      normalizeProjectId(currentHydratedProjectId) !== targetProjectId
+    ) {
+      return;
+    }
+
+    const snapshotResult = buildProjectJsonSnapshot(latestState);
     if (!snapshotResult || snapshotResult.projectId == null) return;
     try {
       await saveProjectJson(snapshotResult.projectId, snapshotResult.snapshot);
@@ -1849,6 +1893,8 @@ export const withJsonProjectPersistence =
       } catch {
         // ignore
       }
+      // Cancel any pending autosave debounce from the previous project.
+      cancelPendingJsonProjectSave();
 
       try {
         // While we are hydrating from JSON, mark projects as not yet fully loaded
@@ -1857,7 +1903,8 @@ export const withJsonProjectPersistence =
         // If the slice doesn't have projectsLoaded yet, ignore
       }
 
-      const activeProjectId = await getActiveProjectId();
+      const activeProjectId = normalizeProjectId(await getActiveProjectId());
+      projectId = normalizeProjectId(projectId ?? undefined) ?? undefined;
 
       if (projectId != activeProjectId && projectId) {
         await setActiveProjectId(projectId);
@@ -1949,6 +1996,100 @@ export const withJsonProjectPersistence =
         }
         const doc = res.data as ProjectJsonSnapshot | null;
         if (!doc) {
+          // New project with no on-disk JSON yet: explicitly reset stores to a blank
+          // state under this project id, but do not trigger an immediate autosave.
+          const normalizedId = normalizeProjectId(projectId);
+          if (normalizedId == null) return;
+
+          isHydratingFromJson = true;
+          try {
+            const projectState = get() as unknown as JsonProjectSlice;
+            const activeProject =
+              projectState.projects.find((p) => p.id === normalizedId) ?? null;
+            const now = Date.now();
+
+            // Clear clip/timeline/assets state.
+            try {
+              useClipStore.setState({
+                clips: [],
+                timelines: [],
+                assets: {},
+                clipDuration: 0,
+                snapGuideX: null,
+              } as any);
+            } catch {
+              // ignore; best-effort
+            }
+
+            // Reset viewport to sensible defaults (keep aspect ratio from project if present).
+            try {
+              const existingViewport = useViewportStore.getState();
+              const aspectRatio =
+                activeProject?.aspectRatio ?? existingViewport?.aspectRatio ?? { width: 16, height: 9, id: "16:9" };
+              useViewportStore.setState({
+                aspectRatio,
+                tool: "pointer",
+                shape: "rectangle",
+                scale: 0.75,
+                position: { x: 0, y: 0 },
+                contentBounds: null,
+                shouldUpdateViewport: true,
+              } as any);
+            } catch {
+              // ignore; best-effort
+            }
+
+            // Reset input controls.
+            try {
+              globalInputControlsStore.setState({
+                selectedRangeByInputId: {},
+                selectedInputClipIdByInputId: {},
+                totalTimelineFramesByInputId: {},
+                timelineDurationByInputId: {},
+                fpsByInputId: {},
+                focusFrameByInputId: {},
+                focusAnchorRatioByInputId: {},
+                zoomLevelByInputId: {},
+                isPlayingByInputId: {},
+              } as any);
+            } catch {
+              // ignore; best-effort
+            }
+
+            // Reset controls to match project fps and a blank timeline.
+            try {
+              const controlsAny = useControlsStore as any;
+              const currentControls = controlsAny?.getState?.() ?? {};
+              const fps =
+                typeof (activeProject as any)?.fps === "number" &&
+                Number.isFinite((activeProject as any).fps)
+                  ? (activeProject as any).fps
+                  : currentControls?.fps || 24;
+              useControlsStore.setState({
+                fps,
+                defaultClipLength: currentControls?.defaultClipLength ?? 5,
+                zoomLevel: currentControls?.zoomLevel ?? 1,
+                focusFrame: 0,
+                timelineDuration: [0, 0] as [number, number],
+                totalTimelineFrames: 0,
+              } as any);
+            } catch {
+              // ignore; best-effort
+            }
+
+            // Mark the new blank project as the one our in-memory stores correspond to.
+            currentHydratedProjectId = normalizedId;
+
+            // Best-effort: update project metadata timestamps in the projects list so UI stays consistent.
+            if (activeProject && typeof (projectState as any).updateProject === "function") {
+              (projectState as any).updateProject(normalizedId, {
+                createdAt: (activeProject as any).createdAt ?? now,
+                lastModified: (activeProject as any).lastModified ?? now,
+              });
+            }
+          } finally {
+            isHydratingFromJson = false;
+          }
           return;
         }
         await hydrateStoresFromProjectJson(projectId, doc);
@@ -1983,12 +2124,43 @@ export const withJsonProjectPersistence =
             } catch {
               // ignore
             }
+            // Best-effort: flush the previous project's state to disk before we
+            // switch/hydrate. This prevents a newly-created blank project from
+            // ever overwriting the previous project's JSON due to timing.
+            try {
+              const prevId = normalizeProjectId(prev?.activeProjectId);
+              if (
+                prevId != null &&
+                !isHydratingFromJson &&
+                !isLauncherWindow() &&
+                normalizeProjectId(currentHydratedProjectId) === prevId
+              ) {
+                const prevState = {
+                  ...(prev as any),
+                  activeProjectId: prevId,
+                } as JsonProjectSlice;
+                const snapshotResult = buildProjectJsonSnapshot(prevState);
+                if (snapshotResult?.projectId != null) {
+                  void saveProjectJson(
+                    snapshotResult.projectId,
+                    snapshotResult.snapshot,
+                  );
+                }
+              }
+            } catch {
+              // ignore; best-effort
+            }
+
+            // Cancel any pending autosave so it can't land during the switch.
+            cancelPendingJsonProjectSave();
             void loadActiveProjectFromJson(state?.activeProjectId ?? undefined);
           }
 
           const projectsChanged = state?.projects !== prev?.projects;
 
-          if (activeChanged || projectsChanged) {
+          // Do not autosave on active project switches: during creation/switching
+          // we can briefly have "blank" stores that must not be persisted.
+          if (projectsChanged) {
             scheduleJsonProjectSave(() => state);
           }
 

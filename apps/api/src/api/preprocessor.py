@@ -285,15 +285,11 @@ def trigger_run(request: RunRequest):
     try:
         job_id = request.job_id or str(uuid.uuid4())
 
-        # Get websocket bridge
-        bridge = get_ray_ws_bridge()
-
         # Submit task with resource constraints
         task_ref = run_preprocessor.options(**resources).remote(
             request.preprocessor_name,
             request.input_path,
-            job_id,
-            bridge,
+            job_id, 
             request.start_frame,
             request.end_frame,
             **kwargs,
