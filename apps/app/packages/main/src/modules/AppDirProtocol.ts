@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { Readable } from "node:stream";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import fsp from "node:fs/promises";
 import mime from "mime-types";
@@ -651,13 +652,29 @@ class AppDirProtocol implements AppModule {
       // Best-effort: errors are handled by pipeline's rejection.
     });
 
+    let written = 0;
+    const counter = new Transform({
+      transform(chunk: any, _enc, cb) {
+        try {
+          if (chunk) {
+            if (Buffer.isBuffer(chunk)) {
+              written += chunk.byteLength;
+            } else if (chunk instanceof Uint8Array) {
+              written += chunk.byteLength;
+            } else if (typeof chunk?.length === "number") {
+              written += Number(chunk.length) || 0;
+            }
+          }
+        } catch {
+          // ignore
+        }
+        cb(null, chunk);
+      },
+    });
+
     try {
       const body = Readable.fromWeb(response.body as any);
-      await pipeline(body, ws);
-
-      // Avoid per-chunk JS accounting overhead. After pipeline resolves, the file
-      // is fully flushed/closed, so stat() gives a reliable final size.
-      const { size: written } = await fsp.stat(partPath);
+      await pipeline(body, counter, ws);
 
       if (written !== expectedBytes) {
         throw new Error(
