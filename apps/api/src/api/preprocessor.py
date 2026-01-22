@@ -46,6 +46,12 @@ async def poll_ray_updates():
         try:
             if bridge is None:
                 try:
+                    # Don't trigger Ray initialization from this polling loop.
+                    # Ray is started asynchronously during app startup; until it's ready
+                    # we simply sleep and retry.
+                    if not ray.is_initialized():
+                        await asyncio.sleep(0.5)
+                        continue
                     bridge = get_ray_ws_bridge()
                     logger.info("Ray websocket bridge ready; polling enabled")
                 except Exception:
