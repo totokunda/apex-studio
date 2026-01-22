@@ -46,6 +46,11 @@ interface Settings {
   renderVideoSteps?: boolean;
   useFastDownload?: boolean;
   autoUpdateEnabled?: boolean;
+  /**
+   * If true, disable the backend auto memory manager hooks/wrappers and fall back to
+   * the default offload behavior.
+   */
+  disableAutoMemoryManagement?: boolean;
 }
 
 interface ConfigResponse<T> {
@@ -66,6 +71,7 @@ type BackendSyncedSettings = {
   renderVideoSteps: boolean;
   useFastDownload: boolean;
   autoUpdateEnabled: boolean;
+  disableAutoMemoryManagement: boolean;
 };
 
 type BackendPathSizes = {
@@ -349,6 +355,10 @@ export class SettingsModule extends EventEmitter implements AppModule {
           const v = this.store.get("autoUpdateEnabled");
           return v === undefined ? true : Boolean(v);
         })(),
+        disableAutoMemoryManagement: (() => {
+          const v = this.store.get("disableAutoMemoryManagement");
+          return v === undefined ? false : Boolean(v);
+        })(),
       });
 
       let okCount = 0;
@@ -375,7 +385,8 @@ export class SettingsModule extends EventEmitter implements AppModule {
           key === "renderImageSteps" ||
           key === "renderVideoSteps" ||
           key === "useFastDownload" ||
-          key === "autoUpdateEnabled"
+          key === "autoUpdateEnabled" ||
+          key === "disableAutoMemoryManagement"
         ) {
           // Settings interface includes these booleans
           this.store.set(key as any, Boolean(value));
@@ -448,6 +459,19 @@ export class SettingsModule extends EventEmitter implements AppModule {
       if (au.success && au.data && typeof au.data.enabled === "boolean") {
         okCount++;
         setIfStillCurrent("autoUpdateEnabled", Boolean(au.data.enabled));
+      }
+
+      const mm = await this.makeConfigRequestAtUrl<any>(
+        urlAtStart,
+        "GET",
+        "/config/disable-auto-memory-management",
+      );
+      if (mm.success && mm.data && typeof mm.data.disabled === "boolean") {
+        okCount++;
+        setIfStillCurrent(
+          "disableAutoMemoryManagement",
+          Boolean(mm.data.disabled),
+        );
       }
 
       // If backendUrl changed mid-refresh, discard to avoid stale writes.
@@ -576,6 +600,10 @@ export class SettingsModule extends EventEmitter implements AppModule {
         const v = this.store.get("autoUpdateEnabled");
         return v === undefined ? true : Boolean(v);
       })(),
+      disableAutoMemoryManagement: (() => {
+        const v = this.store.get("disableAutoMemoryManagement");
+        return v === undefined ? false : Boolean(v);
+      })(),
     });
 
     let okCount = 0;
@@ -654,6 +682,16 @@ export class SettingsModule extends EventEmitter implements AppModule {
     if (au.success && au.data && typeof au.data.enabled === "boolean") {
       okCount++;
       setFetched("autoUpdateEnabled", Boolean(au.data.enabled));
+    }
+
+    const mm = await this.makeConfigRequestAtUrl<any>(
+      backendUrl,
+      "GET",
+      "/config/disable-auto-memory-management",
+    );
+    if (mm.success && mm.data && typeof mm.data.disabled === "boolean") {
+      okCount++;
+      setFetched("disableAutoMemoryManagement", Boolean(mm.data.disabled));
     }
 
     if (okCount === 0) {
@@ -814,6 +852,36 @@ export class SettingsModule extends EventEmitter implements AppModule {
     this.store.set("autoUpdateEnabled", v);
     void this.makeConfigRequest<any>("POST", "/config/auto-update", {
       enabled: v,
+    }).catch(() => undefined);
+  }
+
+  public getDisableAutoMemoryManagement(): boolean {
+    const v = this.store.get("disableAutoMemoryManagement");
+    return v === undefined ? false : Boolean(v);
+  }
+
+  private async getDisableAutoMemoryManagementEnsuringFromApi(): Promise<boolean> {
+    const current = this.store.get("disableAutoMemoryManagement");
+    if (current !== undefined) return Boolean(current);
+
+    const res = await this.makeConfigRequest<any>(
+      "GET",
+      "/config/disable-auto-memory-management",
+    ).catch(() => ({ success: false } as any));
+
+    const disabled =
+      res && res.success && res.data && typeof res.data.disabled === "boolean"
+        ? Boolean(res.data.disabled)
+        : false;
+    this.store.set("disableAutoMemoryManagement", disabled);
+    return disabled;
+  }
+
+  private setDisableAutoMemoryManagementAndUpdateApi(disabled: boolean): void {
+    const v = Boolean(disabled);
+    this.store.set("disableAutoMemoryManagement", v);
+    void this.makeConfigRequest<any>("POST", "/config/disable-auto-memory-management", {
+      disabled: v,
     }).catch(() => undefined);
   }
 
@@ -1103,6 +1171,19 @@ export class SettingsModule extends EventEmitter implements AppModule {
       "settings:set-auto-update-enabled",
       (_event, enabled: boolean) => {
         this.setAutoUpdateEnabledAndUpdateApi(enabled);
+        return { success: true };
+      },
+    );
+
+    // Auto memory manager toggle (backend-persisted)
+    ipcMain.handle("settings:get-disable-auto-memory-management", async () => {
+      return await this.getDisableAutoMemoryManagementEnsuringFromApi();
+    });
+
+    ipcMain.handle(
+      "settings:set-disable-auto-memory-management",
+      (_event, disabled: boolean) => {
+        this.setDisableAutoMemoryManagementAndUpdateApi(Boolean(disabled));
         return { success: true };
       },
     );

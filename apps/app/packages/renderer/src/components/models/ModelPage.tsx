@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from "uuid";
 import { refreshManifest, useManifestQuery } from "@/lib/manifest/queries";
 import ComponentCard, { LoraCard } from "./ComponentCard2";
 import { useQueryClient } from "@tanstack/react-query";
+import { getOffloadDefaultsForManifest } from "@app/preload";
 
 interface ModelPageProps {
   manifestId: string;
@@ -155,7 +156,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
                 type="button"
                 className="text-[11px] font-medium w-full flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded-[6px] px-12 py-2 shrink-0 text-brand-light hover:text-brand-light/90 bg-brand-accent-two-shade hover:bg-brand-accent-two-shade/90"
                 title="Add clip at playhead"
-                onClick={() => {
+                onClick={async () => {
                   try {
                     const controls = useControlsStore.getState();
                     const clipStore = useClipStore.getState();
@@ -227,6 +228,17 @@ const ModelPage: React.FC<ModelPageProps> = ({
                       speed: 1.0,
                       manifest: manifest,
                     };
+                    try {
+                      const mfId = String(manifest?.metadata?.id || "").trim();
+                      if (mfId) {
+                        const defaults = await getOffloadDefaultsForManifest(mfId);
+                        if (defaults) {
+                          clipBase.offload = defaults;
+                        }
+                      }
+                    } catch {
+                      // ignore; defaults are best-effort
+                    }
                     addClip(clipBase);
                   } catch {}
                 }}
