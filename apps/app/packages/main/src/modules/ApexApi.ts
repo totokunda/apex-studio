@@ -1371,6 +1371,7 @@ export class ApexApi implements AppModule {
             event.sender.send(`ws-error:${key}`, { error: error.message });
           },
           onClose: () => {
+
             event.sender.send(`ws-status:${key}`, { status: "disconnected" });
           },
         });

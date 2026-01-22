@@ -367,18 +367,41 @@ export type ModelClipProps = ClipProps & {
    * Optional per-component offloading configuration.
    * Keyed by component key (usually manifest component `name` if present, else `type`).
    *
-   * NOTE: This is UI-driven config and is forwarded to the engine as
-   * `selected_components.offload` when present.
+   * NOTE: This is UI-driven config and is forwarded to the engine by merging
+   * the relevant `*_offload_*` / `budget_*` fields into `selected_components[componentKey]`.
    */
   offload?: Record<
     string,
     {
       enabled?: boolean;
+      /**
+       * Which engine offloading system to use for this component.
+       * Mirrors `apps/api/src/memory_management/config.py::MemoryConfig.offload_mode`.
+       */
+      offload_mode?: "group" | "budget";
+
+      // -------------------------
+      // Group offloading (Diffusers-style)
+      // -------------------------
       level?: "leaf" | "block";
       num_blocks?: number;
       use_stream?: boolean;
       record_stream?: boolean;
       low_cpu_mem_usage?: boolean;
+
+      // -------------------------
+      // Budget offloading (Apex budget manager)
+      // -------------------------
+      /**
+       * VRAM budget in MB. May be a number (MB) or a string like "0.8%".
+       * `null` / `undefined` means "no explicit budget" (engine default).
+       */
+      budget_mb?: number | string | null;
+      async_transfers?: boolean;
+      prefetch?: boolean;
+      pin_cpu_memory?: boolean;
+      vram_safety_coefficient?: number;
+      offload_after_forward?: boolean;
     }
   >;
   generations?: GenerationModelClipProps[];

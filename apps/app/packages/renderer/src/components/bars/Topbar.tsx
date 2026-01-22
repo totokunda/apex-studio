@@ -455,7 +455,7 @@ const TopBar: React.FC<TopBarProps> = () => {
             </div>
             <DropdownMenuSeparator className="my-0" />
             
-            <ScrollArea className="max-h-64">
+            <ScrollArea className="h-64">
               <div className="px-1 py-1 flex flex-col">
                 {filteredProjects.length === 0 && (
                   <DropdownMenuItem
@@ -511,7 +511,7 @@ const TopBar: React.FC<TopBarProps> = () => {
 
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              className="dark text-[11px] font-medium flex items-center gap-x-2 cursor-pointer mb-1"
+              className="dark text-[11px] font-medium flex items-center gap-x-2 cursor-pointer mb-1 mx-1"
               onClick={() => {
                 void handleCreateProject();
               }}
