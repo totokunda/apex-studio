@@ -622,8 +622,7 @@ class WanSelfAttention(nn.Module):
             k=k.transpose(1, 2),
             v=v.transpose(1, 2),
             k_lens=seq_lens,
-            window_size=self.window_size,
-            key="flash",
+            window_size=self.window_size
         ).transpose(1, 2)
         del q, k, v
         # output
@@ -699,8 +698,7 @@ class WanSelfAttentionSepKVDim(nn.Module):
             k=k.transpose(1, 2),
             v=v.transpose(1, 2),
             k_lens=seq_lens,
-            window_size=self.window_size,
-            key="flash",
+            window_size=self.window_size
         ).transpose(1, 2)
         del q, k, v
 
@@ -742,8 +740,7 @@ class WanT2VCrossAttention(WanSelfAttention):
             k.transpose(1, 2),
             v.transpose(1, 2),
             k_lens=context_lens,
-            window_size=self.window_size,
-            key="flash",
+            window_size=self.window_size
         ).transpose(1, 2)
         del q, k, v
 
@@ -861,8 +858,7 @@ class WanI2VCrossAttention(WanSelfAttention):
             k=k.transpose(1, 2),
             v=v.transpose(1, 2),
             k_lens=context_lens,
-            window_size=self.window_size,
-            key="flash",
+            window_size=self.window_size
         )
         x = x.transpose(1, 2)
         del q, k, v
