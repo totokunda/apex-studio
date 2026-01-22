@@ -511,11 +511,35 @@ class AppDirProtocol implements AppModule {
   }
 
   private async saveLocalFileToServer(filePath: string, savePath: string): Promise<void> {
-    // ensure the directory exists
+    // Copy a local file into our on-disk server cache and write the
+    // corresponding verified meta marker so it won't be GC'd as "invalid cache".
     if (filePath === savePath) return;
+
     await fsp.mkdir(path.dirname(savePath), { recursive: true });
-    // copy the file to the save path
+
+    // Copy the file to the cache location.
     await fsp.copyFile(filePath, savePath);
+
+    // Write/refresh a verified meta marker (best-effort, atomic).
+    try {
+      const st = await fsp.stat(savePath);
+      const metaPath = this.getServerMetaPath(savePath);
+      const metaTmp = `${metaPath}.part`;
+      const meta = {
+        size: st.size,
+        fetchedAtMs: Date.now(),
+        source: "local",
+      };
+      await fsp.writeFile(metaTmp, JSON.stringify(meta), "utf8");
+      try {
+        await fsp.rm(metaPath, { force: true });
+      } catch {
+        // ignore
+      }
+      await fsp.rename(metaTmp, metaPath);
+    } catch {
+      // Best-effort only; never fail the main request due to meta creation issues.
+    }
   }
 
   private async returnResponseFromLocalFile(request: Request): Promise<Response> {
@@ -533,10 +557,8 @@ class AppDirProtocol implements AppModule {
         filePath = getCoverPath(filePath, userDataDir);
       }
 
- 
       if (isServerPath(filePath)) {
-        // check if the file exists locally 
-        
+
         const { folderUuid, folderName, fileName, localType, type  } = this.parseServerDetails(filePath, folderUuidFromUrl);
 
         if (!await exists(filePath)) {
@@ -548,14 +570,24 @@ class AppDirProtocol implements AppModule {
           }
         }
 
-        // create symlinks to the original file in the media directory
-        let savePath = this.getServerSavePath({ folderUuid, folderName, fileName, localType, type });
-        if (savePath && !(await exists(savePath))) {
-          try { 
-            // copy the file to the save path
-            void this.saveLocalFileToServer(filePath, savePath);
-          } catch {
-            // ignore
+        // Backfill the on-disk server cache from local files (ONLY for processors).
+        // We intentionally do NOT mirror engine_results/generations into userData "server" cache.
+        let savePath = this.getServerSavePath({
+          folderUuid,
+          folderName,
+          fileName,
+          localType,
+          type,
+        });
+
+        if (localType === "processors" && savePath && !(await exists(savePath))) {
+          try {
+            // copy the file to the save path (+ write verified meta marker)
+            void this.saveLocalFileToServer(filePath, savePath).catch((e) => {
+              console.error("Error saving local file to server", e);
+            });
+          } catch (e) {
+            console.error("Error saving local file to server", e);
           }
         }
       }
@@ -878,7 +910,6 @@ class AppDirProtocol implements AppModule {
       if (isCoverPath(filePath)) {
         filePath = getCoverPath(filePath, userDataDir);
       }
-
       if (isServerPath(filePath)) {
         // check if the file exists locally 
         if (!await exists(filePath)) {
