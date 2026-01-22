@@ -56,6 +56,167 @@ def _get_engine_warm_pool() -> EngineWarmPool:
     return _ENGINE_WARM_POOL
 
 
+@ray.remote
+class EngineRunner:
+    """
+    GPU-pinned, long-lived actor that executes engine runs/warmups.
+
+    Why this exists:
+    - `EngineWarmPool` is per-process. With plain Ray tasks, Ray may create multiple
+      worker processes over time on the same GPU, and each process can keep its own
+      warm engine resident in VRAM. That leads to duplicated VRAM usage.
+    - By routing engine work through a single actor per GPU, we guarantee there is
+      only one warm pool per GPU (and thus only one warm engine per key).
+    """
+
+    def warmup_engine_from_manifest(
+        self,
+        manifest_path: str,
+        selected_components: Optional[Dict[str, Any]] = None,
+        *,
+        mode: str = "engine",
+    ) -> Dict[str, Any]:
+        return _warmup_engine_from_manifest_impl(
+            manifest_path, selected_components, mode=mode
+        )
+
+    def run_engine_from_manifest(
+        self,
+        manifest_path: str,
+        job_id: str,
+        ws_bridge,
+        inputs: Dict[str, Any],
+        selected_components: Optional[Dict[str, Any]] = None,
+        folder_uuid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return _run_engine_from_manifest_impl(
+            manifest_path,
+            job_id,
+            ws_bridge,
+            inputs,
+            selected_components=selected_components,
+            folder_uuid=folder_uuid,
+        )
+
+    def free_unused_modules_in_warm_pool(
+        self,
+        *,
+        active: Optional[List[str]] = None,
+        target: str = "disk",
+        include_in_use: bool = False,
+    ) -> Dict[str, Any]:
+        return _free_unused_modules_in_warm_pool_impl(
+            active=active, target=target, include_in_use=include_in_use
+        )
+
+
+_ENGINE_RUNNER_ACTORS: Dict[str, Any] = {}
+
+
+def _engine_runner_actor_name(*, device_index: Optional[int], device_type: str) -> str:
+    dev = (device_type or "cpu").strip().lower()
+    if dev == "cuda" and device_index is not None:
+        return f"engine-runner-gpu-{int(device_index)}"
+    return f"engine-runner-{dev}"
+
+
+def get_engine_runner_actor(
+    *,
+    device_index: Optional[int],
+    device_type: str,
+    resources: Dict[str, Any],
+) -> Any:
+    """
+    Get or create a named EngineRunner actor.
+
+    This ensures engine-related work (warmup/run/free-memory) executes in a single
+    long-lived process pinned to the selected accelerator, so the per-process warm
+    pool can actually be reused without duplicating VRAM allocations.
+    """
+    # Lazy import to avoid ray.init at import-time and avoid cycles.
+    try:
+        from .ray_app import get_ray_app  # type: ignore
+
+        get_ray_app()
+    except Exception:
+        # Best-effort; Ray may already be initialized elsewhere.
+        pass
+
+    actor_name = _engine_runner_actor_name(
+        device_index=device_index, device_type=device_type
+    )
+
+    # Fast path: cached handle
+    cached = _ENGINE_RUNNER_ACTORS.get(actor_name)
+    if cached is not None:
+        return cached
+
+    try:
+        actor = ray.get_actor(actor_name)
+    except Exception:
+        # Create pinned actor using the same resource selection we use for tasks.
+        # Important: don't permanently reserve "heavy" CPU allocations on an idle actor.
+        # We pin the actor to the GPU, but keep CPU reservation small.
+        base = dict(resources or {})
+        opts: Dict[str, Any] = {}
+        # Keep GPU reservation/pinning.
+        if "num_gpus" in base:
+            opts["num_gpus"] = base.get("num_gpus")
+        if "resources" in base:
+            opts["resources"] = base.get("resources")
+        # Reserve a small CPU slice for scheduling fairness without hoarding CPUs.
+        try:
+            opts["num_cpus"] = min(1.0, float(base.get("num_cpus", 1.0)))
+        except Exception:
+            opts["num_cpus"] = 1.0
+
+        actor = EngineRunner.options(name=actor_name, **opts).remote()
+
+    _ENGINE_RUNNER_ACTORS[actor_name] = actor
+    return actor
+
+
+def kill_engine_runner_actor(*, device_index: Optional[int], device_type: str) -> bool:
+    """
+    Hard-stop the engine runner actor so its process exits.
+
+    This is the only reliable way to release the CUDA context itself and return
+    VRAM to the system after we've offloaded/discarded all components.
+
+    Returns True if we issued a kill, False otherwise.
+    """
+    actor_name = _engine_runner_actor_name(
+        device_index=device_index, device_type=device_type
+    )
+    try:
+        # Best-effort: ensure Ray is initialized.
+        try:
+            from .ray_app import get_ray_app  # type: ignore
+
+            get_ray_app()
+        except Exception:
+            pass
+
+        try:
+            actor = ray.get_actor(actor_name)
+        except Exception:
+            actor = None
+
+        if actor is not None:
+            try:
+                ray.kill(actor, no_restart=True)
+                return True
+            except Exception:
+                return False
+        return False
+    finally:
+        # Always drop our local cached handle so a future call can recreate it.
+        try:
+            _ENGINE_RUNNER_ACTORS.pop(actor_name, None)
+        except Exception:
+            pass
+
+
 _MEM_ENV_KEYS = [
     "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION",
     "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION",
@@ -265,8 +426,7 @@ def _optimize_mp4_for_editor_in_place(
         return False
 
 
-@ray.remote(num_cpus=0.1)
-def free_unused_modules_in_warm_pool(
+def _free_unused_modules_in_warm_pool_impl(
     *,
     active: Optional[List[str]] = None,
     target: str = "disk",
@@ -344,6 +504,13 @@ def free_unused_modules_in_warm_pool(
             except Exception:
                 pass
 
+        # After evicting everything, do an aggressive cleanup pass to return
+        # freed heap pages back to the OS (Linux/glibc) and flush allocator caches.
+        try:
+            _aggressive_ram_cleanup(clear_torch_cache=True)
+        except Exception:
+            pass
+
         return {
             "status": "complete",
             "enabled": True,
@@ -357,6 +524,18 @@ def free_unused_modules_in_warm_pool(
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+@ray.remote(num_cpus=0.1)
+def free_unused_modules_in_warm_pool(
+    *,
+    active: Optional[List[str]] = None,
+    target: str = "disk",
+    include_in_use: bool = False,
+) -> Dict[str, Any]:
+    return _free_unused_modules_in_warm_pool_impl(
+        active=active, target=target, include_in_use=include_in_use
+    )
 
 
 _WIN_INVALID_PATH_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
@@ -729,8 +908,7 @@ def _warm_weights_disabled() -> bool:
     return False
 
 
-@ray.remote
-def warmup_engine_from_manifest(
+def _warmup_engine_from_manifest_impl(
     manifest_path: str,
     selected_components: Optional[Dict[str, Any]] = None,
     *,
@@ -889,6 +1067,18 @@ def warmup_engine_from_manifest(
                     pass
         except Exception:
             pass
+
+
+@ray.remote
+def warmup_engine_from_manifest(
+    manifest_path: str,
+    selected_components: Optional[Dict[str, Any]] = None,
+    *,
+    mode: str = "engine",
+) -> Dict[str, Any]:
+    return _warmup_engine_from_manifest_impl(
+        manifest_path, selected_components, mode=mode
+    )
 
 
 def _cleanup_lora_artifacts_if_remote(lora_item: Any) -> None:
@@ -2281,8 +2471,7 @@ def run_preprocessor(
     )
 
 
-@ray.remote
-def run_engine_from_manifest(
+def _run_engine_from_manifest_impl(
     manifest_path: str,
     job_id: str,
     ws_bridge,
@@ -3127,6 +3316,25 @@ def run_engine_from_manifest(
         _aggressive_ram_cleanup(
             clear_torch_cache=(not bool(engine_pooled)) or _warm_weights_disabled()
         )
+
+
+@ray.remote
+def run_engine_from_manifest(
+    manifest_path: str,
+    job_id: str,
+    ws_bridge,
+    inputs: Dict[str, Any],
+    selected_components: Optional[Dict[str, Any]] = None,
+    folder_uuid: Optional[str] = None,
+) -> Dict[str, Any]:
+    return _run_engine_from_manifest_impl(
+        manifest_path,
+        job_id,
+        ws_bridge,
+        inputs,
+        selected_components=selected_components,
+        folder_uuid=folder_uuid,
+    )
 
 
 @ray.remote
