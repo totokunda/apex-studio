@@ -9,11 +9,11 @@ from loguru import logger
 # Suppress noisy Ray/abseil stack traces on SIGTERM (must be set before ray.init)
 # These are cosmetic logs from Ray's C++ layer during shutdown
 os.environ.setdefault("RAY_IGNORE_UNHANDLED_ERRORS", "1")
-# Reduce raylet verbosity during shutdown
-os.environ.setdefault("RAY_BACKEND_LOG_LEVEL", "warning")
+# Reduce raylet verbosity - set to "error" to suppress file system monitor warnings
+os.environ.setdefault("RAY_BACKEND_LOG_LEVEL", "error")
 # Disable abseil failure signal handler stack traces
 os.environ.setdefault("ABSL_FLAGS_symbolize_stacktrace", "0")
-os.environ.setdefault("GLOG_minloglevel", "2")  # Only log errors, not warnings
+os.environ.setdefault("GLOG_minloglevel", "3")  # Only log fatal errors (3 = FATAL, 2 = ERROR)
 
 # Lock to prevent concurrent ray.init() calls (causes "core worker already initialized" crash)
 _ray_init_lock = threading.Lock()
@@ -60,6 +60,7 @@ def _init_ray() -> None:
                             "params": {"directory_path": str(spill_dir)},
                         }
                     ),
+                    "enable_file_system_monitor": False,  # Disable file system monitor to suppress disk space warnings
                 },
             )
             _install_shutdown_handler()
@@ -88,6 +89,7 @@ def _init_ray() -> None:
                                 "params": {"directory_path": str(spill_dir)},
                             }
                         ),
+                        "enable_file_system_monitor": False,  # Disable file system monitor to suppress disk space warnings
                     },
                 )
                 _install_shutdown_handler()
