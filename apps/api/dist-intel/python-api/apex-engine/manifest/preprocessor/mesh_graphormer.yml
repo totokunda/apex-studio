@@ -1,0 +1,53 @@
+category: Face and Pose
+class: MeshGraphormerDetector
+description: Advanced 3D hand mesh reconstruction from single images using graph convolutional
+  networks. Recovers detailed 3D hand geometry including finger positions and joints.
+  Excellent for hand tracking, gesture recognition, sign language analysis, and creating
+  hand animations.
+module: src.preprocess.mesh_graphormer
+name: Mesh Graphormer
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+- default: 30
+  description: The amount of padding (in pixels) added around the detected hand bounding
+    box. More padding captures more context around the hand but may include unwanted
+    background. Less padding focuses tightly on the hand.
+  display_name: Bounding Box Padding
+  max: 100
+  min: 0
+  name: mask_bbox_padding
+  type: int
+supports_image: true
+supports_video: true
+files:
+- path: hr16/ControlNet-HandRefiner-pruned/graphormer_hand_state_dict.bin
+  size_bytes: 855658184
+- path: hr16/ControlNet-HandRefiner-pruned/hrnetv2_w64_imagenet_pretrained.pth
+  size_bytes: 513111608
