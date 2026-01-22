@@ -853,3 +853,70 @@ def set_use_fast_download(request: UseFastDownloadRequest):
             status_code=400,
             detail=f"Failed to set APEX_USE_FAST_DOWNLOAD: {str(e)}",
         )
+
+
+class DisableAutoMemoryManagementRequest(BaseModel):
+    disabled: bool
+
+
+class DisableAutoMemoryManagementResponse(BaseModel):
+    disabled: bool
+
+
+def _parse_bool_any(val: Any, default: bool = False) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return bool(val)
+    s = str(val).strip().lower()
+    if s == "":
+        return default
+    return s in {"1", "true", "yes", "y", "on"}
+
+
+def _get_disable_auto_memory_management_effective() -> bool:
+    """
+    Effective disable flag for the running process.
+    Prefer persisted config store value (if present), otherwise fall back to env.
+    """
+    persisted = _read_persisted_config_raw()
+    if "APEX_DISABLE_AUTO_MEMORY_MANAGEMENT" in persisted:
+        return _parse_bool_any(persisted.get("APEX_DISABLE_AUTO_MEMORY_MANAGEMENT"), False)
+    return _parse_bool_any(os.environ.get("APEX_DISABLE_AUTO_MEMORY_MANAGEMENT"), False)
+
+
+@router.get(
+    "/disable-auto-memory-management",
+    response_model=DisableAutoMemoryManagementResponse,
+)
+def get_disable_auto_memory_management():
+    """
+    Get whether Apex's auto memory management layer is disabled.
+
+    When disabled, the engine will not install ComponentMemoryManager hooks/wrappers and
+    will use the default offload behavior.
+    """
+    return DisableAutoMemoryManagementResponse(
+        disabled=_get_disable_auto_memory_management_effective()
+    )
+
+
+@router.post(
+    "/disable-auto-memory-management",
+    response_model=DisableAutoMemoryManagementResponse,
+)
+def set_disable_auto_memory_management(request: DisableAutoMemoryManagementRequest):
+    """
+    Enable/disable Apex's auto memory management layer.
+    Persisted so it survives backend restarts.
+    """
+    try:
+        value = "true" if bool(request.disabled) else "false"
+        os.environ["APEX_DISABLE_AUTO_MEMORY_MANAGEMENT"] = value
+        _update_persisted_config(APEX_DISABLE_AUTO_MEMORY_MANAGEMENT=value)
+        return DisableAutoMemoryManagementResponse(disabled=bool(request.disabled))
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to set APEX_DISABLE_AUTO_MEMORY_MANAGEMENT: {str(e)}",
+        )
