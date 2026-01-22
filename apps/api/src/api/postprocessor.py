@@ -14,6 +14,7 @@ from .ray_tasks import run_frame_interpolation
 from .ray_resources import get_best_gpu, get_ray_resources
 from .job_store import register_job
 from .ws_manager import get_ray_ws_bridge
+from .engine_resource_guard import maybe_release_warm_engine_for_non_engine_request
 
 router = APIRouter(prefix="/postprocessor", tags=["postprocessor"])
 
@@ -46,6 +47,13 @@ def frame_interpolate(request: FrameInterpolateRequest):
 
     if not (request.target_fps and request.target_fps > 0):
         raise HTTPException(status_code=400, detail="target_fps must be > 0")
+
+    # If a warm engine is idling on the GPU, release it so this non-engine job can run.
+    # If an engine job is active/queued, we do nothing (Ray will queue naturally).
+    try:
+        maybe_release_warm_engine_for_non_engine_request()
+    except Exception:
+        pass
 
     # Choose resources (prefer GPU if available)
     device_index, device_type = get_best_gpu()
