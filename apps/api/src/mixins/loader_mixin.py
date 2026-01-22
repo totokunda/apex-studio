@@ -28,8 +28,6 @@ from src.types import InputImage, InputVideo, InputAudio
 import types
 import numpy as np
 import mmap
-from mmgp.offload import profile
-
 
 class _LazyModule(types.ModuleType):
     """
