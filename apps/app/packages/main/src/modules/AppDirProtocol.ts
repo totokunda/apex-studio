@@ -4,8 +4,8 @@ import { getSettingsModule } from "./SettingsModule.js";
 import { protocol, ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { Readable } from "node:stream";
-import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import fsp from "node:fs/promises";
 import mime from "mime-types";
@@ -159,6 +159,46 @@ function enforceExpectedByteLength(
   });
 }
 
+function nodeStreamToWebStream(
+  nodeStream: fs.ReadStream,
+): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      nodeStream.on("data", (chunk: string | Buffer) => {
+        try {
+          const uint8Array =
+            typeof chunk === "string"
+              ? new TextEncoder().encode(chunk)
+              : new Uint8Array(chunk);
+          controller.enqueue(uint8Array);
+        } catch (err) {
+          // Stream might be closed, ignore
+        }
+      });
+
+      nodeStream.on("end", () => {
+        try {
+          controller.close();
+        } catch (err) {
+          // Already closed, ignore
+        }
+      });
+
+      nodeStream.on("error", (err) => {
+        try {
+          controller.error(err);
+        } catch {
+          // Already errored, ignore
+        }
+        nodeStream.destroy();
+      });
+    },
+    cancel() {
+      nodeStream.destroy();
+    },
+  });
+}
+
 function isCachedServerMediaPath(absPath: string, userDataDir: string): boolean {
   // Only enforce cache integrity markers for the on-disk cache we control:
   //   <userData>/media/<folderUuid>/server/(generations|processors)/...
@@ -224,8 +264,143 @@ class AppDirProtocol implements AppModule {
   private backendUrl: string = "http://127.0.0.1:8765";
   private activeProjectId: string | null = null;
   private activeFolderUuid: string | null = null;
+  private rendererDistPath: string | null = null;
   // Cache in-flight remote file saves so we don't write the same file multiple times concurrently.
   private inflightRemoteFileSaves: Map<string, Promise<void>> = new Map();
+
+  private stripLeadingSlashes(p: string): string {
+    return (p || "").replace(/^\/+/, "");
+  }
+
+  /**
+   * Resolve `relOrAbs` under `basePath` and reject traversal.
+   * Returns an absolute path under `basePath`, or null if it escapes.
+   */
+  private resolveUnderBase(basePath: string, relOrAbs: string): string | null {
+    const baseAbs = path.resolve(basePath);
+    const abs = path.resolve(baseAbs, relOrAbs);
+    const rel = path.relative(baseAbs, abs);
+    if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
+      return abs;
+    }
+    return null;
+  }
+
+  private tryResolveRendererDistPath(app: Electron.App): string | null {
+    const candidates: string[] = [];
+    try {
+      const require = createRequire(import.meta.url);
+      const indexHtml = require.resolve("@app/renderer/dist/index.html");
+      candidates.push(path.dirname(indexHtml));
+    } catch {
+      // ignore
+    }
+    try {
+      const appPath = app.getAppPath();
+      candidates.push(path.join(appPath, "node_modules", "@app", "renderer", "dist"));
+      candidates.push(
+        path.join(
+          process.resourcesPath,
+          "app.asar.unpacked",
+          "node_modules",
+          "@app",
+          "renderer",
+          "dist",
+        ),
+      );
+      candidates.push(
+        path.join(
+          process.resourcesPath,
+          "app",
+          "node_modules",
+          "@app",
+          "renderer",
+          "dist",
+        ),
+      );
+      candidates.push(path.join(process.resourcesPath, "node_modules", "@app", "renderer", "dist"));
+    } catch {
+      // ignore
+    }
+
+    for (const cand of candidates) {
+      try {
+        const idx = path.join(cand, "index.html");
+        if (fs.existsSync(idx)) {
+          return cand;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    console.warn(
+      "[AppDirProtocol] Could not resolve renderer dist path; app://renderer/* will 404. Candidates:",
+      candidates,
+    );
+    return null;
+  }
+
+  private async returnResponseFromRenderer(request: Request): Promise<Response> {
+    const u = new URL(request.url);
+    const base = this.rendererDistPath;
+    if (!base) {
+      return new Response(null, { status: 404 });
+    }
+
+    let rel = this.stripLeadingSlashes(decodeURIComponent(u.pathname || ""));
+    if (rel === "" || rel === "/") rel = "index.html";
+    rel = path.posix.normalize(rel).replace(/\\/g, "/");
+    rel = this.stripLeadingSlashes(rel);
+
+    // If a directory is requested, serve its index.html.
+    if (rel.endsWith("/")) rel = `${rel}index.html`;
+
+    let filePath = this.resolveUnderBase(base, rel);
+    if (!filePath) {
+      return new Response(null, { status: 404 });
+    }
+
+    // SPA fallback: for routes without an extension, fall back to index.html.
+    const hasExt = Boolean(path.extname(rel));
+    try {
+      const st = await fsp.stat(filePath);
+      if (st.isDirectory()) {
+        const idx = this.resolveUnderBase(base, path.join(rel, "index.html"));
+        if (!idx) return new Response(null, { status: 404 });
+        filePath = idx;
+      }
+    } catch {
+      if (!hasExt) {
+        const idx = this.resolveUnderBase(base, "index.html");
+        if (!idx) return new Response(null, { status: 404 });
+        filePath = idx;
+      } else {
+        return new Response(null, { status: 404 });
+      }
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = await fsp.stat(filePath);
+      if (!stat.isFile()) return new Response(null, { status: 404 });
+    } catch {
+      return new Response(null, { status: 404 });
+    }
+
+    const ct = mime.lookup(filePath) || "application/octet-stream";
+    const headers = new Headers({
+      "Content-Type": String(ct),
+      "Content-Length": String(stat.size),
+      "Cache-Control": "public, max-age=31536000, immutable",
+    });
+
+    if (request.method === "HEAD") {
+      return new Response(null, { status: 200, headers });
+    }
+
+    return new Response(nodeStreamToWebStream(fs.createReadStream(filePath)), { status: 200, headers });
+  }
 
   private getServerMetaPath(savePath: string): string {
     return `${savePath}.meta.json`;
@@ -336,6 +511,7 @@ class AppDirProtocol implements AppModule {
 
   private async saveLocalFileToServer(filePath: string, savePath: string): Promise<void> {
     // ensure the directory exists
+    if (filePath === savePath) return;
     await fsp.mkdir(path.dirname(savePath), { recursive: true });
     // copy the file to the save path
     await fsp.copyFile(filePath, savePath);
@@ -429,7 +605,7 @@ class AppDirProtocol implements AppModule {
         if (request.method === "HEAD") {
           return new Response(null, { status: 200, headers });
         }
-        return new Response(fs.createReadStream(filePath) as any, { status: 200, headers });
+        return new Response(nodeStreamToWebStream(fs.createReadStream(filePath)), { status: 200, headers });
       }
     
       const { start, end } = range;
@@ -446,7 +622,7 @@ class AppDirProtocol implements AppModule {
       if (request.method === "HEAD") {
         return new Response(null, { status: 206, headers });
       }
-      return new Response(fs.createReadStream(filePath, { start, end }) as any, { status: 206, headers });
+      return new Response(nodeStreamToWebStream(fs.createReadStream(filePath, { start, end })), { status: 206, headers });
    
   }
 
@@ -475,29 +651,13 @@ class AppDirProtocol implements AppModule {
       // Best-effort: errors are handled by pipeline's rejection.
     });
 
-    let written = 0;
-    const counter = new Transform({
-      transform(chunk: any, _enc, cb) {
-        try {
-          if (chunk) {
-            if (Buffer.isBuffer(chunk)) {
-              written += chunk.byteLength;
-            } else if (chunk instanceof Uint8Array) {
-              written += chunk.byteLength;
-            } else if (typeof chunk?.length === "number") {
-              written += Number(chunk.length) || 0;
-            }
-          }
-        } catch {
-          // ignore
-        }
-        cb(null, chunk);
-      },
-    });
-
     try {
       const body = Readable.fromWeb(response.body as any);
-      await pipeline(body, counter, ws);
+      await pipeline(body, ws);
+
+      // Avoid per-chunk JS accounting overhead. After pipeline resolves, the file
+      // is fully flushed/closed, so stat() gives a reliable final size.
+      const { size: written } = await fsp.stat(partPath);
 
       if (written !== expectedBytes) {
         throw new Error(
@@ -656,6 +816,8 @@ class AppDirProtocol implements AppModule {
   async enable({ app }: ModuleContext): Promise<void> {
     await app.whenReady();
     this.electronApp = app;
+    // Resolve renderer dist once so `app://renderer/*` works in packaged builds.
+    this.rendererDistPath = this.tryResolveRendererDistPath(app);
     const settings = getSettingsModule();
     this.backendUrl = settings.getBackendUrl();
     this.activeProjectId = settings.getActiveProjectId();
@@ -675,6 +837,25 @@ class AppDirProtocol implements AppModule {
       let pathName = url.pathname;
       filePath = decodeURIComponent(pathName);
       filePath = path.posix.normalize(filePath).replace(/\\/g, "/");
+
+      // Resolve packaged renderer assets to a real local file path.
+      if (url.hostname === "renderer") {
+        const base = this.rendererDistPath;
+        if (!base) return null;
+        let rel = this.stripLeadingSlashes(filePath);
+        if (rel === "" || rel === "/") rel = "index.html";
+        rel = path.posix.normalize(rel).replace(/\\/g, "/");
+        rel = this.stripLeadingSlashes(rel);
+        const resolved = this.resolveUnderBase(base, rel);
+        if (!resolved) return null;
+        try {
+          const st = await fsp.stat(resolved);
+          if (st.isFile()) return resolved;
+        } catch {
+          // ignore
+        }
+        return null;
+      }
 
       const userDataDir = this.electronApp?.getPath("userData") ?? "";
       if (isCoverPath(filePath)) {
@@ -716,6 +897,15 @@ class AppDirProtocol implements AppModule {
          const headers = this.corsHeadersFor(request);
          headers["Allow"] = "GET, HEAD, OPTIONS";
          return new Response(null, { status: 405, headers });
+       }
+       try {
+        const u = new URL(request.url);
+        if (u.hostname === "renderer") {
+          const r = await this.returnResponseFromRenderer(request);
+          return this.withCors(request, r);
+        }
+       } catch {
+        // ignore URL parse errors; fall back below
        }
        try {
         const r = await this.returnResponseFromLocalFile(request);
