@@ -56,6 +56,41 @@ def _get_engine_warm_pool() -> EngineWarmPool:
     return _ENGINE_WARM_POOL
 
 
+def _require_tracked_job_or_fail(
+    job_id: str,
+    *,
+    allowed_types: Optional[set[str]] = None,
+    ws_bridge: Any = None,
+) -> None:
+    """
+    Fail-closed guard to prevent "rogue/untracked" Ray work.
+
+    If a Ray task starts executing with a `job_id` that was never registered in the
+    unified job store, we stop immediately instead of doing expensive work that the
+    frontend can't see/cancel.
+    """
+    try:
+        from .job_store import require_tracked_job
+
+        require_tracked_job(job_id, allowed_types=allowed_types)
+        return
+    except Exception as e:
+        # Best-effort: emit a websocket update so the UI can surface the failure.
+        try:
+            if ws_bridge is not None:
+                ray.get(
+                    ws_bridge.send_update.remote(
+                        job_id,
+                        0.0,
+                        "Untracked job rejected",
+                        {"status": "error", "error": str(e)},
+                    )
+                )
+        except Exception:
+            pass
+        raise
+
+
 @ray.remote
 class EngineRunner:
     """
@@ -1642,6 +1677,9 @@ def download_unified(
             logger.error(f"Failed to send progress update to websocket: {e}")
 
     try:
+        _require_tracked_job_or_fail(
+            job_id, allowed_types={"download", "components"}, ws_bridge=ws_bridge
+        )
         norm_type = (item_type or "").strip().lower()
         if norm_type not in {"component", "lora", "preprocessor"}:
             raise ValueError(
@@ -2220,6 +2258,108 @@ def download_unified(
         return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
 
 
+@ray.remote(num_cpus=0.1)
+def download_components(
+    paths: List[str], job_id: str, ws_bridge, save_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Legacy/compat wrapper used by `/components/download`.
+
+    Internally this is equivalent to a unified download of `item_type="component"` for
+    a list of sources. We keep it as a separate task so older clients can keep working.
+    """
+    _require_tracked_job_or_fail(
+        job_id, allowed_types={"components", "download"}, ws_bridge=ws_bridge
+    )
+
+    base_save_dir = save_path or get_components_path()
+    os.makedirs(base_save_dir, exist_ok=True)
+
+    def send_progress(
+        progress: Optional[float],
+        message: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        try:
+            ray.get(ws_bridge.send_update.remote(job_id, progress, message, metadata))
+        except Exception:
+            pass
+
+    try:
+        paths = list(paths or [])
+        if not paths:
+            send_progress(1.0, "Nothing to download", {"status": "complete"})
+            return {
+                "job_id": job_id,
+                "status": "complete",
+                "bucket": "component",
+                "save_dir": base_save_dir,
+                "results": [],
+            }
+
+        total_items = max(1, len(paths))
+        results: List[Dict[str, Any]] = []
+        mixin = DownloadMixin()
+
+        for idx, p in enumerate(paths, start=1):
+            label = os.path.basename(str(p).rstrip("/")) or str(p)
+            send_progress(
+                (idx - 1) / float(total_items),
+                f"Downloading {label} ({idx}/{total_items})",
+                {"status": "running", "bucket": "component", "path": str(p)},
+            )
+
+            def _cb(downloaded: int, total: Optional[int]):
+                frac: Optional[float] = None
+                if total and total > 0:
+                    frac = max(0.0, min(1.0, float(downloaded) / float(total)))
+                overall: Optional[float] = None
+                if frac is not None:
+                    overall = ((idx - 1) + frac) / float(total_items)
+                send_progress(
+                    overall,
+                    f"Downloading {label}",
+                    {
+                        "status": "running",
+                        "bucket": "component",
+                        "path": str(p),
+                        "downloaded": downloaded,
+                        "total": total,
+                    },
+                )
+
+            try:
+                result_path = mixin.download(str(p), base_save_dir, progress_callback=_cb)
+                results.append(
+                    {"path": str(p), "status": "complete", "result_path": result_path}
+                )
+            except Exception as e:
+                results.append({"path": str(p), "status": "error", "error": str(e)})
+
+        has_error = any(r.get("status") == "error" for r in results)
+        final_status = "error" if has_error else "complete"
+        send_progress(
+            1.0,
+            "Complete" if final_status == "complete" else "Completed with errors",
+            {"status": final_status, "bucket": "component"},
+        )
+        return {
+            "job_id": job_id,
+            "status": final_status,
+            "bucket": "component",
+            "save_dir": base_save_dir,
+            "results": results,
+        }
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(tb)
+        try:
+            send_progress(0.0, str(e), {"status": "error", "error": str(e)})
+        except Exception:
+            pass
+        return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
+
+
 def _execute_preprocessor(
     preprocessor_name: str,
     input_path: str,
@@ -2460,6 +2600,8 @@ def run_preprocessor(
         except Exception as e:
             logger.error(f"Failed to send progress update to websocket: {e}")
 
+    _require_tracked_job_or_fail(job_id, allowed_types={"preprocessor"}, ws_bridge=ws_bridge)
+
     return _execute_preprocessor(
         preprocessor_name,
         input_path,
@@ -2480,6 +2622,7 @@ def _run_engine_from_manifest_impl(
     folder_uuid: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute a manifest YAML with provided inputs and persist result to disk."""
+    _require_tracked_job_or_fail(job_id, allowed_types={"engine"}, ws_bridge=ws_bridge)
     _apply_memory_env_from_store()
 
     def send_progress(
@@ -3327,6 +3470,7 @@ def run_engine_from_manifest(
     selected_components: Optional[Dict[str, Any]] = None,
     folder_uuid: Optional[str] = None,
 ) -> Dict[str, Any]:
+    _require_tracked_job_or_fail(job_id, allowed_types={"engine"}, ws_bridge=ws_bridge)
     return _run_engine_from_manifest_impl(
         manifest_path,
         job_id,
@@ -3372,6 +3516,9 @@ def run_frame_interpolation(
     from src.utils.defaults import DEFAULT_CACHE_PATH
 
     try:
+        _require_tracked_job_or_fail(
+            job_id, allowed_types={"postprocessor"}, ws_bridge=ws_bridge
+        )
         from src.postprocess.rife.rife import RifePostprocessor
 
         send_update(0.05, "Initializing RIFE")
