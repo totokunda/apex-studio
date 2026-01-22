@@ -1,13 +1,15 @@
+import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from diffusers import ModelMixin, ConfigMixin
 from diffusers.configuration_utils import register_to_config
 from .wan_base import (
     WanModel,
     WanLayerNorm,
-    WanRMSNorm,
     gradient_checkpointing,
 )
+from src.transformer.efficiency.mod import InplaceRMSNorm
 from typing import Dict, Any
 from loguru import logger
 
@@ -168,7 +170,7 @@ class OviModel(ModelMixin, ConfigMixin):
                 vid_block.dim, elementwise_affine=True
             )
             vid_block.cross_attn.norm_k_fusion = (
-                WanRMSNorm(vid_block.dim, eps=1e-6)
+                InplaceRMSNorm(vid_block.dim, eps=1e-6, elementwise_affine=True)
                 if vid_block.qk_norm
                 else nn.Identity()
             )
@@ -184,7 +186,7 @@ class OviModel(ModelMixin, ConfigMixin):
                 audio_block.dim, elementwise_affine=True
             )
             audio_block.cross_attn.norm_k_fusion = (
-                WanRMSNorm(audio_block.dim, eps=1e-6)
+                InplaceRMSNorm(audio_block.dim, eps=1e-6, elementwise_affine=True)
                 if audio_block.qk_norm
                 else nn.Identity()
             )
@@ -408,8 +410,20 @@ class OviModel(ModelMixin, ConfigMixin):
         thresh: float,
         ret_steps: int = 10 * 2,
         cutoff_steps: int | None = None,
+        *,
+        cache_on_cpu: bool = False,
+        cache_cpu_dtype: torch.dtype = torch.bfloat16,
+        cache_pin_memory: bool = False,
+        rope_on_cpu: bool = False,
     ):
         """Enable easy cache for the fused OVI model."""
+        # Allow environment-driven defaults so this can be enabled without changing call sites.
+        # Params still take precedence when explicitly passed.
+        if not cache_on_cpu and os.getenv("APEX_FUSION_CACHE_ON_CPU", "0") == "1":
+            cache_on_cpu = True
+        if not rope_on_cpu and os.getenv("APEX_ROPE_ON_CPU", "0") == "1":
+            rope_on_cpu = True
+
         self.fusion_cache_enabled = True
         self.num_steps = num_steps
         self.thresh = thresh
@@ -420,6 +434,16 @@ class OviModel(ModelMixin, ConfigMixin):
         self.k_audio = None
         self.accumulated_error_even = 0
         self.should_calc_current_pair = True
+        # Cache options
+        self.fusion_cache_on_cpu = bool(cache_on_cpu)
+        self.fusion_cache_cpu_dtype = cache_cpu_dtype
+        self.fusion_cache_pin_memory = bool(cache_pin_memory)
+        self.fusion_cache_rope_on_cpu = bool(rope_on_cpu)
+        # Also propagate to the underlying WAN submodels (so non-cache forwards can reuse it).
+        if getattr(self, "video_model", None) is not None:
+            setattr(self.video_model, "rope_on_cpu", bool(rope_on_cpu))
+        if getattr(self, "audio_model", None) is not None:
+            setattr(self.audio_model, "rope_on_cpu", bool(rope_on_cpu))
         # Clear any existing cache state
         self.previous_raw_vid_input_even = None
         self.previous_raw_audio_input_even = None
@@ -433,6 +457,8 @@ class OviModel(ModelMixin, ConfigMixin):
         self.cache_audio_odd = None
         self.prev_prev_raw_vid_input_even = None
         self.prev_prev_raw_audio_input_even = None
+        self.prev_vid_out_norm_even = None
+        self.prev_audio_out_norm_even = None
 
     def reset_fusion_cache(self):
         """Reset cache state for a new generation."""
@@ -453,6 +479,8 @@ class OviModel(ModelMixin, ConfigMixin):
         self.cache_audio_odd = None
         self.prev_prev_raw_vid_input_even = None
         self.prev_prev_raw_audio_input_even = None
+        self.prev_vid_out_norm_even = None
+        self.prev_audio_out_norm_even = None
 
     def easycache_forward(
         self,
@@ -486,16 +514,70 @@ class OviModel(ModelMixin, ConfigMixin):
             raise ValueError(
                 "OviModel requires both `vid` and `audio` inputs for fused inference."
             )
+        
+        from src.utils.step_mem import step_mem
 
-        # Store original raw inputs for caching
-        raw_vid_input = [u.clone() for u in vid]
-        raw_audio_input = [u.clone() for u in audio]
+        # NOTE: we intentionally avoid cloning raw inputs here to keep VRAM low.
+        # The diffusion loop should treat inputs as immutable per-step.
+        raw_vid_input = vid
+        raw_audio_input = audio
+
+        cache_on_cpu = bool(getattr(self, "fusion_cache_on_cpu", False))
+        cache_cpu_dtype = getattr(self, "fusion_cache_cpu_dtype", torch.bfloat16)
+        cache_pin_memory = bool(getattr(self, "fusion_cache_pin_memory", False))
+        rope_on_cpu = bool(getattr(self, "fusion_cache_rope_on_cpu", False))
+
+        def _maybe_pin(x: torch.Tensor) -> torch.Tensor:
+            if cache_pin_memory and x.device.type == "cpu" and not x.is_pinned():
+                return x.pin_memory()
+            return x
+
+        def _to_cpu_list(xs):
+            # Detach to avoid holding graphs; optionally pin for faster H2D/D2H.
+            return [_maybe_pin(u.detach().to("cpu", dtype=cache_cpu_dtype)) for u in xs]
+
+        def _l1_mean_lists(a_list, b_list):
+            # Global mean L1 across a list of tensors of potentially different shapes.
+            total = None
+            total_elems = 0
+            for a, b in zip(a_list, b_list):
+                n = int(a.numel())
+                if n == 0:
+                    continue
+                m = F.l1_loss(a, b, reduction="mean")
+                total = (m * n) if total is None else (total + m * n)
+                total_elems += n
+            if total is None:
+                # Shouldn't happen for non-empty inputs, but keep it safe.
+                return torch.tensor(0.0, device=a_list[0].device)
+            return total / max(total_elems, 1)
+
+        def _mean_abs_lists(x_list):
+            # Mean absolute value without materializing abs tensors.
+            total = None
+            total_elems = 0
+            for x in x_list:
+                n = int(x.numel())
+                if n == 0:
+                    continue
+                s = torch.linalg.vector_norm(x, ord=1)
+                total = s if total is None else (total + s)
+                total_elems += n
+            if total is None:
+                return torch.tensor(0.0, device=x_list[0].device)
+            return total / max(total_elems, 1)
 
         # Track which type of step (even=condition, odd=uncondition)
         self.is_even = self.cnt % 2 == 0
 
         # Only make decision on even (condition) steps
         if self.is_even:
+            # Keep references to the previous inputs for change estimation.
+            # IMPORTANT: do NOT overwrite these until we are about to return, otherwise
+            # input_change collapses to ~0 and k-factor estimation breaks.
+            prev_vid_input_even = self.previous_raw_vid_input_even
+            prev_audio_input_even = self.previous_raw_audio_input_even
+
             # Always compute first ret_steps and last steps
             if self.cnt < self.ret_steps or self.cnt >= (
                 (
@@ -519,123 +601,120 @@ class OviModel(ModelMixin, ConfigMixin):
             else:
                 # Check if we have previous step data for comparison
                 if (
-                    self.previous_raw_vid_input_even is not None
-                    and self.previous_raw_vid_output_even is not None
-                    and self.previous_raw_audio_input_even is not None
-                    and self.previous_raw_audio_output_even is not None
+                    prev_vid_input_even is not None
+                    and prev_audio_input_even is not None
+                    and self.cache_vid_even is not None
+                    and self.cache_audio_even is not None
+                    and self.prev_vid_out_norm_even is not None
+                    and self.prev_audio_out_norm_even is not None
+                    and self.k_vid is not None
+                    and self.k_audio is not None
                 ):
-
-                    # Calculate input changes for video
-                    vid_input_change = (
-                        torch.cat(
-                            [
-                                (u - v).flatten()
-                                for u, v in zip(
-                                    raw_vid_input, self.previous_raw_vid_input_even
-                                )
-                            ]
+                    if cache_on_cpu:
+                        vid_now = _to_cpu_list(raw_vid_input)
+                        audio_now = _to_cpu_list(raw_audio_input)
+                        vid_input_change = _l1_mean_lists(
+                            vid_now, prev_vid_input_even
                         )
-                        .abs()
-                        .mean()
-                    )
-
-                    # Calculate input changes for audio
-                    audio_input_change = (
-                        torch.cat(
-                            [
-                                (u - v).flatten()
-                                for u, v in zip(
-                                    raw_audio_input, self.previous_raw_audio_input_even
-                                )
-                            ]
+                        audio_input_change = _l1_mean_lists(
+                            audio_now, prev_audio_input_even
                         )
-                        .abs()
-                        .mean()
-                    )
-
-                    # Compute predicted change if we have k factors
-                    if self.k_vid is not None and self.k_audio is not None:
-                        # Calculate output norms for relative comparison
-                        vid_output_norm = (
-                            torch.cat(
-                                [u.flatten() for u in self.previous_raw_vid_output_even]
-                            )
-                            .abs()
-                            .mean()
-                        )
-                        audio_output_norm = (
-                            torch.cat(
-                                [
-                                    u.flatten()
-                                    for u in self.previous_raw_audio_output_even
-                                ]
-                            )
-                            .abs()
-                            .mean()
-                        )
-
-                        vid_pred_change = self.k_vid * (
-                            vid_input_change / vid_output_norm
-                        )
-                        audio_pred_change = self.k_audio * (
-                            audio_input_change / audio_output_norm
-                        )
-
-                        # Use max of predicted changes
-                        combined_pred_change = max(vid_pred_change, audio_pred_change)
-
-                        # Accumulate predicted error
-                        self.accumulated_error_even += combined_pred_change
-
-                        # Decide if we need full calculation
-                        if self.accumulated_error_even < self.thresh:
-                            self.should_calc_current_pair = False
-                        else:
-                            self.should_calc_current_pair = True
-                            self.accumulated_error_even = 0
                     else:
-                        # First time after ret_steps or missing k factors, need to calculate
+                        vid_input_change = _l1_mean_lists(
+                            raw_vid_input, prev_vid_input_even
+                        )
+                        audio_input_change = _l1_mean_lists(
+                            raw_audio_input, prev_audio_input_even
+                        )
+
+                    # Predicted relative change: k * (input_change / prev_output_norm)
+                    vid_pred_change = self.k_vid * (
+                        float(vid_input_change) / (float(self.prev_vid_out_norm_even) + 1e-12)
+                    )
+                    audio_pred_change = self.k_audio * (
+                        float(audio_input_change)
+                        / (float(self.prev_audio_out_norm_even) + 1e-12)
+                    )
+
+                    combined_pred_change = (
+                        vid_pred_change
+                        if vid_pred_change >= audio_pred_change
+                        else audio_pred_change
+                    )
+                    self.accumulated_error_even = float(self.accumulated_error_even) + float(
+                        combined_pred_change
+                    )
+
+                    if float(self.accumulated_error_even) < float(self.thresh):
+                        self.should_calc_current_pair = False
+                    else:
                         self.should_calc_current_pair = True
+                        self.accumulated_error_even = 0
                 else:
                     # No previous data yet, must calculate
                     self.should_calc_current_pair = True
-
-            # Store current input state
-            self.previous_raw_vid_input_even = [u.clone() for u in raw_vid_input]
-            self.previous_raw_audio_input_even = [u.clone() for u in raw_audio_input]
 
         # Check if we can use cached output and return early
         if (
             self.is_even
             and not self.should_calc_current_pair
-            and self.previous_raw_vid_output_even is not None
-            and self.previous_raw_audio_output_even is not None
+            and self.cache_vid_even is not None
+            and self.cache_audio_even is not None
         ):
             # Use cached output directly
             self.cnt += 1
-            vid_out = [
-                (u + v).float() for u, v in zip(raw_vid_input, self.cache_vid_even)
-            ]
-            audio_out = [
-                (u + v).float() for u, v in zip(raw_audio_input, self.cache_audio_even)
-            ]
-            return vid_out, audio_out
+            # Advance the "previous input" reference for the next decision.
+            if cache_on_cpu:
+                self.previous_raw_vid_input_even = _to_cpu_list(raw_vid_input)
+                self.previous_raw_audio_input_even = _to_cpu_list(raw_audio_input)
+            else:
+                self.previous_raw_vid_input_even = [u.detach() for u in raw_vid_input]
+                self.previous_raw_audio_input_even = [
+                    u.detach() for u in raw_audio_input
+                ]
+            if cache_on_cpu:
+                vid_out = []
+                for u, v_cpu in zip(raw_vid_input, self.cache_vid_even):
+                    v = v_cpu.to(device=u.device, dtype=u.dtype, non_blocking=True)
+                    vid_out.append((u + v).float())
+                audio_out = []
+                for u, v_cpu in zip(raw_audio_input, self.cache_audio_even):
+                    v = v_cpu.to(device=u.device, dtype=u.dtype, non_blocking=True)
+                    audio_out.append((u + v).float())
+                return vid_out, audio_out
+            return (
+                [(u + v).float() for u, v in zip(raw_vid_input, self.cache_vid_even)],
+                [
+                    (u + v).float()
+                    for u, v in zip(raw_audio_input, self.cache_audio_even)
+                ],
+            )
 
         elif (
             not self.is_even
             and not self.should_calc_current_pair
-            and self.previous_raw_vid_output_odd is not None
-            and self.previous_raw_audio_output_odd is not None
+            and self.cache_vid_odd is not None
+            and self.cache_audio_odd is not None
         ):
             # Use cached output directly
             self.cnt += 1
-            vid_out = [
-                (u + v).float() for u, v in zip(raw_vid_input, self.cache_vid_odd)
-            ]
-            audio_out = [
-                (u + v).float() for u, v in zip(raw_audio_input, self.cache_audio_odd)
-            ]
-            return vid_out, audio_out
+            if cache_on_cpu:
+                vid_out = []
+                for u, v_cpu in zip(raw_vid_input, self.cache_vid_odd):
+                    v = v_cpu.to(device=u.device, dtype=u.dtype, non_blocking=True)
+                    vid_out.append((u + v).float())
+                audio_out = []
+                for u, v_cpu in zip(raw_audio_input, self.cache_audio_odd):
+                    v = v_cpu.to(device=u.device, dtype=u.dtype, non_blocking=True)
+                    audio_out.append((u + v).float())
+                return vid_out, audio_out
+            return (
+                [(u + v).float() for u, v in zip(raw_vid_input, self.cache_vid_odd)],
+                [
+                    (u + v).float()
+                    for u, v in zip(raw_audio_input, self.cache_audio_odd)
+                ],
+            )
 
         # Continue with normal processing since we need to calculate
         vid, vid_e, vid_kwargs = self.video_model.prepare_transformer_block_kwargs(
@@ -646,6 +725,7 @@ class OviModel(ModelMixin, ConfigMixin):
             clip_fea=clip_fea,
             y=y,
             first_frame_is_clean=first_frame_is_clean,
+            rope_on_cpu=rope_on_cpu,
         )
 
         audio, audio_e, audio_kwargs = (
@@ -657,6 +737,7 @@ class OviModel(ModelMixin, ConfigMixin):
                 clip_fea=clip_fea_audio,
                 y=None,
                 first_frame_is_clean=False,
+                rope_on_cpu=rope_on_cpu,
             )
         )
 
@@ -672,6 +753,7 @@ class OviModel(ModelMixin, ConfigMixin):
                 audio=audio,
                 **kwargs,
             )
+            
 
         vid_output = self.video_model.post_transformer_block_out(
             vid, vid_kwargs["grid_sizes"], vid_e
@@ -679,110 +761,133 @@ class OviModel(ModelMixin, ConfigMixin):
         audio_output = self.audio_model.post_transformer_block_out(
             audio, audio_kwargs["grid_sizes"], audio_e
         )
+        
 
         # Update cache and calculate change rates if needed
         if self.is_even:  # Condition path
-            # If we have previous output, calculate k factors for future predictions
-            if (
-                self.previous_raw_vid_output_even is not None
-                and self.previous_raw_audio_output_even is not None
-            ):
-                # Calculate output change for video
-                vid_output_change = (
-                    torch.cat(
-                        [
-                            (u - v).flatten()
-                            for u, v in zip(
-                                vid_output, self.previous_raw_vid_output_even
-                            )
-                        ]
-                    )
-                    .abs()
-                    .mean()
-                )
-
-                # Calculate output change for audio
-                audio_output_change = (
-                    torch.cat(
-                        [
-                            (u - v).flatten()
-                            for u, v in zip(
-                                audio_output, self.previous_raw_audio_output_even
-                            )
-                        ]
-                    )
-                    .abs()
-                    .mean()
-                )
-
-                # Check if we have previous input state for comparison
+            # Update k factors and cache delta for future skip reconstruction.
+            if cache_on_cpu:
+                vid_out_cpu = _to_cpu_list(vid_output)
+                audio_out_cpu = _to_cpu_list(audio_output)
+                vid_in_cpu = _to_cpu_list(raw_vid_input)
+                audio_in_cpu = _to_cpu_list(raw_audio_input)
+            
+                # Compute k from true output_change / input_change (both as global means).
                 if (
-                    self.prev_prev_raw_vid_input_even is not None
+                    self.previous_raw_vid_output_even is not None
+                    and self.previous_raw_audio_output_even is not None
+                    and self.prev_prev_raw_vid_input_even is not None
                     and self.prev_prev_raw_audio_input_even is not None
                 ):
-                    # Calculate input change for video
-                    vid_input_change = (
-                        torch.cat(
-                            [
-                                (u - v).flatten()
-                                for u, v in zip(
-                                    self.previous_raw_vid_input_even,
-                                    self.prev_prev_raw_vid_input_even,
-                                )
-                            ]
-                        )
-                        .abs()
-                        .mean()
+                    vid_output_change = _l1_mean_lists(
+                        vid_out_cpu, self.previous_raw_vid_output_even
                     )
-
-                    # Calculate input change for audio
-                    audio_input_change = (
-                        torch.cat(
-                            [
-                                (u - v).flatten()
-                                for u, v in zip(
-                                    self.previous_raw_audio_input_even,
-                                    self.prev_prev_raw_audio_input_even,
-                                )
-                            ]
-                        )
-                        .abs()
-                        .mean()
+                    audio_output_change = _l1_mean_lists(
+                        audio_out_cpu, self.previous_raw_audio_output_even
+                    )
+                    vid_input_change = _l1_mean_lists(
+                        vid_in_cpu, self.prev_prev_raw_vid_input_even
+                    )
+                    audio_input_change = _l1_mean_lists(
+                        audio_in_cpu, self.prev_prev_raw_audio_input_even
                     )
 
                     self.k_vid = (
-                        vid_output_change / vid_input_change
-                        if vid_input_change > 0
-                        else 0
+                        (vid_output_change / (vid_input_change + 1e-12)).item()
+                        if float(vid_input_change) > 0.0
+                        else 0.0
                     )
                     self.k_audio = (
-                        audio_output_change / audio_input_change
-                        if audio_input_change > 0
-                        else 0
+                        (audio_output_change / (audio_input_change + 1e-12)).item()
+                        if float(audio_input_change) > 0.0
+                        else 0.0
+                    )
+                # Cache delta on CPU.
+                self.cache_vid_even = [
+                    _maybe_pin((u.detach() - v.detach()).to("cpu", dtype=cache_cpu_dtype))
+                    for u, v in zip(vid_output, raw_vid_input)
+                ]
+                self.cache_audio_even = [
+                    _maybe_pin((u.detach() - v.detach()).to("cpu", dtype=cache_cpu_dtype))
+                    for u, v in zip(audio_output, raw_audio_input)
+                ]
+                self.previous_raw_vid_output_even = vid_out_cpu
+                self.previous_raw_audio_output_even = audio_out_cpu
+                self.prev_vid_out_norm_even = float(_mean_abs_lists(vid_out_cpu))
+                self.prev_audio_out_norm_even = float(_mean_abs_lists(audio_out_cpu))
+                # Track inputs:
+                # - `previous_raw_*_input_even` follows the last even-step input (even if we skipped),
+                #   used for incremental change detection.
+                # - `prev_prev_raw_*_input_even` follows the last *computed* even-step input, used
+                #   to align k estimation with `previous_raw_*_output_even`.
+                self.previous_raw_vid_input_even = vid_in_cpu
+                self.previous_raw_audio_input_even = audio_in_cpu
+                self.prev_prev_raw_vid_input_even = vid_in_cpu
+                self.prev_prev_raw_audio_input_even = audio_in_cpu
+            else:
+                # Approximate k using delta_change + input_change to avoid storing full previous outputs.
+                vid_input_change = (
+                    _l1_mean_lists(raw_vid_input, prev_vid_input_even)
+                    if prev_vid_input_even is not None
+                    else None
+                )
+                audio_input_change = (
+                    _l1_mean_lists(raw_audio_input, prev_audio_input_even)
+                    if prev_audio_input_even is not None
+                    else None
+                )
+
+                # Cache delta on GPU.
+                cache_vid = [u - v for u, v in zip(vid_output, raw_vid_input)]
+                cache_audio = [u - v for u, v in zip(audio_output, raw_audio_input)]
+
+                if (
+                    vid_input_change is not None
+                    and self.cache_vid_even is not None
+                    and float(vid_input_change) > 0.0
+                ):
+                    vid_delta_change = _l1_mean_lists(cache_vid, self.cache_vid_even)
+                    self.k_vid = float(
+                        (vid_input_change + vid_delta_change)
+                        / (vid_input_change + 1e-12)
+                    )
+                if (
+                    audio_input_change is not None
+                    and self.cache_audio_even is not None
+                    and float(audio_input_change) > 0.0
+                ):
+                    audio_delta_change = _l1_mean_lists(cache_audio, self.cache_audio_even)
+                    self.k_audio = float(
+                        (audio_input_change + audio_delta_change)
+                        / (audio_input_change + 1e-12)
                     )
 
-            # Update history
-            self.prev_prev_raw_vid_input_even = getattr(
-                self, "previous_raw_vid_input_even", None
-            )
-            self.prev_prev_raw_audio_input_even = getattr(
-                self, "previous_raw_audio_input_even", None
-            )
-            self.previous_raw_vid_output_even = [u.clone() for u in vid_output]
-            self.previous_raw_audio_output_even = [u.clone() for u in audio_output]
-            self.cache_vid_even = [u - v for u, v in zip(vid_output, raw_vid_input)]
-            self.cache_audio_even = [
-                u - v for u, v in zip(audio_output, raw_audio_input)
-            ]
+                self.cache_vid_even = cache_vid
+                self.cache_audio_even = cache_audio
+                self.prev_vid_out_norm_even = float(_mean_abs_lists(vid_output))
+                self.prev_audio_out_norm_even = float(_mean_abs_lists(audio_output))
+                # Advance the "previous input" reference for the next decision.
+                self.previous_raw_vid_input_even = [u.detach() for u in raw_vid_input]
+                self.previous_raw_audio_input_even = [
+                    u.detach() for u in raw_audio_input
+                ]
 
         else:  # Uncondition path
-            # Store output for unconditional path
-            self.previous_raw_vid_output_odd = [u.clone() for u in vid_output]
-            self.previous_raw_audio_output_odd = [u.clone() for u in audio_output]
-            self.cache_vid_odd = [u - v for u, v in zip(vid_output, raw_vid_input)]
-            self.cache_audio_odd = [
-                u - v for u, v in zip(audio_output, raw_audio_input)
-            ]
+            # Store cache delta for unconditional path.
+            if cache_on_cpu:
+                self.cache_vid_odd = [
+                    _maybe_pin((u.detach() - v.detach()).to("cpu", dtype=cache_cpu_dtype))
+                    for u, v in zip(vid_output, raw_vid_input)
+                ]
+                self.cache_audio_odd = [
+                    _maybe_pin((u.detach() - v.detach()).to("cpu", dtype=cache_cpu_dtype))
+                    for u, v in zip(audio_output, raw_audio_input)
+                ]
+            else:
+                self.cache_vid_odd = [u - v for u, v in zip(vid_output, raw_vid_input)]
+                self.cache_audio_odd = [
+                    u - v for u, v in zip(audio_output, raw_audio_input)
+                ]
 
         # Update counter
         self.cnt += 1

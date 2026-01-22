@@ -538,6 +538,8 @@ class LoraManager(DownloadMixin):
                 existing_adapters.add(adapter_name)
 
                 for local_path in item.local_paths:
+                    pre_param_ids = {id(p) for _, p in model.named_parameters()}
+                    pre_buffer_ids = {id(b) for _, b in model.named_buffers()}
                     class_name = model.__class__.__name__
                     local_path_state_dict = self.maybe_convert_state_dict(
                         local_path, class_name, model_keys
@@ -574,6 +576,7 @@ class LoraManager(DownloadMixin):
                         prefix=prefix,
                         metadata=metadata,
                     )
+ 
                     logger.info(f"Loaded LoRA {adapter_name} from {local_path}")
                     try:
                         del local_path_state_dict
@@ -600,6 +603,32 @@ class LoraManager(DownloadMixin):
                 traceback.print_exc()
 
         return loaded_resolved
+
+    def _move_new_lora_tensors_to_cpu(
+        self,
+        model: torch.nn.Module,
+        *,
+        pre_param_ids: set[int],
+        pre_buffer_ids: set[int],
+    ) -> None:
+        for name, param in model.named_parameters():
+            if id(param) in pre_param_ids:
+                continue
+            if "lora" not in name.lower():
+                continue
+            try:
+                param.data = param.data.to("cpu")
+            except Exception:
+                pass
+        for name, buf in model.named_buffers():
+            if id(buf) in pre_buffer_ids:
+                continue
+            if "lora" not in name.lower():
+                continue
+            try:
+                buf.data = buf.data.to("cpu")
+            except Exception:
+                pass
 
     def maybe_convert_state_dict(
         self, local_path: str, model_name: str, model_keys: List[str] = None

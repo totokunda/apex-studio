@@ -627,13 +627,6 @@ class BaseConverter:
 
     def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         self._sort_rename_dict()
-        # Some checkpoints are stored under a wrapper prefix (e.g. "model." or
-        # "model.diffusion_model."). Strip known prefixes *before* conversion so
-        # anchored rename rules (e.g. r"^final_layer\.") can match.
-        self._strip_known_prefixes_inplace(state_dict, model_keys=model_keys)
-
-        # If this looks like a checkpoint that already matches the target key layout,
-        # exit early to keep conversion idempotent.
 
         if self._already_converted(state_dict, model_keys):
             return state_dict

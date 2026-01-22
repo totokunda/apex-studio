@@ -1417,7 +1417,7 @@ class SeedVR2AutoencoderKL(nn.Module):
         # Ensure 5D [B, C, F, H, W]
         if x.ndim != 5:
             x = x.unsqueeze(2)
-
+        
         b, c, f, H, W = x.shape
         tile_h, tile_w = tile_size
 

@@ -118,7 +118,9 @@ class BlurDownsample(torch.nn.Module):
         # the 4th row of Pascal's triangle. This kernel is used for anti-aliasing and
         # provides a smooth approximation of a Gaussian filter (often called a "binomial filter").
         # The 2D kernel is constructed as the outer product and normalized.
+ 
         k = torch.tensor([math.comb(kernel_size - 1, k) for k in range(kernel_size)])
+        k = k.cpu()
         k2d = k[:, None] @ k[None, :]
         k2d = (k2d / k2d.sum()).float()  # shape (kernel_size, kernel_size)
         self.register_buffer(
