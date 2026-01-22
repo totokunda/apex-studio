@@ -5,7 +5,8 @@ from typing import Optional
 from einops import rearrange
 import torch.nn as nn
 from src.attention.functions import attention_register
-from src.utils.step_mem import step_mem
+from src.transformer.efficiency.ops import apply_wan_rope_inplace
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
 
 
 def enhance_score(query_image, key_image, head_dim, num_frames, enhance_weight):
@@ -189,9 +190,9 @@ class WanAttnProcessor2_0:
             value_main = attn.to_v(hidden_states_main)
 
             if attn.norm_q is not None:
-                query_main = attn.norm_q(query_main)
+                attn.norm_q(query_main)
             if attn.norm_k is not None:
-                key_main = attn.norm_k(key_main)
+                attn.norm_k(key_main)
 
             rotary_emb_main = rotary_emb_main.squeeze(0).transpose(0, 1)
             rotary_emb_ip = rotary_emb_ip.squeeze(0).transpose(0, 1)
@@ -204,9 +205,9 @@ class WanAttnProcessor2_0:
             value_ip = attn.to_v(hidden_states_ip) + attn.add_v_lora(hidden_states_ip)
 
             if attn.norm_q is not None:
-                query_ip = attn.norm_q(query_ip)
+                attn.norm_q(query_ip)
             if attn.norm_k is not None:
-                key_ip = attn.norm_k(key_ip)
+                attn.norm_k(key_ip)
 
             query_ip = rope_apply_ip_adapter(query_ip, rotary_emb_ip, attn.heads)
             key_ip = rope_apply_ip_adapter(key_ip, rotary_emb_ip, attn.heads)
@@ -269,9 +270,9 @@ class WanAttnProcessor2_0:
             value_main = attn.to_v(hidden_states)
 
             if attn.norm_q is not None:
-                query_main = attn.norm_q(query_main)
+                attn.norm_q(query_main)
             if attn.norm_k is not None:
-                key_main = attn.norm_k(key_main)
+                attn.norm_k(key_main)
 
             rotary_emb = rotary_emb.squeeze(0).transpose(0, 1)
             query_main = rope_apply_ip_adapter(query_main, rotary_emb, attn.heads)
@@ -311,6 +312,8 @@ class WanAttnProcessor2_0:
         no_cache: bool = False,
         rotary_emb_chunk_size: int | None = None,
     ) -> torch.Tensor:
+        hidden_states = unwrap_single_item_list(hidden_states)
+        encoder_hidden_states = unwrap_single_item_list(encoder_hidden_states)
 
         if hasattr(attn, "cond_size") and attn.cond_size is not None and not no_cache:
             return self.process_with_kv_cache(
@@ -344,19 +347,27 @@ class WanAttnProcessor2_0:
         value = attn.to_v(encoder_hidden_states)
 
         if attn.norm_q is not None:
-            query = attn.norm_q(query)
+            attn.norm_q(query)
         if attn.norm_k is not None:
-            key = attn.norm_k(key)
+            attn.norm_k(key)
 
         query = query.unflatten(2, (attn.heads, -1)).transpose(1, 2)
         key = key.unflatten(2, (attn.heads, -1)).transpose(1, 2)
         value = value.unflatten(2, (attn.heads, -1)).transpose(1, 2)
 
         if rotary_emb is not None:
-            query = apply_rotary_emb(
-                query, rotary_emb, chunk_size=rotary_emb_chunk_size
+            apply_wan_rope_inplace(
+                query,
+                rotary_emb,
+                chunk_size=rotary_emb_chunk_size,
+                freqs_may_be_cpu=True,
             )
-            key = apply_rotary_emb(key, rotary_emb, chunk_size=rotary_emb_chunk_size)
+            apply_wan_rope_inplace(
+                key,
+                rotary_emb,
+                chunk_size=rotary_emb_chunk_size,
+                freqs_may_be_cpu=True,
+            )
 
         if self.use_enhance:
             enhance_scores = self._get_enhance_scores(query, key)
@@ -365,7 +376,7 @@ class WanAttnProcessor2_0:
         hidden_states_img = None
         if encoder_hidden_states_img is not None:
             key_img = attn.add_k_proj(encoder_hidden_states_img)
-            key_img = attn.norm_added_k(key_img)
+            attn.norm_added_k(key_img)
             value_img = attn.add_v_proj(encoder_hidden_states_img)
 
             key_img = key_img.unflatten(2, (attn.heads, -1)).transpose(1, 2)

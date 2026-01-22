@@ -39,7 +39,9 @@ class WanSCAILEngine(WanShared):
         timesteps: List[int] | None = None,
         timesteps_as_indices: bool = True,
         boundary_ratio: float | None = None,
+        chunking_profile: str = "none",
         expand_timesteps: bool = False,
+        rope_on_cpu: bool = False,
         enhance_kwargs: Dict[str, Any] = {},
         **kwargs,
     ):
@@ -191,6 +193,10 @@ class WanSCAILEngine(WanShared):
         vae_scale_factor_temporal = getattr(
             vae_config, "scale_factor_temporal", self.vae_scale_factor_temporal
         )
+        
+        
+        
+        
 
         if seed is not None and generator is not None:
             self.logger.warning(
@@ -383,6 +389,7 @@ class WanSCAILEngine(WanShared):
                         attention_kwargs=attention_kwargs,
                         seq_len=max_seq_len,
                         enhance_kwargs=enhance_kwargs,
+                        rope_on_cpu=rope_on_cpu,
                     ),
                     unconditional_transformer_kwargs=(
                         dict(
@@ -393,6 +400,7 @@ class WanSCAILEngine(WanShared):
                             seq_len=max_seq_len,
                             attention_kwargs=attention_kwargs,
                             enhance_kwargs=enhance_kwargs,
+                            rope_on_cpu=rope_on_cpu,
                         )
                         if negative_prompt_embeds is not None
                         else None
@@ -405,6 +413,7 @@ class WanSCAILEngine(WanShared):
                     scheduler=scheduler,
                     guidance_scale=guidance_scale,
                     num_inference_steps=num_inference_steps_segment,
+                    chunking_profile=chunking_profile,
                 )
             out_frames = self.vae_decode(latents, offload=offload)
             if do_segment:

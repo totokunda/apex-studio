@@ -40,6 +40,12 @@ from diffusers.models.embeddings import (
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import AdaLayerNormContinuous, AdaLayerNormZero
+from src.transformer.efficiency.ops import (
+    apply_cos_sin_rope_inplace,
+    chunked_feed_forward_inplace,
+)
+from src.transformer.efficiency.mod import InplaceRMSNorm
+from src.transformer.efficiency.list_clear import unwrap_single_item_list
 from src.attention import attention_register
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -52,56 +58,11 @@ def _apply_rotary_emb_chunked(
     sequence_dim: int = 1,
 ) -> torch.Tensor:
     """Apply rotary embeddings in chunks to reduce peak memory usage."""
-    cos, sin = freqs_cis
-    seq_len = x.shape[sequence_dim]
-
-    # Treat None (or non-positive) as "no chunking"
     if chunk_size is not None and chunk_size <= 0:
         chunk_size = None
-
-    # Small sequences don't need chunking
-    if chunk_size is None or seq_len <= chunk_size:
-        if sequence_dim == 1:
-            cos_exp = cos[None, :, None, :]
-            sin_exp = sin[None, :, None, :]
-        else:
-            cos_exp = cos[None, None, :, :]
-            sin_exp = sin[None, None, :, :]
-
-        cos_exp, sin_exp = cos_exp.to(x.device), sin_exp.to(x.device)
-        x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)
-        x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(-2)
-        return (x.float() * cos_exp + x_rotated.float() * sin_exp).to(x.dtype)
-
-    # Pre-allocate output tensor to avoid list accumulation and final cat
-    output = torch.empty_like(x)
-
-    for start in range(0, seq_len, chunk_size):
-        end = min(start + chunk_size, seq_len)
-
-        if sequence_dim == 1:
-            x_chunk = x[:, start:end]
-            cos_chunk = cos[start:end][None, :, None, :]
-            sin_chunk = sin[start:end][None, :, None, :]
-        else:
-            x_chunk = x[:, :, start:end]
-            cos_chunk = cos[start:end][None, None, :, :]
-            sin_chunk = sin[start:end][None, None, :, :]
-
-        cos_chunk, sin_chunk = cos_chunk.to(x.device), sin_chunk.to(x.device)
-        x_real, x_imag = x_chunk.reshape(*x_chunk.shape[:-1], -1, 2).unbind(-1)
-        x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(-2)
-        out_chunk = (x_chunk.float() * cos_chunk + x_rotated.float() * sin_chunk).to(
-            x.dtype
-        )
-
-        # Write directly to pre-allocated output
-        if sequence_dim == 1:
-            output[:, start:end] = out_chunk
-        else:
-            output[:, :, start:end] = out_chunk
-
-    return output
+    return apply_cos_sin_rope_inplace(
+        x, freqs_cis, chunk_size=chunk_size, sequence_dim=sequence_dim
+    )
 
 
 def _chunked_feed_forward(
@@ -115,21 +76,9 @@ def _chunked_feed_forward(
 
     Does NOT require `hidden_states.shape[chunk_dim]` to be divisible by `chunk_size`.
     """
-    if chunk_size is None:
-        return ff(hidden_states)
-    if chunk_size <= 0:
-        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-
-    dim_len = hidden_states.shape[chunk_dim]
-    if dim_len <= chunk_size:
-        return ff(hidden_states)
-
-    outputs = []
-    for start in range(0, dim_len, chunk_size):
-        end = min(start + chunk_size, dim_len)
-        hs_chunk = hidden_states.narrow(chunk_dim, start, end - start)
-        outputs.append(ff(hs_chunk))
-    return torch.cat(outputs, dim=chunk_dim)
+    return chunked_feed_forward_inplace(
+        ff, hidden_states, chunk_dim=chunk_dim, chunk_size=chunk_size
+    )
 
 
 class HunyuanVideo15AttnProcessor2_0:
@@ -152,6 +101,8 @@ class HunyuanVideo15AttnProcessor2_0:
         attention_mask: Optional[torch.Tensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        hidden_states = unwrap_single_item_list(hidden_states)
+        encoder_hidden_states = unwrap_single_item_list(encoder_hidden_states)
         # 1. QKV projections
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
@@ -162,8 +113,8 @@ class HunyuanVideo15AttnProcessor2_0:
         value = value.unflatten(2, (attn.heads, -1))
 
         # 2. QK normalization
-        query = attn.norm_q(query)
-        key = attn.norm_k(key)
+        attn.norm_q(query)
+        attn.norm_k(key)
 
         # 3. Rotational positional embeddings applied to latent stream (chunked)
         if image_rotary_emb is not None:
@@ -188,9 +139,9 @@ class HunyuanVideo15AttnProcessor2_0:
             encoder_value = encoder_value.unflatten(2, (attn.heads, -1))
 
             if attn.norm_added_q is not None:
-                encoder_query = attn.norm_added_q(encoder_query)
+                attn.norm_added_q(encoder_query)
             if attn.norm_added_k is not None:
-                encoder_key = attn.norm_added_k(encoder_key)
+                attn.norm_added_k(encoder_key)
 
             query = torch.cat([query, encoder_query], dim=1)
             key = torch.cat([key, encoder_key], dim=1)
@@ -243,7 +194,9 @@ class HunyuanVideo15PatchEmbed(nn.Module):
             in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
         )
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, device: Optional[torch.device] = None
+    ) -> torch.Tensor:
         hidden_states = self.proj(hidden_states)
         hidden_states = hidden_states.flatten(2).transpose(1, 2)  # BCFHW -> BNC
         return hidden_states
@@ -520,7 +473,9 @@ class HunyuanVideo15RotaryPosEmbed(nn.Module):
         self.rope_dim = rope_dim
         self.theta = theta
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, device: Optional[torch.device] = None
+    ) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
         rope_sizes = [
             num_frames // self.patch_size_t,
@@ -529,13 +484,9 @@ class HunyuanVideo15RotaryPosEmbed(nn.Module):
         ]
 
         axes_grids = []
+        target_device = device or hidden_states.device
         for i in range(len(rope_sizes)):
-            # Note: The following line diverges from original behaviour. We create the grid on the device, whereas
-            # original implementation creates it on CPU and then moves it to device. This results in numerical
-            # differences in layerwise debugging outputs, but visually it is the same.
-            grid = torch.arange(
-                0, rope_sizes[i], device=hidden_states.device, dtype=torch.float32
-            )
+            grid = torch.arange(0, rope_sizes[i], device=target_device, dtype=torch.float32)
             axes_grids.append(grid)
         grid = torch.meshgrid(*axes_grids, indexing="ij")  # [W, H, T]
         grid = torch.stack(grid, dim=0)  # [3, W, H, T]
@@ -600,6 +551,7 @@ class HunyuanVideo15TransformerBlock(nn.Module):
         super().__init__()
 
         hidden_size = num_attention_heads * attention_head_dim
+        eps = 1e-6
 
         self.norm1 = AdaLayerNormZero(hidden_size, norm_type="layer_norm")
         self.norm1_context = AdaLayerNormZero(hidden_size, norm_type="layer_norm")
@@ -615,16 +567,34 @@ class HunyuanVideo15TransformerBlock(nn.Module):
             bias=True,
             processor=HunyuanVideo15AttnProcessor2_0(),
             qk_norm=qk_norm,
-            eps=1e-6,
+            eps=eps,
         )
 
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        # Swap Diffusers' RMSNorm for an in-place variant for attention-only Q/K norms.
+        # Safe because Q/K (and added Q/K) are fresh linear projections.
+        if qk_norm == "rms_norm":
+            self.attn.norm_q = InplaceRMSNorm(
+                attention_head_dim, eps=eps, elementwise_affine=True
+            )
+            self.attn.norm_k = InplaceRMSNorm(
+                attention_head_dim, eps=eps, elementwise_affine=True
+            )
+            if getattr(self.attn, "norm_added_q", None) is not None:
+                self.attn.norm_added_q = InplaceRMSNorm(
+                    attention_head_dim, eps=eps, elementwise_affine=True
+                )
+            if getattr(self.attn, "norm_added_k", None) is not None:
+                self.attn.norm_added_k = InplaceRMSNorm(
+                    attention_head_dim, eps=eps, elementwise_affine=True
+                )
+
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=eps)
         self.ff = FeedForward(
             hidden_size, mult=mlp_ratio, activation_fn="gelu-approximate"
         )
 
         self.norm2_context = nn.LayerNorm(
-            hidden_size, elementwise_affine=False, eps=1e-6
+            hidden_size, elementwise_affine=False, eps=eps
         )
         self.ff_context = FeedForward(
             hidden_size, mult=mlp_ratio, activation_fn="gelu-approximate"
@@ -654,6 +624,7 @@ class HunyuanVideo15TransformerBlock(nn.Module):
         *args,
         **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        inference_mode = not torch.is_grad_enabled()
         # 1. Input normalization
         norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(
             hidden_states, emb=temb
@@ -663,12 +634,25 @@ class HunyuanVideo15TransformerBlock(nn.Module):
         )
 
         # 2. Joint attention
-        attn_output, context_attn_output = self.attn(
-            hidden_states=norm_hidden_states,
-            encoder_hidden_states=norm_encoder_hidden_states,
-            attention_mask=attention_mask,
-            image_rotary_emb=freqs_cis,
-        )
+        if inference_mode and isinstance(self.attn.processor, HunyuanVideo15AttnProcessor2_0):
+            hs_list = [norm_hidden_states]
+            ehs_list = [norm_encoder_hidden_states]
+            norm_hidden_states = hs_list
+            norm_encoder_hidden_states = ehs_list
+            attn_output, context_attn_output = self.attn.processor(
+                self.attn,
+                norm_hidden_states,
+                norm_encoder_hidden_states,
+                attention_mask,
+                freqs_cis,
+            )
+        else:
+            attn_output, context_attn_output = self.attn(
+                hidden_states=norm_hidden_states,
+                encoder_hidden_states=norm_encoder_hidden_states,
+                attention_mask=attention_mask,
+                image_rotary_emb=freqs_cis,
+            )
 
         # 3. Modulation and residual connection
         hidden_states = hidden_states + attn_output * gate_msa.unsqueeze(1)
@@ -939,6 +923,34 @@ class HunyuanVideo15Transformer3DModel(
             p.get("refiner_ffn_chunk_size", None), dim=1
         )
 
+    def _get_rope_cpu_cache(self) -> Dict[tuple, Tuple[torch.Tensor, torch.Tensor]]:
+        if not hasattr(self, "_rope_cpu_cache"):
+            self._rope_cpu_cache = {}
+        return self._rope_cpu_cache
+
+    def _rope_cache_key(self, ppf: int, pph: int, ppw: int) -> tuple:
+        rope_dim = tuple(self.rope.rope_dim)
+        return (ppf, pph, ppw, rope_dim, float(self.rope.theta))
+
+    def _build_rope_cached(
+        self, hidden_states: torch.Tensor, *, rope_on_cpu: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if not rope_on_cpu:
+            return self.rope(hidden_states)
+
+        _, _, num_frames, height, width = hidden_states.shape
+        p_t, p_h, p_w = (
+            self.config.patch_size_t,
+            self.config.patch_size,
+            self.config.patch_size,
+        )
+        ppf, pph, ppw = num_frames // p_t, height // p_h, width // p_w
+        key = self._rope_cache_key(ppf, pph, ppw)
+        cache = self._get_rope_cpu_cache()
+        if key not in cache:
+            cache[key] = self.rope(hidden_states, device=torch.device("cpu"))
+        return cache[key]
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -950,8 +962,13 @@ class HunyuanVideo15Transformer3DModel(
         encoder_attention_mask_2: Optional[torch.Tensor] = None,
         image_embeds: Optional[torch.Tensor] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
+        rope_on_cpu: Optional[bool] = None,
         return_dict: bool = True,
     ) -> Union[Tuple[torch.Tensor], Transformer2DModelOutput]:
+        if rope_on_cpu is None:
+            rope_on_cpu = (
+                getattr(self, "_apex_forward_kwargs_defaults", {}) or {}
+            ).get("rope_on_cpu", False)
         if attention_kwargs is not None:
             attention_kwargs = attention_kwargs.copy()
             lora_scale = attention_kwargs.pop("scale", 1.0)
@@ -981,7 +998,9 @@ class HunyuanVideo15Transformer3DModel(
         post_patch_width = width // p_w
 
         # 1. RoPE
-        image_rotary_emb = self.rope(hidden_states)
+        image_rotary_emb = self._build_rope_cached(
+            hidden_states, rope_on_cpu=rope_on_cpu
+        )
 
         # 2. Conditional embeddings
         temb = self.time_embed(timestep, timestep_r=timestep_r)

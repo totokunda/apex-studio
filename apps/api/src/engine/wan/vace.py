@@ -45,6 +45,7 @@ class WanVaceEngine(WanShared):
         ip_image: Image.Image | str | np.ndarray | torch.Tensor = None,
         enhance_kwargs: Dict[str, Any] = {},
         chunking_profile: str = "none",
+        rope_on_cpu: bool = False,
         **kwargs,
     ):
 
@@ -391,6 +392,7 @@ class WanVaceEngine(WanShared):
                 control_hidden_states_scale=conditioning_scale,
                 attention_kwargs=attention_kwargs,
                 enhance_kwargs=enhance_kwargs,
+                rope_on_cpu=rope_on_cpu,
             ),
             unconditional_transformer_kwargs=(
                 dict(
@@ -399,6 +401,7 @@ class WanVaceEngine(WanShared):
                     control_hidden_states_scale=conditioning_scale,
                     attention_kwargs=attention_kwargs,
                     enhance_kwargs=enhance_kwargs,
+                    rope_on_cpu=rope_on_cpu,
                 )
                 if negative_prompt_embeds is not None
                 else None

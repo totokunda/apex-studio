@@ -25,7 +25,6 @@ import weakref
 from dataclasses import dataclass, field
 from typing import (
     Any,
-    Callable,
     Dict,
     Iterable,
     List,
@@ -45,6 +44,11 @@ except Exception:  # pragma: no cover - psutil may be missing in limited envs
 
 from .config import MemoryConfig
 from .group_offloading import apply_group_offloading
+from .budget_offloading import (
+    apply_budget_offloading,
+    apply_budget_offloading_profile,
+    BudgetOffloadProfile,
+)
 from loguru import logger
 
 
@@ -572,6 +576,7 @@ class ComponentMemoryManager:
     def _offload_component(
         self, comp: ManagedComponent, offload_type: str = "cpu"
     ) -> None:
+        
         module = comp.module()
         if module is None and offload_type != "discard":
             return
@@ -876,6 +881,9 @@ def install_memory_hooks(engine: Any) -> ComponentMemoryManager:
 __all__ = [
     "MemoryConfig",
     "apply_group_offloading",
+    "apply_budget_offloading",
+    "apply_budget_offloading_profile",
+    "BudgetOffloadProfile",
     "ComponentMemoryManager",
     "get_memory_manager",
     "install_memory_hooks",

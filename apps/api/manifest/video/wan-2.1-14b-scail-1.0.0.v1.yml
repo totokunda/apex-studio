@@ -253,6 +253,7 @@ spec:
       expand_timesteps: false
       text_encoder_kwargs: {}
       attention_kwargs: {}
+      chunking_profile: light
   ui:
     panels:
     - name: input
@@ -302,6 +303,14 @@ spec:
         - - guidance_scale
         - - seed
         - - use_video_duration
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
     inputs:
     - id: image
       label: Image
@@ -431,3 +440,18 @@ spec:
       panel: sampling
       required: false
       default: true
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive

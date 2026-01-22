@@ -1,13 +1,15 @@
 """Configuration settings for memory management module."""
 
 import dataclasses
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any, List, Literal
 import torch
 
 
 @dataclasses.dataclass
 class MemoryConfig:
     """Configuration for memory management system."""
+
+    offload_mode: Literal["group", "budget"] = "group"
 
     # Group offloading behavior (diffusers-native offloading mechanism)
     group_offload_type: str = "leaf_level"
@@ -20,6 +22,14 @@ class MemoryConfig:
     group_offload_disk_path: Optional[str] = None
     ignore_modules: Optional[List[str]] = None
     block_modules: Optional[List[str]] = None
+
+    # Budget offloading behavior (Apex-native budget manager)
+    budget_mb: Optional[Union[int, str]] = None
+    async_transfers: bool = True
+    prefetch: bool = True
+    pin_cpu_memory: bool = False
+    vram_safety_coefficient: float = 0.8
+    offload_after_forward: bool = False
 
     def to_group_offload_kwargs(self, onload_device: torch.device) -> Dict[str, Any]:
         """

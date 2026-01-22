@@ -39,6 +39,107 @@ def _ensure_group_offloading_helpers():
         _GROUP_OFFLOAD_CHECKED = True
 
 
+def _set_budget_manager_device(manager: object, device) -> None:
+    """
+    Best-effort: update budget-offloading manager's onload device and streams.
+
+    We keep this here (instead of importing budget_offloading) to avoid circular
+    imports and to keep ToMixin light.
+    """
+    try:
+        import torch
+
+        dev = torch.device(device) if isinstance(device, str) else device
+        setattr(manager, "onload_device", dev)
+        # Keep behavior consistent with existing ToMixin logic.
+        if dev.type == "cuda" and torch.cuda.is_available():
+            if getattr(manager, "_transfer_stream", None) is None:
+                try:
+                    manager._transfer_stream = torch.cuda.Stream()
+                except Exception:
+                    manager._transfer_stream = None
+        else:
+            manager._transfer_stream = None
+    except Exception:
+        return
+
+
+def _module_has_budget_offload_hook(module: "torch.nn.Module") -> bool:
+    """
+    Return True if this module is controlled by Apex budget offloading.
+
+    Budget offloading marks the root with `_apex_budget_offloading_*` attributes,
+    and marks submodules with `_apex_mm_manager` when forward wrappers are installed.
+    """
+    try:
+        if bool(getattr(module, "_apex_budget_offloading_enabled", False)):
+            return True
+        if getattr(module, "_apex_budget_offloading_manager", None) is not None:
+            return True
+        if getattr(module, "_apex_mm_manager", None) is not None:
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _module_contains_budget_offload(module: "torch.nn.Module") -> bool:
+    """
+    Return True if this module or any descendant is budget-offloaded.
+
+    This is used to prevent bulk `.to(device)` moves from recursively placing
+    budget-managed weights onto the accelerator.
+    """
+    if _module_has_budget_offload_hook(module):
+        return True
+    try:
+        for child in module.modules():
+            if child is module:
+                continue
+            if _module_has_budget_offload_hook(child):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _move_module_to_device_excluding_budget_offload(
+    module: "torch.nn.Module", device
+) -> None:
+    """
+    Recursively move a module tree to `device`, but *skip* any subtrees that are
+    controlled by Apex budget offloading.
+
+    For skipped subtrees, we update the manager's `onload_device` instead of
+    moving weights eagerly.
+    """
+    # If this module itself is budget-offloaded, skip the entire subtree.
+    mgr = getattr(module, "_apex_budget_offloading_manager", None)
+    if mgr is None:
+        mgr = getattr(module, "_apex_mm_manager", None)
+    if mgr is not None or _module_has_budget_offload_hook(module):
+        if mgr is not None:
+            _set_budget_manager_device(mgr, device)
+        return
+
+    import torch
+
+    # Move parameters and buffers owned by this module.
+    for param in module.parameters(recurse=False):
+        if param is not None:
+            param.data = param.data.to(device)
+            if param.grad is not None:
+                param.grad.data = param.grad.data.to(device)
+
+    for buf in module.buffers(recurse=False):
+        if buf is not None:
+            buf.data = buf.data.to(device)
+
+    # Recurse into children; budget-offloaded children will early-return above.
+    for child in module.children():
+        _move_module_to_device_excluding_budget_offload(child, device)
+
+
 def _module_has_group_offload_hook(module: torch.nn.Module) -> bool:
     """
     Return True if this *specific* module has a Diffusers group-offloading hook
@@ -344,6 +445,24 @@ class ToMixin:
         # Move each to device
         for comp in components:
             if not hasattr(comp, "to"):
+                continue
+
+            if (
+                isinstance(comp, torch.nn.Module)
+                and getattr(comp, "_apex_budget_offloading_enabled", False)
+            ):
+                manager = getattr(comp, "_apex_budget_offloading_manager", None)
+                if manager is not None:
+                    _set_budget_manager_device(manager, device)
+                continue
+
+            # If the module *contains* budget-offloaded submodules, we must not call
+            # `.to(device)` recursively, otherwise budget-managed weights get placed
+            # onto the accelerator and defeat offloading.
+            if isinstance(comp, torch.nn.Module) and _module_contains_budget_offload(
+                comp
+            ):
+                _move_module_to_device_excluding_budget_offload(comp, device)
                 continue
 
             # For torch modules that contain any group-offloaded submodules, we need
