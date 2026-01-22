@@ -865,7 +865,7 @@ class WanAttentionBlock(nn.Module):
             target_freqs: Target freqs (fusion modes only)
         """
         inference_mode = not torch.is_grad_enabled()
-        from src.utils.step_mem import step_mem
+  
         if mode == "modulation_self_attn":
             # Fusion mode: modulation + self-attention only
             assert (

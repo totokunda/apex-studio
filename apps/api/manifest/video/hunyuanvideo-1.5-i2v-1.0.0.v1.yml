@@ -321,6 +321,7 @@ spec:
       guidance_scale: 1.0
       attention_kwargs: {}
       chunking_profile: light
+      rope_on_cpu: false
   ui:
     panels:
     - name: image
@@ -369,6 +370,7 @@ spec:
         flow: column
         rows:
         - - chunking_profile
+        - - rope_on_cpu
     inputs:
     - id: prompt
       label: Prompt
@@ -506,3 +508,10 @@ spec:
         value: balanced
       - name: Aggressive
         value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false
