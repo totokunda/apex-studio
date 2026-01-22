@@ -1,0 +1,60 @@
+category: Line
+class: MLSDdetector
+description: Mobile Line Segment Detection optimized for detecting straight lines
+  and architectural features. Lightweight and fast while maintaining accuracy. Excels
+  at finding structural lines in buildings, rooms, and geometric objects. Ideal for
+  architectural visualization, perspective correction, and wireframe extraction.
+module: src.preprocess.mlsd
+name: M-LSD Line Detection
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: 0.1
+  description: The value threshold for line segment detection. Controls the minimum
+    confidence required for detecting line segments. Lower values detect more lines
+    including faint ones, higher values detect only strong, clear lines.
+  display_name: Value Threshold
+  max: 1.0
+  min: 0.0
+  name: thr_v
+  type: float
+- default: 0.1
+  description: The distance threshold for line segment merging. Controls how close
+    line segments need to be to be merged into a single line. Lower values keep line
+    segments separate, higher values merge nearby segments.
+  display_name: Distance Threshold
+  max: 1.0
+  min: 0.0
+  name: thr_d
+  type: float
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_image: true
+supports_video: true
+files:
+- path: lllyasviel/Annotators/mlsd_large_512_fp32.pth
+  size_bytes: 6341481

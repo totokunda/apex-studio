@@ -1,0 +1,61 @@
+category: Segmentation
+class: OneformerSegmentor
+description: Universal image segmentation framework that handles semantic, instance,
+  and panoptic segmentation in one model. Identifies and separates different objects
+  and regions with per-class labeling. Excellent for scene understanding, object isolation,
+  and creating detailed masks for complex scenes.
+module: src.preprocess.oneformer.transformers
+name: OneFormer Segmentation
+parameters:
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_image: true
+supports_video: true
+files:
+- path: oneformer/models--shi-labs--oneformer_ade20k_swin_large/blobs/c0b2fe11dfecee6f2f1f315f466946e96f4e94813f3f6d660ff3747b83c28cc9
+  name: pytorch_model.bin
+  size_bytes: 879517517
+- path: oneformer/models--shi-labs--oneformer_ade20k_swin_large/blobs/469be27c5c010538f845f518c4f5e8574c78f7c8
+  name: vocab.json
+  size_bytes: 1059962
+- path: oneformer/models--shi-labs--oneformer_ade20k_swin_large/blobs/76e821f1b6f0a9709293c3b6b51ed90980b3166b
+  name: merges.txt
+  size_bytes: 524619
+- path: oneformer/models--shi-labs--oneformer_ade20k_swin_large/blobs/1b2e19858cae8825799b97c3a308d8b699bacb42
+  name: config.json
+  size_bytes: 84289
+- path: oneformer/models--shi-labs--oneformer_ade20k_swin_large/blobs/a3963e0b8f08a5ee62f5e50ea9e9856a9a5ec7ab
+  name: preprocessor_config.json
+  size_bytes: 8709
+- path: oneformer/models--shi-labs--oneformer_ade20k_swin_large/blobs/5008b5665e05a4bd9949d5d2089845365ac8c238
+  name: tokenizer_config.json
+  size_bytes: 808
+- path: oneformer/models--shi-labs--oneformer_ade20k_swin_large/blobs/2c2130b544c0c5a72d5d00da071ba130a9800fb2
+  name: special_tokens_map.json
+  size_bytes: 472

@@ -1,0 +1,10 @@
+## GPSNet config (no canonical_nodes3.npy needed)
+#
+# Use this when you have known canonical-space bounds for your shape coordinates.
+# Replace the numbers below with your shape's min/max XYZ bounds.
+gps_norm_mode: static
+gps_mini: [-1.0, -1.0, -1.0]
+gps_maxi: [1.0, 1.0, 1.0]
+gps_eps: 1e-6
+
+
