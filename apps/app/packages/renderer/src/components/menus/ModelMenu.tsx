@@ -46,6 +46,7 @@ import {
   useManifestQuery,
 } from "@/lib/manifest/queries";
 import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
+import { getOffloadDefaultsForManifest } from "@app/preload";
 
 export const ModelItem: React.FC<{
   manifest: ManifestDocument;
@@ -342,6 +343,17 @@ export const ModelItem: React.FC<{
                   category,
                 };
                 clipBase.manifest = manifest;
+                try {
+                  const mfId = String(manifest?.metadata?.id || "").trim();
+                  if (mfId) {
+                    const defaults = await getOffloadDefaultsForManifest(mfId);
+                    if (defaults) {
+                      clipBase.offload = defaults;
+                    }
+                  }
+                } catch {
+                  // ignore; defaults are best-effort
+                }
                 useClipStore.getState().addClip(clipBase);
               } catch {}
             }}

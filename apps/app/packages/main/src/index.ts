@@ -11,6 +11,7 @@ import { chromeDevToolsExtension } from "./modules/ChromeDevToolsExtension.js";
 import { createNativeFileDialogModule } from "./modules/NativeFileDialog.js";
 import { apexApi } from "./modules/ApexApi.js";
 import { settingsModule } from "./modules/SettingsModule.js";
+import { offloadModule } from "./modules/OffloadModule.js";
 import { jsonPersistenceModule } from "./modules/JSONPersistenceModule.js";
 import { appDirProtocol } from "./modules/AppDirProtocol.js";
 import { pythonProcess } from "./modules/PythonProcess.js";
@@ -37,6 +38,8 @@ export async function initApp(initConfig: AppInitConfig) {
     .init(disallowMultipleAppInstance())
     // Settings must be loaded early (before other modules read them)
     .init(settingsModule())
+    // Global offload defaults (keyed by backend URL + manifest id)
+    .init(offloadModule())
     // Register 'app://' protocol before app is ready and before creating the window
     .init(appDirProtocol())
     // Python process management - starts bundled API in production

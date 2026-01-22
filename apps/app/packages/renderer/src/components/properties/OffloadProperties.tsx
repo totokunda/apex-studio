@@ -27,6 +27,7 @@ import {
 import { useManifestQuery } from "@/lib/manifest/queries";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import NumberInputSlider from "@/components/properties/model/inputs/NumberInputSlider";
+import { setOffloadDefaultsForManifest } from "@app/preload";
 
 interface OffloadPropertiesProps {
   clipId: string;
@@ -385,7 +386,13 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
 
     const next = { ...prev, [key]: nextEntry };
     store.updateClip(clipId, { offload: next } as any);
-  }, [clipId]);
+
+    // Persist global defaults for this manifest id (scoped by active backend URL in main process).
+    // Fire-and-forget: UI updates are driven by clip state above.
+    if (manifestId) {
+      void setOffloadDefaultsForManifest(manifestId, next as any).catch(() => undefined);
+    }
+  }, [clipId, manifestId]);
 
   if (!components.length) return null;
 

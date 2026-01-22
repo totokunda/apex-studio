@@ -1150,10 +1150,76 @@ class ComponentMemoryManager:
 # Public helpers
 # -----------------------------
 _GLOBAL_MANAGER: ComponentMemoryManager | None = None
+_GLOBAL_NOOP_MANAGER: "NoopComponentMemoryManager" | None = None
+
+
+class NoopComponentMemoryManager:
+    """
+    No-op shim used when auto memory management is disabled.
+
+    This preserves call sites that expect a manager object, while ensuring we do not
+    wrap engine methods or install hooks.
+    """
+
+    @staticmethod
+    def _env_bool(name: str, default: bool = False) -> bool:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def install_for_engine(self, engine: Any) -> None:
+        # Keep a predictable attribute for downstream call sites.
+        try:
+            setattr(engine, "_component_memory_manager", self)
+        except Exception:
+            pass
+
+    def register_component(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def _attach_forward_hooks(self, *args: Any, **kwargs: Any) -> tuple:
+        return tuple()
+
+    def ensure_component_pinned(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def release_component_pin(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def mark_idle(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def mark_offloaded(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def force_offload_engine_components(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def __getattr__(self, _name: str) -> Any:
+        # Best-effort: swallow unexpected calls without exploding.
+        def _noop(*_a: Any, **_kw: Any) -> None:
+            return None
+
+        return _noop
+
+
+def _auto_memory_management_disabled() -> bool:
+    try:
+        return ComponentMemoryManager._env_bool(
+            "APEX_DISABLE_AUTO_MEMORY_MANAGEMENT", False
+        )
+    except Exception:
+        raw = os.environ.get("APEX_DISABLE_AUTO_MEMORY_MANAGEMENT")
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def get_memory_manager() -> ComponentMemoryManager:
-    global _GLOBAL_MANAGER
+    global _GLOBAL_MANAGER, _GLOBAL_NOOP_MANAGER
+    if _auto_memory_management_disabled():
+        if _GLOBAL_NOOP_MANAGER is None:
+            _GLOBAL_NOOP_MANAGER = NoopComponentMemoryManager()
+        return _GLOBAL_NOOP_MANAGER  # type: ignore[return-value]
     if _GLOBAL_MANAGER is None:
         _GLOBAL_MANAGER = ComponentMemoryManager()
     return _GLOBAL_MANAGER
@@ -1165,6 +1231,15 @@ def install_memory_hooks(engine: Any) -> ComponentMemoryManager:
 
     This is idempotent: calling multiple times will reuse the same manager.
     """
+    # If disabled, do not wrap engine methods; return a no-op manager instead.
+    if _auto_memory_management_disabled():
+        manager = get_memory_manager()
+        try:
+            manager.install_for_engine(engine)
+        except Exception:
+            pass
+        return manager
+
     manager = get_memory_manager()
     manager.install_for_engine(engine)
     return manager

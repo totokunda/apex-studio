@@ -83,6 +83,12 @@ if isinstance(_persisted, dict):
         os.environ["ENABLE_VIDEO_RENDER_STEP"] = (
             _enable_video_render_step.strip().lower()
         )
+    # Auto memory manager toggle (persisted as env-var-compatible "true"/"false").
+    _disable_auto_mem = _persisted.get("APEX_DISABLE_AUTO_MEMORY_MANAGEMENT")
+    if isinstance(_disable_auto_mem, str) and _disable_auto_mem.strip():
+        os.environ["APEX_DISABLE_AUTO_MEMORY_MANAGEMENT"] = (
+            _disable_auto_mem.strip().lower()
+        )
     # HF token persistence for backend process
     _hf_token = _persisted.get("hf_token")
     if isinstance(_hf_token, str) and _hf_token.strip():

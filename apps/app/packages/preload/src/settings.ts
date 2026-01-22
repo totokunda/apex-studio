@@ -32,6 +32,7 @@ export type BackendSyncedSettings = {
   renderVideoSteps: boolean;
   useFastDownload: boolean;
   autoUpdateEnabled: boolean;
+  disableAutoMemoryManagement: boolean;
 };
 
 export type BackendPathSizes = {
@@ -180,6 +181,16 @@ function setAutoUpdateEnabledSetting(
   return ipcRenderer.invoke("settings:set-auto-update-enabled", enabled);
 }
 
+function getDisableAutoMemoryManagementSetting(): Promise<boolean> {
+  return ipcRenderer.invoke("settings:get-disable-auto-memory-management");
+}
+
+function setDisableAutoMemoryManagementSetting(
+  disabled: boolean,
+): Promise<{ success: boolean }> {
+  return ipcRenderer.invoke("settings:set-disable-auto-memory-management", disabled);
+}
+
 function refreshSettingsFromBackend(): Promise<ConfigResponse<BackendSyncedSettings>> {
   return ipcRenderer.invoke("settings:refresh-from-backend");
 }
@@ -229,6 +240,8 @@ export {
   setUseFastDownloadSetting,
   getAutoUpdateEnabledSetting,
   setAutoUpdateEnabledSetting,
+  getDisableAutoMemoryManagementSetting,
+  setDisableAutoMemoryManagementSetting,
   refreshSettingsFromBackend,
   verifyBackendUrlAndFetchSettings,
   getBackendPathSizes,

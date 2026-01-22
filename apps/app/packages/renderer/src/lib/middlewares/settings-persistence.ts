@@ -16,6 +16,8 @@ import {
   setUseFastDownloadSetting,
   getAutoUpdateEnabledSetting,
   setAutoUpdateEnabledSetting,
+  getDisableAutoMemoryManagementSetting,
+  setDisableAutoMemoryManagementSetting,
 } from "@app/preload";
 import { getBackendApiUrl, setBackendApiUrl } from "@/lib/config";
 
@@ -53,6 +55,9 @@ export type SettingsState = {
   // API auto updates
   autoUpdateEnabled: boolean;
 
+  // Disable ComfyUI-style auto memory manager hooks
+  disableAutoMemoryManagement: boolean;
+
   // Actions
   hydrate: () => Promise<void>;
   setCachePath: (value: string | null) => Promise<void>;
@@ -69,6 +74,7 @@ export type SettingsState = {
   setRenderVideoSteps: (enabled: boolean) => Promise<void>;
   setUseFastDownload: (enabled: boolean) => Promise<void>;
   setAutoUpdateEnabled: (enabled: boolean) => Promise<void>;
+  setDisableAutoMemoryManagement: (disabled: boolean) => Promise<void>;
 };
 
 export const withSettingsPersistence =
@@ -93,6 +99,7 @@ export const withSettingsPersistence =
           renderVideoSteps,
           useFastDownload,
           autoUpdateEnabled,
+          disableAutoMemoryManagement,
         ] = await Promise.all([
           getAllPathsSetting().catch(() => ({} as any)),
           getHfTokenSetting().catch(() => null),
@@ -103,6 +110,7 @@ export const withSettingsPersistence =
           getRenderVideoStepsSetting().catch(() => false),
           getUseFastDownloadSetting().catch(() => true),
           getAutoUpdateEnabledSetting().catch(() => true),
+          getDisableAutoMemoryManagementSetting().catch(() => false),
         ]);
 
         const backendUrl =
@@ -125,6 +133,7 @@ export const withSettingsPersistence =
           renderVideoSteps: Boolean(renderVideoSteps),
           useFastDownload: Boolean(useFastDownload),
           autoUpdateEnabled: Boolean(autoUpdateEnabled),
+          disableAutoMemoryManagement: Boolean(disableAutoMemoryManagement),
           initialized: true,
           initializing: false,
           error: null,
@@ -227,6 +236,11 @@ export const withSettingsPersistence =
         const v = Boolean(enabled);
         set({ autoUpdateEnabled: v } as Partial<T>);
         void setAutoUpdateEnabledSetting(v).catch(() => undefined);
+      },
+      setDisableAutoMemoryManagement: async (disabled: boolean) => {
+        const v = Boolean(disabled);
+        set({ disableAutoMemoryManagement: v } as Partial<T>);
+        void setDisableAutoMemoryManagementSetting(v).catch(() => undefined);
       },
     } as T;
 

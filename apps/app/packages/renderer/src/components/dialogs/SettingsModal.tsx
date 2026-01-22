@@ -90,6 +90,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     renderVideoSteps: renderVideoStepsGlobal,
     useFastDownload: useFastDownloadGlobal,
     autoUpdateEnabled: autoUpdateEnabledGlobal,
+    disableAutoMemoryManagement: disableAutoMemoryManagementGlobal,
     maskModel: maskModelGlobal,
     setMaskModel: setMaskModelGlobal,
     setCachePath: setCachePathGlobal,
@@ -105,6 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRenderVideoSteps: setRenderVideoStepsGlobal,
     setUseFastDownload: setUseFastDownloadGlobal,
     setAutoUpdateEnabled: setAutoUpdateEnabledGlobal,
+    setDisableAutoMemoryManagement: setDisableAutoMemoryManagementGlobal,
   } = useSettingsStore();
 
   const controlsFps = useControlsStore((s) => s.fps);
@@ -150,6 +152,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [renderVideoSteps, setRenderVideoSteps] = useState<boolean>(false);
   const [useFastDownload, setUseFastDownload] = useState<boolean>(true);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
+  const [disableAutoMemoryManagement, setDisableAutoMemoryManagement] =
+    useState<boolean>(false);
   const [isBackendRemote, setIsBackendRemote] = useState<boolean>(false);
   const queryClient = useQueryClient();
 
@@ -350,6 +354,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRenderVideoSteps(Boolean(renderVideoStepsGlobal));
     setUseFastDownload(Boolean(useFastDownloadGlobal));
     setAutoUpdateEnabled(Boolean(autoUpdateEnabledGlobal));
+    setDisableAutoMemoryManagement(Boolean(disableAutoMemoryManagementGlobal));
 
     // Refresh size labels for remote backends; local sizes are handled via getFolderSize effect.
     if (isBackendRemote) {
@@ -418,6 +423,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setRenderVideoSteps(Boolean(res.data.renderVideoSteps));
       setUseFastDownload(Boolean(res.data.useFastDownload));
       setAutoUpdateEnabled(Boolean(res.data.autoUpdateEnabled));
+      setDisableAutoMemoryManagement(Boolean(res.data.disableAutoMemoryManagement));
 
 
       await queryClient.invalidateQueries({
@@ -481,6 +487,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRenderVideoSteps(Boolean(renderVideoStepsGlobal));
     setUseFastDownload(Boolean(useFastDownloadGlobal));
     setAutoUpdateEnabled(Boolean(autoUpdateEnabledGlobal));
+    setDisableAutoMemoryManagement(Boolean(disableAutoMemoryManagementGlobal));
   }, [
     open,
     cachePathGlobal,
@@ -497,6 +504,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     renderVideoStepsGlobal,
     useFastDownloadGlobal,
     autoUpdateEnabledGlobal,
+    disableAutoMemoryManagementGlobal,
   ]);
 
   useEffect(() => {
@@ -1103,6 +1111,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
 
+              <div className="flex items-start justify-between gap-3 rounded-lg border border-brand-light/10 bg-brand-light/5 p-3">
+                <label
+                  htmlFor="disable-auto-memory-management"
+                  className={fieldLabelClass + " flex-1 cursor-pointer"}
+                >
+                  <span>Disable auto memory management</span>
+                  <span className="text-[10px] text-brand-light/60 font-normal">
+                    Disables the Component Memory Manager hooks and offloads everything to by default.
+                  </span>
+                </label>
+                <Checkbox
+                  id="disable-auto-memory-management"
+                  checked={disableAutoMemoryManagement}
+                  onCheckedChange={(checked) =>
+                    setDisableAutoMemoryManagement(Boolean(checked))
+                  }
+                  className="mt-1"
+                />
+              </div>
+
               <div className="flex flex-col gap-3">
                 <div className="text-[11px] text-brand-light/80 font-medium">
                   Model load reservation
@@ -1647,6 +1675,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               void setRenderVideoStepsGlobal(renderVideoSteps);
               void setUseFastDownloadGlobal(useFastDownload);
               void setAutoUpdateEnabledGlobal(autoUpdateEnabled);
+              void setDisableAutoMemoryManagementGlobal(disableAutoMemoryManagement);
               onOpenChange(false);
             }}
           >
