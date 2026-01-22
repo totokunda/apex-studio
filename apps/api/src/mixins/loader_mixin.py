@@ -27,7 +27,10 @@ from src.types import InputImage, InputVideo, InputAudio
 import types
 import numpy as np
 import mmap
-import pillow_avif
+try:
+    import pillow_avif
+except ImportError:
+    pass
 
 class _LazyModule(types.ModuleType):
     """
