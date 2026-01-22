@@ -1,0 +1,22 @@
+proc_side: 256
+
+stride_train: 32
+stride_test: 32
+centered_stride: true
+
+# Model
+efficientnet_size: s
+backbone: efficientnetv2-s
+backbone_link_dim: 512
+field_hidden_size: 384
+field_hidden_layers: 1
+field_posenc_dim: 1024
+depth: 8
+box_size_m: 2.2
+
+uncert_bias: 0.0
+uncert_bias2: 0.001
+fix_uncert_factor: false
+
+weak_perspective: false
+mix_3d_inside_fov: 0.5

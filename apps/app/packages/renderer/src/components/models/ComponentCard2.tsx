@@ -29,7 +29,6 @@ import {
   LuTrash,
   LuLoader,
   LuPlus,
-  LuX,
 } from "react-icons/lu";
 
 import {

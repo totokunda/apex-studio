@@ -1,0 +1,56 @@
+category: Face and Pose
+class: MediapipeFaceDetector
+description: Real-time 3D face mesh detection with 468 facial landmarks using Google's
+  MediaPipe framework. Tracks detailed facial features including eyes, eyebrows, nose,
+  lips, and face contour. Optimized for speed and works well even on mobile devices.
+  Perfect for AR filters, facial animation, and expression analysis.
+module: src.preprocess.mediapipe_face
+name: MediaPipe Face
+parameters:
+- default: 1
+  description: 'The maximum number of faces to detect in the image. Detecting more
+    faces requires additional processing time. Range: 1-10 faces.'
+  display_name: Maximum Faces
+  max: 10
+  min: 1
+  name: max_faces
+  type: int
+- default: 0.5
+  description: The minimum confidence threshold for face detection (0.0 to 1.0). Higher
+    values reduce false positives but may miss less clear faces. Lower values detect
+    more faces but may include false detections.
+  display_name: Minimum Confidence
+  max: 1.0
+  min: 0.0
+  name: min_confidence
+  type: float
+- default: 512
+  description: The resolution used for detection and inference. Higher resolutions
+    provide more detail but require more processing time and memory.
+  display_name: Detection Resolution
+  name: detect_resolution
+  options:
+  - name: Standard
+    value: 512
+  - name: High Definition
+    value: 1024
+  - name: Current Image
+    value: 0
+  type: category
+- default: INTER_CUBIC
+  description: The interpolation method used when resizing images. Bicubic and Lanczos
+    provide smoother results, while Nearest Neighbor preserves sharp edges.
+  display_name: Upscale Method
+  name: upscale_method
+  options:
+  - name: Nearest Neighbor
+    value: INTER_NEAREST
+  - name: Linear
+    value: INTER_LINEAR
+  - name: Cubic
+    value: INTER_CUBIC
+  - name: Lanczos
+    value: INTER_LANCZOS4
+  type: category
+supports_image: true
+supports_video: true

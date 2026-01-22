@@ -1,0 +1,487 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: seedvr2-7b
+  model: seedvr2
+  name: SeedVR2 7B
+  version: 1.0.0
+  description: SeedVR2 7B is an upscaler model for video and image upscaling that
+    uses a 7B VAE.
+  tags:
+  - seedvr2
+  - upscaler
+  - 7b
+  author: SeedVR
+  license: Apache-2.0
+  demo_path: models/seedvr2-7b.png
+  categories:
+  - upscale
+spec:
+  engine: seedvr
+  model_type: upscale
+  engine_type: torch
+  denoise_type: base
+  default_duration_secs: 5.0
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - flash_varlen
+  - metal_flash_varlen
+  - sdpa_varlen
+  fps: 24
+  components:
+  - type: vae
+    name: seedvr2/vae
+    label: SeedVR2 VAE
+    base: seedvr
+    model_path:
+    - path: ByteDance-Seed/SeedVR2-7B/ema_vae.pth
+      variant: default
+      precision: fp16
+      type: pth
+      file_size: 1002691902
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    config:
+      act_fn: silu
+      block_out_channels:
+      - 128
+      - 256
+      - 512
+      - 512
+      down_block_types:
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      - DownEncoderBlock3D
+      in_channels: 3
+      latent_channels: 16
+      scaling_factor: 0.9152
+      layers_per_block: 2
+      norm_num_groups: 32
+      out_channels: 3
+      slicing_sample_min_size: 4
+      temporal_scale_num: 2
+      inflation_mode: pad
+      up_block_types:
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      - UpDecoderBlock3D
+      spatial_downsample_factor: 8
+      temporal_downsample_factor: 4
+      use_quant_conv: false
+      use_post_quant_conv: false
+      freeze_encoder: false
+  - type: transformer
+    base: seedvr.base
+    label: SeedVR2 Transformer
+    model_path:
+    - path: ByteDance-Seed/SeedVR2-7B/seedvr2_ema_7b_sharp.pth
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 32958774606
+      resource_requirements:
+        min_vram_gb: 29
+        recommended_vram_gb: 39
+    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 8835170080
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 6860439328
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q5_K_M.gguf
+      variant: GGUF_Q5_K_M
+      precision: q5_k_m
+      type: gguf
+      file_size: 5777522464
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q4_K_M.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+      file_size: 4758306592
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_7b_sharp-Q3_K_M.gguf
+      variant: GGUF_Q3_K_M
+      precision: q3_k_m
+      type: gguf
+      file_size: 3675389728
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+    config:
+      vid_in_channels: 33
+      vid_out_channels: 16
+      vid_dim: 3072
+      vid_out_norm: rms
+      txt_in_dim: 5120
+      txt_in_norm: layer
+      txt_dim: 3072
+      emb_dim: 18432
+      heads: 24
+      head_dim: 128
+      expand_ratio: 4
+      qk_rope: true
+      norm: rms
+      norm_eps: 1.0e-06
+      ada: single
+      qk_bias: false
+      qk_norm: rms
+      patch_size:
+      - 1
+      - 2
+      - 2
+      num_layers: 36
+      mlp_type: normal
+  defaults:
+    run:
+      num_inference_steps: 1
+      cfg_scale: 1
+      cond_noise_scale: 0.1
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: input
+      label: Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+        - - image
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - height
+        - - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - cfg_scale
+        - - cfg_rescale
+        - - cond_noise_scale
+        - - color_fix
+        - - seed
+    - name: vae_settings
+      label: VAE Settings
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - vae_conv_max_mem
+        - - vae_norm_max_mem
+        - - vae_split_size
+        - - vae_memory_device
+        - - vae_tiling
+        - - vae_tile_size_height
+        - - vae_tile_size_width
+        - - vae_tile_overlap_height
+        - - vae_tile_overlap_width
+    - name: chunking
+      label: Chunking
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - use_chunking
+        - - chunk_frames
+        - - chunk_overlap
+    inputs:
+    - id: video
+      label: Video
+      description: The input video to upscale.
+      type: video
+      panel: input
+      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: image
+      label: Image
+      description: The input image to upscale.
+      type: image
+      panel: input
+      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: resolution
+      label: Resolution
+      description: The resolution of the output video.
+      type: select
+      panel: input
+      required: false
+      default: 720
+      options:
+      - name: 720p
+        value: 720
+      - name: 1080p
+        value: 1080
+      - name: 1920p
+        value: 1920
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: height
+      label: Height
+      description: The height of the output video.
+      type: number
+      value_type: integer
+      panel: input
+      required: false
+      default: 720
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: The width of the output video.
+      type: number
+      value_type: integer
+      panel: input
+      required: false
+      default: 1280
+      min: 256
+      max: 8192
+      step: 16
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 1
+      min: 1
+      max: 100
+      step: 1
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: color_fix
+      label: Use Color Fix
+      description: Use color fix for the upscaling.
+      type: boolean
+      panel: sampling
+      required: false
+      default: false
+    - id: cfg_scale
+      label: CFG Scale
+      description: CFG scale for the upscaling
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 10.0
+      step: 0.5
+    - id: cfg_rescale
+      label: CFG Rescale
+      description: CFG rescale for the upscaling
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.0
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: cond_noise_scale
+      label: Condition Noise Scale
+      description: Noise scale for conditioning latent
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 0.1
+      min: 0.0
+      max: 0.5
+      step: 0.05
+    - id: vae_conv_max_mem
+      label: VAE Conv Max Mem
+      description: VAE conv max mem for the upscaling
+      type: number+slider
+      value_type: float
+      panel: vae_settings
+      required: false
+      default: 0.5
+      min: 0.0
+      max: 1.0
+      step: 0.05
+    - id: vae_norm_max_mem
+      label: VAE Norm Max Mem
+      description: VAE norm max mem for the upscaling
+      type: number+slider
+      value_type: float
+      panel: vae_settings
+      required: false
+      default: 0.5
+      min: 0.0
+      max: 1.0
+      step: 0.05
+    - id: vae_split_size
+      label: VAE Split Size
+      description: VAE split size for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 4
+      min: 1
+      max: 16
+      step: 1
+    - id: vae_memory_device
+      label: VAE Memory Device
+      description: VAE memory device for the upscaling
+      type: select
+      panel: vae_settings
+      required: false
+      default: same
+      options:
+      - name: Same
+        value: same
+      - name: CPU
+        value: cpu
+    - id: use_chunking
+      label: Use Chunking
+      description: Use chunking for the upscaling
+      type: boolean
+      panel: chunking
+      required: false
+      default: false
+    - id: chunk_frames
+      label: Chunk Frames
+      description: Chunk frames for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      required: false
+      default: 33
+      min: 1
+      step: 1
+    - id: chunk_overlap
+      label: Chunk Overlap
+      description: Chunk overlap for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      required: false
+      default: 8
+      min: 1
+      step: 1
+    - id: vae_tiling
+      label: VAE Tiling
+      description: Use tiling for the upscaling
+      type: boolean
+      panel: vae_settings
+      required: false
+      default: false
+    - id: vae_tile_size_height
+      label: VAE Tile Size Height
+      description: VAE tile size height for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 512
+      min: 256
+      max: 8192
+      step: 16
+    - id: vae_tile_size_width
+      label: VAE Tile Size Width
+      description: VAE tile size width for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 512
+      min: 256
+      max: 8192
+      step: 16
+    - id: vae_tile_overlap_height
+      label: VAE Tile Overlap Height
+      description: VAE tile overlap height for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 64
+      min: 1
+      step: 1
+    - id: vae_tile_overlap_width
+      label: VAE Tile Overlap Width
+      description: VAE tile overlap width for the upscaling
+      type: number+slider
+      value_type: integer
+      panel: vae_settings
+      required: false
+      default: 64
+      min: 1
+      step: 1
