@@ -6,7 +6,13 @@ import mimetypes
 import hashlib
 import stat
 
-from src.utils.defaults import get_cache_path, get_components_path
+from src.utils.defaults import (
+    get_cache_path,
+    get_components_path,
+    get_engine_results_path,
+    get_preprocessor_results_path,
+    get_postprocessor_results_path,
+)
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -85,7 +91,16 @@ def _is_valid_sha256_hex(s: str) -> bool:
 def get_file(request: Request, scope: str, path: str):
     base = _base_for_scope(scope)
     target = _safe_join(base, path)
+    return _serve_path(request, target)
 
+def _serve_path(request: Request, target: Path) -> TunedFileResponse | Response:
+    """
+    Serve a local file efficiently with:
+    - large chunk streaming (TunedFileResponse.chunk_size)
+    - Range support (Starlette FileResponse)
+    - ETag / If-None-Match (304)
+    - If-Range semantics (RFC 7233)
+    """
     try:
         stat_result = target.stat()
     except OSError:
@@ -117,9 +132,10 @@ def get_file(request: Request, scope: str, path: str):
     if not content_type:
         content_type = "application/octet-stream"
 
+    # IMPORTANT: Default to 200 for full responses. Starlette will emit 206 only when a Range
+    # header is present and satisfiable. Forcing 206 breaks clients that only persist 200s.
     return TunedFileResponse(
         path=target,
-        status_code=206,
         stat_result=stat_result,
         media_type=content_type,
         headers={
@@ -128,6 +144,38 @@ def get_file(request: Request, scope: str, path: str):
             "ETag": etag,
         },
     )
+
+
+def _results_base(kind: str) -> Path:
+    k = (kind or "").strip().lower()
+    if k == "engine_results":
+        return Path(get_engine_results_path()).expanduser().resolve()
+    if k == "preprocessor_results":
+        return Path(get_preprocessor_results_path()).expanduser().resolve()
+    if k == "postprocessor_results":
+        return Path(get_postprocessor_results_path()).expanduser().resolve()
+    raise HTTPException(status_code=400, detail="Invalid results kind")
+
+
+@router.get("/engine_results/{path:path}")
+def get_engine_result_file(request: Request, path: str):
+    base = _results_base("engine_results")
+    target = _safe_join(base, path)
+    return _serve_path(request, target)
+
+
+@router.get("/preprocessor_results/{path:path}")
+def get_preprocessor_result_file(request: Request, path: str):
+    base = _results_base("preprocessor_results")
+    target = _safe_join(base, path)
+    return _serve_path(request, target)
+
+
+@router.get("/postprocessor_results/{path:path}")
+def get_postprocessor_result_file(request: Request, path: str):
+    base = _results_base("postprocessor_results")
+    target = _safe_join(base, path)
+    return _serve_path(request, target)
 
 
 @router.get("/exists")

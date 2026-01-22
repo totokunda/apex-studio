@@ -18,7 +18,7 @@ import { useEngineJobClipSync } from "@/hooks/use-engine-job-clip-sync";
 import { useDownloadJobClipSync } from "@/hooks/use-download-job-clip-sync";
 import { usePreprocessorJobClipSync } from "@/hooks/use-preprocessor-job-clip-sync";
 
-const POLL_MS = 2000;
+const POLL_MS = 1000;
 const RAY_JOBS_QUERY_KEY = ["rayJobs"] as const;
 
 type TrackedJob = RayJobStatus & {
@@ -32,10 +32,34 @@ const statusLabel = (status: string | undefined): string => {
   const s = status.toLowerCase();
   if (s === "queued") return "Queued";
   if (s === "running" || s === "processing") return "Running";
+  if (s === "preview") return "Running";
   if (s === "complete" || s === "completed") return "Completed";
   if (s === "error" || s === "failed") return "Error";
   if (s === "cancelled" || s === "canceled") return "Cancelled";
   return status;
+};
+
+const jobStatusRank = (status?: string): number => {
+  const s = (status || "").toLowerCase();
+  if (!s) return 0;
+  if (s === "queued") return 0;
+  if (s === "running" || s === "processing" || s === "preview") return 1;
+  if (s === "complete" || s === "completed") return 2;
+  if (s === "cancelled" || s === "canceled") return 2;
+  if (s === "error" || s === "failed") return 2;
+  return 1; // unknown: treat as active
+};
+
+const mergeJobStatus = (
+  existingStatus: string | undefined,
+  incomingStatus: string | undefined,
+): string => {
+  if (!existingStatus && !incomingStatus) return "unknown";
+  if (!existingStatus) return incomingStatus || "unknown";
+  if (!incomingStatus) return existingStatus || "unknown";
+  return jobStatusRank(incomingStatus) >= jobStatusRank(existingStatus)
+    ? incomingStatus
+    : existingStatus;
 };
 
 const JobsMenu: React.FC = () => {
@@ -43,14 +67,15 @@ const JobsMenu: React.FC = () => {
   const [jobsById, setJobsById] = useState<Record<string, TrackedJob>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const { updateClip, addAssetAsync,  updatePreprocessor } = useClipStore();
+  const clips = useClipStore((s) => s.clips);
   const { fps } = useControlsStore();
   // Poll aggregated Ray jobs
   const { data: polledJobs = [] } = useQuery<RayJobStatus[]>({
     queryKey: RAY_JOBS_QUERY_KEY,
     queryFn: fetchRayJobs,
     placeholderData: (prev) => prev ?? [],
-    retry: false,
-    refetchOnWindowFocus: false,
+    retry: true,
+    refetchOnWindowFocus: true,
     refetchInterval: POLL_MS,
     refetchIntervalInBackground: true,
   });
@@ -75,12 +100,42 @@ const JobsMenu: React.FC = () => {
             : null) ??
           (typeof existing?.progress === "number" ? existing.progress : null);
 
+        const status = mergeJobStatus(existing?.status, job.status);
+        const message = job.message ?? existing?.message;
+        const latestMessage =
+          latest && typeof (latest as any).message === "string"
+            ? (latest as any).message
+            : null;
+        const latestStatus =
+          latest && typeof (latest as any).status === "string"
+            ? (latest as any).status
+            : null;
+
+        const hasMeaningfulChange =
+          !existing ||
+          status !== existing.status ||
+          message !== existing.message ||
+          job.error !== existing.error ||
+          rawProgress !== existing.progress ||
+          latestMessage !==
+            (existing.latest &&
+            typeof (existing.latest as any).message === "string"
+              ? (existing.latest as any).message
+              : null) ||
+          latestStatus !==
+            (existing.latest &&
+            typeof (existing.latest as any).status === "string"
+              ? (existing.latest as any).status
+              : null);
+
         next[id] = {
           ...(existing || {}),
           ...job,
+          status,
+          message,
           latest,
           progress: rawProgress,
-          updatedAt: existing?.updatedAt ?? now,
+          updatedAt: hasMeaningfulChange ? now : (existing?.updatedAt ?? now),
         };
       }
 
@@ -93,7 +148,8 @@ const JobsMenu: React.FC = () => {
             s === "completed" ||
             s === "cancelled" ||
             s === "canceled" ||
-            s === "error") &&
+            s === "error" ||
+            s === "failed") &&
           j.updatedAt < cutoffMs
         ) {
           delete next[id];
@@ -208,13 +264,25 @@ const JobsMenu: React.FC = () => {
   }, [updateClip]);
 
   const activeJobs = useMemo(() => {
-    const all = [...polledJobs].map((j) => ({
-      ...j,
-      updatedAt: Date.now(),
-    }));
+    const all = Object.values(jobsById);
     return all
       .filter((j) => {
         const s = (j.status || "").toLowerCase();
+        const cat = String(j.category || "").toLowerCase();
+
+        // Keep engine jobs visible until the clip has actually finalized (activeJobId cleared),
+        // even if the engine already reports "complete".
+        if ((s === "complete" || s === "completed") && cat === "engine") {
+          const stillReferenced =
+            Array.isArray(clips) &&
+            clips.some(
+              (c: any) =>
+                c?.type === "model" &&
+                (c as ModelClipProps).activeJobId === j.job_id,
+            );
+          if (stillReferenced) return true;
+        }
+
         // Consider any non-terminal job as active (includes queued + running/processing)
         return ![
           "complete",
@@ -222,10 +290,11 @@ const JobsMenu: React.FC = () => {
           "cancelled",
           "canceled",
           "error",
+          "failed",
         ].includes(s);
       })
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [polledJobs]);
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }, [jobsById, clips]);
 
   const activeCount = activeJobs.length;
 
@@ -288,7 +357,7 @@ const JobsMenu: React.FC = () => {
   const renderJobRow = (job: TrackedJob) => {
     const showProgress = (() => {
       const s = (job.status || "").toLowerCase();
-      return s === "running" || s === "processing";
+      return s === "running" || s === "processing" || s === "preview";
     })();
     const pct = showProgress
       ? Math.round(
@@ -409,7 +478,7 @@ const JobsMenu: React.FC = () => {
           </div>
         )}
         <div className="mt-2 text-[10px] text-brand-light/40 flex items-center justify-between">
-          <span>Updates every 2s</span>
+          <span>Updates every 1s</span>
         </div>
       </PopoverContent>
     </Popover>
