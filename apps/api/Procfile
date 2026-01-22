@@ -1,1 +1,5 @@
-api: uvicorn src.api.main:app --host 127.0.0.1 --port 8765 --workers 1 --proxy-headers --forwarded-allow-ips="*" --timeout-keep-alive 60 --log-level info --loop auto --http auto
+<<<<<<< Updated upstream
+api: uvicorn src.api.main:app --host 127.0.0.1 --port 8678 --workers 1 --proxy-headers --forwarded-allow-ips="*" --timeout-keep-alive 5 --log-level info
+=======
+api: uvicorn src.api.main:app --host 127.0.0.1 --port 8778 --workers 4 --proxy-headers --forwarded-allow-ips="*" --timeout-keep-alive 5 --log-level info
+>>>>>>> Stashed changes

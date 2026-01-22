@@ -83,9 +83,7 @@ turbojpeg==0.0.2
 typer==0.21.0
 typing_extensions==4.15.0
 ujson==5.10.0
-httptools==0.7.1
 uvicorn==0.35.0
-uvloop==0.22.1; sys_platform != "win32"
 urllib3==2.6.2
 webcolors==25.10.0
 websocket_client==1.8.0
