@@ -793,7 +793,7 @@ const Launcher: React.FC = () => {
           <span className="text-[12.5px] font-medium">Create</span>
         </button>
       </div>
-      <div className="absolute bottom-0 left-0 right-0 px-12 py-6 border-t bg-brand-background-dark border-brand-light/10 flex items-center justify-between">
+      <div className="absolute bottom-0 left-0 right-0 px-12 py-6 border-t z-50 bg-brand-background-dark border-brand-light/10 flex items-center justify-between">
         <button
           type="button"
           onClick={() => {
@@ -818,7 +818,7 @@ const Launcher: React.FC = () => {
           </span>
         </button>
       </div>
-      <div className="px-12 py-4 flex-1 overflow-y-auto">
+      <div className="px-12 py-4 pb-28 flex-1 overflow-y-auto custom-scrollbar">
         {projects.length === 0 ? (
           <div className="w-full h-full flex items-center justify-center">
             <div className="text-brand-light/60 text-sm">
