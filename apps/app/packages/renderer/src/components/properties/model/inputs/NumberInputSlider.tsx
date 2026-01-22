@@ -170,10 +170,10 @@ const NumberInputSlider: React.FC<NumberInputSliderProps> = ({
                 disabled && "opacity-50 cursor-not-allowed",
               )}
               value={
-                renderInput
-                  ? renderInput(tempValue)
-                  : isFocused
-                    ? tempValue
+                isFocused
+                  ? tempValue
+                  : renderInput
+                    ? renderInput(tempValue)
                     : tempValue + (suffix || "")
               }
               onChange={(e) => setTempValue(e.target.value)}
