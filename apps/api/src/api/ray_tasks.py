@@ -273,6 +273,8 @@ _MEM_ENV_KEYS = [
     "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION",
     "APEX_DISABLE_WARM_WEIGHTS",
     "APEX_FORCE_DISK_ONLY",
+    # When true, disables ComfyUI-style ComponentMemoryManager hooks/wrappers.
+    "APEX_DISABLE_AUTO_MEMORY_MANAGEMENT",
 ]
 
 
@@ -900,6 +902,7 @@ def _engine_pool_key(
     engine_kwargs: Dict[str, Any],
     attention_type: Any,
     auto_memory_management: Any,
+    disable_auto_memory_management: Any,
 ) -> str:
     # Include a manifest fingerprint so edits (e.g. changing LoRAs) don't reuse a stale engine.
     try:
@@ -918,6 +921,7 @@ def _engine_pool_key(
         "engine_kwargs": engine_kwargs or {},
         "attention_type": str(attention_type) if attention_type is not None else None,
         "auto_memory_management": bool(auto_memory_management),
+        "disable_auto_memory_management": bool(disable_auto_memory_management),
     }
     h = stable_hash_dict(payload)
     return f"{payload['engine_type']}/{payload['model_type']}:{h}"
@@ -992,6 +996,7 @@ def _warmup_engine_from_manifest_impl(
                 return default
 
         auto_mm = _bool_env("AUTO_MEMORY_MANAGEMENT", False)
+        disable_auto_mm = _env_flag("APEX_DISABLE_AUTO_MEMORY_MANAGEMENT", default=False)
 
         engine_kwargs = config.get("engine_kwargs", {}) or {}
         input_kwargs = {
@@ -1027,6 +1032,7 @@ def _warmup_engine_from_manifest_impl(
                 engine_kwargs=engine_kwargs,
                 attention_type=attention_type,
                 auto_memory_management=auto_mm,
+                disable_auto_memory_management=disable_auto_mm,
             )
 
             def _factory():
@@ -2730,6 +2736,9 @@ def _run_engine_from_manifest_impl(
             engine_kwargs=(config.get("engine_kwargs", {}) or {}),
             attention_type=attention_type,
             auto_memory_management=_bool_env("AUTO_MEMORY_MANAGEMENT", False),
+            disable_auto_memory_management=_env_flag(
+                "APEX_DISABLE_AUTO_MEMORY_MANAGEMENT", default=False
+            ),
         )
 
         def _factory():
