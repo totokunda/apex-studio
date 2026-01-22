@@ -70,10 +70,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 16381551490
+      file_size: 8045016597
       resource_requirements:
-        min_vram_gb: 19
-        recommended_vram_gb: 26
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: black-forest-labs/FLUX.2-klein-4B
     tokenizer_kwargs:
@@ -105,16 +105,16 @@ spec:
       type: gguf
       file_size: 7751115328
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-F16.gguf
       variant: GGUF_F16
       precision: f16
       type: gguf
       file_size: 7751115328
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: unsloth/FLUX.2-klein-base-4B-GGUF/flux-2-klein-base-4b-Q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
@@ -201,16 +201,16 @@ spec:
       type: gguf
       file_size: 7751115328
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-F16.gguf
       variant: GGUF_F16_DISTILLED
       precision: f16
       type: gguf
       file_size: 7751115328
       resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q8_0.gguf
       variant: GGUF_Q8_0_DISTILLED
       precision: q8_0

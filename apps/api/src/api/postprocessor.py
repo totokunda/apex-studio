@@ -12,7 +12,7 @@ from loguru import logger
 
 from .ray_tasks import run_frame_interpolation
 from .ray_resources import get_best_gpu, get_ray_resources
-from .job_store import register_job
+from .job_store import submit_tracked_job
 from .ws_manager import get_ray_ws_bridge
 from .engine_resource_guard import maybe_release_warm_engine_for_non_engine_request
 
@@ -66,24 +66,22 @@ def frame_interpolate(request: FrameInterpolateRequest):
             f"Submitting RIFE frame interpolation for {input_path} -> {request.target_fps} fps with resources {resources}"
         )
 
-        task_ref = run_frame_interpolation.options(**resources).remote(
-            str(input_path),
-            float(request.target_fps),
-            job_id,
-            bridge,
-            request.exp,
-            request.scale if request.scale is not None else 1.0,
-        )
-
-        register_job(
-            job_id,
-            task_ref,
-            "postprocessor",
-            {
+        task_ref = submit_tracked_job(
+            job_id=job_id,
+            job_type="postprocessor",
+            meta={
                 "method": "frame-interpolate",
                 "input_path": str(input_path),
                 "target_fps": float(request.target_fps),
             },
+            submit=lambda: run_frame_interpolation.options(**resources).remote(
+                str(input_path),
+                float(request.target_fps),
+                job_id,
+                bridge,
+                request.exp,
+                request.scale if request.scale is not None else 1.0,
+            ),
         )
 
         return JobResponse(

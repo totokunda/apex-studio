@@ -21,15 +21,16 @@ def _has_incomplete_engine_jobs() -> bool:
 
         from .job_store import job_store
 
-        # Best-effort: job_store is in-memory; it's fine to read its private map here.
-        jobs = getattr(job_store, "_jobs", {}) or {}
-        for _job_id, data in jobs.items():
+        # The unified job store is backed by a Ray actor; inspect jobs via its public API.
+        for _job_id in list(job_store.all_job_ids()):
             try:
+                data = job_store.get(_job_id) or {}
                 if (data or {}).get("type") not in _ENGINE_JOB_TYPES:
                     continue
                 ref = (data or {}).get("ref")
+                # Conservative: if a job exists but has no ref yet, treat as incomplete.
                 if ref is None:
-                    continue
+                    return True
                 ready, _ = ray.wait([ref], timeout=0)
                 if not ready:
                     return True

@@ -9,7 +9,7 @@ import ray
 from loguru import logger
 from src.utils.defaults import get_components_path
 from .ws_manager import get_ray_ws_bridge
-from .job_store import register_job, job_store as unified_job_store
+from .job_store import submit_tracked_job, job_store as unified_job_store
 
 router = APIRouter(prefix="/components", tags=["components"])
 
@@ -47,10 +47,11 @@ def start_components_download(request: ComponentsDownloadRequest):
     from .ray_tasks import download_components  # lazy import to avoid circulars
 
     try:
-        ref = download_components.remote(request.paths, job_id, bridge, save_path)
-        # Register in unified store
-        register_job(
-            job_id, ref, "components", {"paths": request.paths, "save_path": save_path}
+        ref = submit_tracked_job(
+            job_id=job_id,
+            job_type="components",
+            meta={"paths": request.paths, "save_path": save_path},
+            submit=lambda: download_components.remote(request.paths, job_id, bridge, save_path),
         )
         # Keep legacy store for compatibility with existing status endpoint
         job_store[job_id] = ref

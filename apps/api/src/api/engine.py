@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from loguru import logger
 
 from .ws_manager import get_ray_ws_bridge
-from .job_store import register_job, job_store
+from .job_store import submit_tracked_job, job_store
 from .ray_resources import get_best_gpu, get_ray_resources
 from .manifest import get_manifest, MANIFEST_BASE_PATH
 
@@ -114,16 +114,19 @@ def run_engine(request: RunEngineRequest):
         runner = get_engine_runner_actor(
             device_index=device_index, device_type=device_type, resources=resources
         )
-        ref = runner.run_engine_from_manifest.remote(
-            manifest_path,
-            job_id,
-            bridge,
-            request.inputs,
-            request.selected_components or {},
-            request.folder_uuid,
+        ref = submit_tracked_job(
+            job_id=job_id,
+            job_type="engine",
+            meta={"manifest_path": manifest_path},
+            submit=lambda: runner.run_engine_from_manifest.remote(
+                manifest_path,
+                job_id,
+                bridge,
+                request.inputs,
+                request.selected_components or {},
+                request.folder_uuid,
+            ),
         )
-
-        register_job(job_id, ref, "engine", {"manifest_path": manifest_path})
         logger.info(
             f"Engine run submitted job_id={job_id} manifest={manifest_path} resources={resources}"
         )
@@ -172,19 +175,26 @@ def warmup_engine(request: WarmupEngineRequest):
 
         if mode == "disk":
             # Disk warmup is CPU-only and doesn't need to go through the GPU actor.
-            ref = warmup_engine_from_manifest.options(**resources).remote(
-                manifest_path, request.selected_components or {}, mode=mode
+            ref = submit_tracked_job(
+                job_id=job_id,
+                job_type="engine_warmup",
+                meta={"manifest_path": manifest_path, "mode": mode},
+                submit=lambda: warmup_engine_from_manifest.options(**resources).remote(
+                    manifest_path, request.selected_components or {}, mode=mode
+                ),
             )
         else:
             runner = get_engine_runner_actor(
                 device_index=device_index, device_type=device_type, resources=resources
             )
-            ref = runner.warmup_engine_from_manifest.remote(
-                manifest_path, request.selected_components or {}, mode=mode
+            ref = submit_tracked_job(
+                job_id=job_id,
+                job_type="engine_warmup",
+                meta={"manifest_path": manifest_path, "mode": mode},
+                submit=lambda: runner.warmup_engine_from_manifest.remote(
+                    manifest_path, request.selected_components or {}, mode=mode
+                ),
             )
-        register_job(
-            job_id, ref, "engine_warmup", {"manifest_path": manifest_path, "mode": mode}
-        )
         return JobResponse(
             job_id=job_id, status="queued", message=f"Warmup queued (mode={mode})"
         )

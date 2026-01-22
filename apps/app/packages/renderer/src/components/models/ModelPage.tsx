@@ -1,5 +1,5 @@
 import { useManifestStore } from "@/lib/manifest/store";
-import React, { useLayoutEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef } from "react";
 import { LuChevronLeft, LuPlus, LuRefreshCw } from "react-icons/lu";
 import { ScrollArea } from "../ui/scroll-area";
 import { useControlsStore } from "@/lib/control";
@@ -10,7 +10,7 @@ import {
   isValidTimelineForClip,
 } from "@/lib/clip";
 import { v4 as uuidv4 } from "uuid";
-import { refreshManifest, useManifestQuery } from "@/lib/manifest/queries";
+import { refreshManifest, refreshManifestPart, useManifestQuery } from "@/lib/manifest/queries";
 import ComponentCard, { LoraCard } from "./ComponentCard2";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -31,6 +31,8 @@ const ModelPage: React.FC<ModelPageProps> = ({
   const [isRefreshingManifest, setIsRefreshingManifest] = React.useState(false);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   if (!manifest) return null;
+
+  
 
   useLayoutEffect(() => {
     if (!scrollCache || !scrollKey) return;
