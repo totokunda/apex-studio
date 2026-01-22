@@ -330,6 +330,7 @@ spec:
         flow: column
         rows:
         - - chunking_profile
+        - - rope_on_cpu
     - name: vae
       label: VAE / Memory
       collapsible: true
@@ -486,6 +487,13 @@ spec:
         value: balanced
       - name: Aggressive
         value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: true
+      required: false
     - id: vae_tiling_enabled
       label: Enable VAE Tiling
       description: Enable tiled VAE encode/decode (recommended).
@@ -535,7 +543,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 8
+      default: 32
       min: 1
       max: 256
       step: 1
@@ -545,7 +553,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 384
+      default: 448
       min: 64
       max: 2048
       step: 64
@@ -555,7 +563,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 384
+      default: 448
       min: 64
       max: 2048
       step: 64
@@ -565,7 +573,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: vae
-      default: 128
+      default: 16
       min: 1
       max: 512
       step: 1

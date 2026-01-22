@@ -423,7 +423,8 @@ class OviModel(ModelMixin, ConfigMixin):
             cache_on_cpu = True
         if not rope_on_cpu and os.getenv("APEX_ROPE_ON_CPU", "0") == "1":
             rope_on_cpu = True
-
+        
+ 
         self.fusion_cache_enabled = True
         self.num_steps = num_steps
         self.thresh = thresh
@@ -514,9 +515,7 @@ class OviModel(ModelMixin, ConfigMixin):
             raise ValueError(
                 "OviModel requires both `vid` and `audio` inputs for fused inference."
             )
-        
-        from src.utils.step_mem import step_mem
-
+   
         # NOTE: we intentionally avoid cloning raw inputs here to keep VRAM low.
         # The diffusion loop should treat inputs as immutable per-step.
         raw_vid_input = vid
