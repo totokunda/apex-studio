@@ -21,6 +21,7 @@ from loguru import logger
 import uuid
 import asyncio
 from .ws_manager import websocket_manager, get_ray_ws_bridge
+from .engine_resource_guard import maybe_release_warm_engine_for_non_engine_request
 
 router = APIRouter(prefix="/preprocessor", tags=["preprocessor"])
 
@@ -251,6 +252,13 @@ def trigger_run(request: RunRequest):
         raise HTTPException(
             status_code=404, detail=f"Input file not found: {request.input_path}"
         )
+
+    # If a warm engine is idling on the GPU, release it so this non-engine job can run.
+    # If an engine job is active/queued, we do nothing (Ray will queue naturally).
+    try:
+        maybe_release_warm_engine_for_non_engine_request()
+    except Exception:
+        pass
 
     # Get best GPU for the task
     device_index, device_type = get_best_gpu()
