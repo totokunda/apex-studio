@@ -34,7 +34,7 @@ def create_procfile(procfile: Path, mode="dev"):
     # Ray manages workers internally, so we only need the API server
     host = os.getenv("APEX_HOST", "127.0.0.1")
     port = os.getenv("APEX_PORT", "8765")
-    workers = os.getenv("APEX_UVICORN_WORKERS", "4")
+    workers = os.getenv("APEX_UVICORN_WORKERS", "1")
     loglevel = os.getenv("APEX_LOG_LEVEL", "info")
     if mode == "dev":
         # Default to loopback so the desktop app can connect without extra config.
