@@ -16,6 +16,50 @@ class LTX2TI2VEngine(LTX2Shared):
     def __init__(self, yaml_path: str, **kwargs):
         super().__init__(yaml_path, **kwargs)
 
+    @staticmethod
+    def _timesteps_from_denoise_mask_tokens(
+        *,
+        timestep: torch.Tensor,
+        denoise_mask_tokens: Optional[torch.Tensor],
+        frames: int,
+        atol: float = 1e-6,
+    ) -> torch.Tensor:
+        """
+        Wan2GP-style timestep computation to avoid per-token timesteps on long sequences.
+
+        If the denoise mask is constant within each temporal "frame group" (i.e. all spatial tokens for a given
+        temporal patch share the same mask value), we return per-frame timesteps shaped `[B, F]`:
+
+            timesteps[b, f] = timestep[b] * frame_mask[b, f]
+
+        Otherwise, we fall back to per-token masked timesteps shaped `[B, S]`:
+
+            timesteps[b, s] = timestep[b] * token_mask[b, s]
+        """
+        if denoise_mask_tokens is None:
+            return timestep
+
+        token_mask = denoise_mask_tokens
+        if token_mask.ndim > 2:
+            # Match the existing ltx-core-ish behavior where extra dims are reduced.
+            token_mask = token_mask.mean(dim=-1)
+        if token_mask.ndim != 2:
+            # Unexpected shape; safest fallback.
+            return timestep.unsqueeze(-1) * token_mask
+
+        bsz, tokens = int(token_mask.shape[0]), int(token_mask.shape[1])
+        if frames <= 0 or tokens <= 0 or (tokens % int(frames)) != 0:
+            return timestep.unsqueeze(-1) * token_mask
+
+        # Reshape `[B, S] -> [B, F, tokens_per_frame]` and check mask uniformity within each frame.
+        mask_view = token_mask.view(bsz, int(frames), -1)
+        frame_min = mask_view.amin(dim=2)
+        frame_max = mask_view.amax(dim=2)
+        if not torch.allclose(frame_min, frame_max, atol=float(atol)):
+            return timestep.unsqueeze(-1) * token_mask
+
+        return frame_min * timestep.unsqueeze(-1)
+
     def prepare_latents(
         self,
         batch_size: int = 1,
@@ -567,7 +611,8 @@ class LTX2TI2VEngine(LTX2Shared):
         progress_callback: Optional[Callable[[float, str], None]] = None,
         **kwargs,
     ):
-
+        
+   
         # Progress mapping:
         # - If `upsample=True` (stage-1 + stage-2 refinement), map stage-1 to [0.00, 0.90] and stage-2 to [0.90, 1.00]
         #   so progress doesn't "reset" mid-run.
@@ -1093,8 +1138,7 @@ class LTX2TI2VEngine(LTX2Shared):
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
 
-        if chunking_profile != "none":
-            self.transformer.set_chunking_profile(chunking_profile)
+        
 
         if (
             self.preloaded_loras
@@ -1126,6 +1170,15 @@ class LTX2TI2VEngine(LTX2Shared):
             audio_latents.shape[0], audio_num_frames, cpu, fps=fps
         )
 
+        # Wan2GP-style: compute per-*temporal patch* timesteps to avoid allocating huge `[B, tokens]`
+        # timestep embeddings when the token sequence is long.
+        #
+        # This relies on token order being time-major (which matches `_pack_latents` and `prepare_video_coords`).
+        video_timestep_frames = int(latent_num_frames) // int(
+            self.transformer_temporal_patch_size
+        )
+        audio_timestep_frames = int(audio_num_frames)
+
         # 7. Denoising loop
         # NOTE: FlowMatchEulerDiscreteScheduler operates over `scheduler.sigmas` (includes a terminal 0).
         # For gradient estimation we implement the Euler update directly, matching ltx-pipelines:
@@ -1136,6 +1189,10 @@ class LTX2TI2VEngine(LTX2Shared):
         self._latent_width = latent_width
         self._audio_num_frames = audio_num_frames
         self._latent_mel_bins = latent_mel_bins
+        
+        
+        if chunking_profile != "none":
+            self.transformer.set_chunking_profile(chunking_profile)
 
         sigmas_t = getattr(self.scheduler, "sigmas", None)
         if use_gradient_estimation:
@@ -1192,20 +1249,28 @@ class LTX2TI2VEngine(LTX2Shared):
                         latent_model_input = latents.to(prompt_embeds_dtype)
                         audio_latent_model_input = audio_latents.to(prompt_embeds_dtype)
 
-                        timestep_2b = t.expand(2 * bsz)
-                        if denoise_mask_model is not None:
-                            video_timestep_2b = (
-                                timestep_2b.unsqueeze(-1) * denoise_mask_model
+                        timestep_b = t.expand(bsz)
+                        video_timestep_b = (
+                            self._timesteps_from_denoise_mask_tokens(
+                                timestep=timestep_b,
+                                denoise_mask_tokens=denoise_mask,
+                                frames=video_timestep_frames,
                             )
-                        else:
-                            video_timestep_2b = timestep_2b
-
-                        if audio_denoise_mask_model is not None:
-                            audio_timestep_2b = (
-                                timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            if denoise_mask is not None
+                            else timestep_b
+                        )
+                        audio_timestep_b = (
+                            self._timesteps_from_denoise_mask_tokens(
+                                timestep=timestep_b,
+                                denoise_mask_tokens=audio_denoise_mask,
+                                frames=audio_timestep_frames,
                             )
-                        else:
-                            audio_timestep_2b = timestep_2b
+                            if audio_denoise_mask is not None
+                            else timestep_b
+                        )
+                            
+                        
+                        
 
                         with self.transformer.cache_context("cond_uncond"):
                             vel_video_uncond, vel_audio_uncond = self.transformer(
@@ -1217,8 +1282,8 @@ class LTX2TI2VEngine(LTX2Shared):
                                 audio_encoder_hidden_states=connector_audio_prompt_embeds[
                                     uncond_idx
                                 ],
-                                timestep=video_timestep_2b[uncond_idx],
-                                audio_timestep=audio_timestep_2b[uncond_idx],
+                                timestep=video_timestep_b,
+                                audio_timestep=audio_timestep_b,
                                 encoder_attention_mask=connector_attention_mask[
                                     uncond_idx
                                 ],
@@ -1242,8 +1307,8 @@ class LTX2TI2VEngine(LTX2Shared):
                                 audio_encoder_hidden_states=connector_audio_prompt_embeds[
                                     cond_idx
                                 ],
-                                timestep=video_timestep_2b[cond_idx],
-                                audio_timestep=audio_timestep_2b[cond_idx],
+                                timestep=video_timestep_b,
+                                audio_timestep=audio_timestep_b,
                                 encoder_attention_mask=connector_attention_mask[
                                     cond_idx
                                 ],
@@ -1284,20 +1349,42 @@ class LTX2TI2VEngine(LTX2Shared):
                             prompt_embeds_dtype
                         )
 
-                        timestep_2b = t.expand(latent_model_input.shape[0])
-                        if denoise_mask_model is not None:
-                            video_timestep_2b = (
-                                timestep_2b.unsqueeze(-1) * denoise_mask_model
+                        # If CFG is enabled and we run a single 2B forward, coords must match the 2B batch.
+                        video_coords_call = video_coords
+                        audio_coords_call = audio_coords
+                        if (
+                            self.do_classifier_free_guidance
+                            and int(video_coords_call.shape[0]) * 2
+                            == int(latent_model_input.shape[0])
+                        ):
+                            video_coords_call = torch.cat(
+                                [video_coords_call, video_coords_call], dim=0
                             )
-                        else:
-                            video_timestep_2b = timestep_2b
+                            audio_coords_call = torch.cat(
+                                [audio_coords_call, audio_coords_call], dim=0
+                            )
 
-                        if audio_denoise_mask_model is not None:
-                            audio_timestep_2b = (
-                                timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                        timestep_2b = t.expand(latent_model_input.shape[0])
+
+                        video_timestep_2b = (
+                            self._timesteps_from_denoise_mask_tokens(
+                                timestep=timestep_2b,
+                                denoise_mask_tokens=denoise_mask_model,
+                                frames=video_timestep_frames,
                             )
-                        else:
-                            audio_timestep_2b = timestep_2b
+                            if denoise_mask_model is not None
+                            else timestep_2b
+                        )
+
+                        audio_timestep_2b = (
+                            self._timesteps_from_denoise_mask_tokens(
+                                timestep=timestep_2b,
+                                denoise_mask_tokens=audio_denoise_mask_model,
+                                frames=audio_timestep_frames,
+                            )
+                            if audio_denoise_mask_model is not None
+                            else timestep_2b
+                        )
 
                         with self.transformer.cache_context("cond_uncond"):
                             vel_pred_video, vel_pred_audio = self.transformer(
@@ -1314,8 +1401,8 @@ class LTX2TI2VEngine(LTX2Shared):
                                 width=latent_width,
                                 fps=fps,
                                 audio_num_frames=audio_num_frames,
-                                video_coords=video_coords,
-                                audio_coords=audio_coords,
+                                video_coords=video_coords_call,
+                                audio_coords=audio_coords_call,
                                 attention_kwargs=attention_kwargs,
                                 return_dict=False,
                             )
@@ -1544,20 +1631,28 @@ class LTX2TI2VEngine(LTX2Shared):
                         audio_latent_model_input = audio_latents.to(prompt_embeds_dtype)
 
                         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                        timestep_2b = t.expand(2 * bsz)
-                        if denoise_mask_model is not None:
-                            video_timestep_2b = (
-                                timestep_2b.unsqueeze(-1) * denoise_mask_model
+                        timestep_b = t.expand(bsz)
+                        video_timestep_b = (
+                            self._timesteps_from_denoise_mask_tokens(
+                                timestep=timestep_b,
+                                denoise_mask_tokens=denoise_mask,
+                                frames=video_timestep_frames,
                             )
-                        else:
-                            video_timestep_2b = timestep_2b
-
-                        if audio_denoise_mask_model is not None:
-                            audio_timestep_2b = (
-                                timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                            if denoise_mask is not None
+                            else timestep_b
+                        )
+                        audio_timestep_b = (
+                            self._timesteps_from_denoise_mask_tokens(
+                                timestep=timestep_b,
+                                denoise_mask_tokens=audio_denoise_mask,
+                                frames=audio_timestep_frames,
                             )
-                        else:
-                            audio_timestep_2b = timestep_2b
+                            if audio_denoise_mask is not None
+                            else timestep_b
+                        )
+                            
+                        
+                        
 
                         with self.transformer.cache_context("cond_uncond"):
                             noise_pred_video_uncond, noise_pred_audio_uncond = (
@@ -1570,8 +1665,8 @@ class LTX2TI2VEngine(LTX2Shared):
                                     audio_encoder_hidden_states=connector_audio_prompt_embeds[
                                         uncond_idx
                                     ],
-                                    timestep=video_timestep_2b[uncond_idx],
-                                    audio_timestep=audio_timestep_2b[uncond_idx],
+                                    timestep=video_timestep_b,
+                                    audio_timestep=audio_timestep_b,
                                     encoder_attention_mask=connector_attention_mask[
                                         uncond_idx
                                     ],
@@ -1599,8 +1694,8 @@ class LTX2TI2VEngine(LTX2Shared):
                                     audio_encoder_hidden_states=connector_audio_prompt_embeds[
                                         cond_idx
                                     ],
-                                    timestep=video_timestep_2b[cond_idx],
-                                    audio_timestep=audio_timestep_2b[cond_idx],
+                                    timestep=video_timestep_b,
+                                    audio_timestep=audio_timestep_b,
                                     encoder_attention_mask=connector_attention_mask[
                                         cond_idx
                                     ],
@@ -1643,20 +1738,43 @@ class LTX2TI2VEngine(LTX2Shared):
 
                         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                         timestep_2b = t.expand(latent_model_input.shape[0])
-                        if denoise_mask_model is not None:
-                            video_timestep_2b = (
-                                timestep_2b.unsqueeze(-1) * denoise_mask_model
-                            )
-                        else:
-                            video_timestep_2b = timestep_2b
 
-                        if audio_denoise_mask_model is not None:
-                            audio_timestep_2b = (
-                                timestep_2b.unsqueeze(-1) * audio_denoise_mask_model
+                        # If CFG is enabled and we run a single 2B forward, coords must match the 2B batch.
+                        video_coords_call = video_coords
+                        audio_coords_call = audio_coords
+                        if (
+                            self.do_classifier_free_guidance
+                            and int(video_coords_call.shape[0]) * 2
+                            == int(latent_model_input.shape[0])
+                        ):
+                            video_coords_call = torch.cat(
+                                [video_coords_call, video_coords_call], dim=0
                             )
-                        else:
-                            audio_timestep_2b = timestep_2b
+                            audio_coords_call = torch.cat(
+                                [audio_coords_call, audio_coords_call], dim=0
+                            )
 
+                        video_timestep_2b = (
+                            self._timesteps_from_denoise_mask_tokens(
+                                timestep=timestep_2b,
+                                denoise_mask_tokens=denoise_mask_model,
+                                frames=video_timestep_frames,
+                            )
+                            if denoise_mask_model is not None
+                            else timestep_2b
+                        )
+
+                        audio_timestep_2b = (
+                            self._timesteps_from_denoise_mask_tokens(
+                                timestep=timestep_2b,
+                                denoise_mask_tokens=audio_denoise_mask_model,
+                                frames=audio_timestep_frames,
+                            )
+                            if audio_denoise_mask_model is not None
+                            else timestep_2b
+                        )
+                            
+      
                         with self.transformer.cache_context("cond_uncond"):
                             noise_pred_video, noise_pred_audio = self.transformer(
                                 hidden_states=latent_model_input,
@@ -1672,8 +1790,8 @@ class LTX2TI2VEngine(LTX2Shared):
                                 width=latent_width,
                                 fps=fps,
                                 audio_num_frames=audio_num_frames,
-                                video_coords=video_coords,
-                                audio_coords=audio_coords,
+                                video_coords=video_coords_call,
+                                audio_coords=audio_coords_call,
                                 rope_on_cpu=rope_on_cpu,
                                 attention_kwargs=attention_kwargs,
                                 return_dict=False,
