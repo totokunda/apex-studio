@@ -508,7 +508,10 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     // If current tab is invalid, return first available tab
     if (hasValidPreprocessor) return "preprocessor-parameters";
     if (hasLine) return "line";
-    if (hasModel) return "model-inputs";
+    if (hasModel) {
+      if ((clip as ModelClipProps | undefined)?.modelStatus === 'running' || (clip as ModelClipProps | undefined)?.modelStatus === 'pending') return "model-progress";
+      return "model-inputs";
+    }
     if (hasTransform) return "transform";
     if (hasMask) return "mask";
     if (hasAudio) return "audio";
@@ -649,6 +652,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     !!clip &&
     (((clip as ModelClipProps | undefined)?.modelStatus === 'running') ||
       ((clip as ModelClipProps | undefined)?.modelStatus === 'pending'));
+
+  useEffect(() => {
+    if (hasModel && isModelRunning) {
+      setSelectedTab("model-progress");
+    }
+  }, [hasModel, isModelRunning, clipId]);
 
   // Warm disk cache for the model weights when the user lingers on the same model clip.
   useEffect(() => {
