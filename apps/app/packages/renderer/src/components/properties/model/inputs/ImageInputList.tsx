@@ -57,7 +57,7 @@ const ImageInputList: React.FC<ImageInputListProps> = ({
   const enableScroll =
     typeof panelSize === "number" ? panelSize < totalNeededWidth : true;
 
-  const rowJustifyClass = enableScroll ? "justify-start" : "justify-center";
+  const rowJustifyClass =  "justify-start" ;
   const rowWidthClass = enableScroll ? "w-max" : "w-full";
 
 
