@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Group, Image, Text, Arc, Circle } from "react-konva";
+import { Group, Image, Text, Arc, Circle, Rect } from "react-konva";
 import RotatingCube from "@/components/common/RotatingCube";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ModelClipProps } from "@/lib/types";
@@ -141,12 +141,15 @@ const ModelClip: React.FC<Props> = ({
 
   // Keep the preview canvas sized to the clip area
   useEffect(() => {
-    imageCanvas.current.width = Math.max(1, clipWidth);
+    // IMPORTANT: cap the internal canvas to the visible timeline width.
+    // At high zoom `clipWidth` can become extremely large and exceed canvas limits
+    // or hit internal tiling guards, resulting in "missing" thumbnails.
+    imageCanvas.current.width = Math.max(1, imageWidth);
     imageCanvas.current.height = Math.max(1, timelineHeight);
     // Keep fallback canvas in sync with size
-    fallbackCanvas.current.width = Math.max(1, clipWidth);
+    fallbackCanvas.current.width = Math.max(1, imageWidth);
     fallbackCanvas.current.height = Math.max(1, timelineHeight);
-  }, [clipWidth, timelineHeight]);
+  }, [imageWidth, timelineHeight]);
 
   // Reset video thumbnail request state when src changes to avoid stale requestKey short-circuiting
   useEffect(() => {
@@ -186,7 +189,19 @@ const ModelClip: React.FC<Props> = ({
       overhang = timelineWidth - (clipWidth - positionX);
     }
     return overhang;
-  }, [clipPosition.x, clipWidth, timelineWidth]);
+  }, [clipPosition.x, clipWidth, imageWidth, timelineWidth]);
+
+  const imageX = useMemo(() => {
+    let overhang = 0;
+    // Default behavior for clips that fit within timeline or are at the start
+    const positionX =
+      clipPosition.x == 24 || clipWidth <= imageWidth ? 0 : -clipPosition.x;
+    if (clipWidth - positionX <= timelineWidth && positionX > 0) {
+      overhang = timelineWidth - (clipWidth - positionX);
+    }
+    const x = positionX - overhang;
+    return Math.max(0, x);
+  }, [clipPosition.x, clipWidth, imageWidth, timelineWidth]);
 
   // Generate / update the timeline thumbnail when preview or source changes
   useEffect(() => {
@@ -236,8 +251,8 @@ const ModelClip: React.FC<Props> = ({
             mediaInfoRef.current,
             imageCanvas.current,
             timelineHeight,
-            clipWidth,
-            clipWidth,
+            thumbnailClipWidth,
+            maxTimelineWidth,
             noopMask,
             noopFilters,
             groupRef,
@@ -258,12 +273,11 @@ const ModelClip: React.FC<Props> = ({
             mediaInfoRef.current,
             imageCanvas.current,
             timelineHeight,
-            // Use the computed thumbnail width (in px) for this clip, and do NOT
-            // cap rendering to the global timeline width. ModelClip renders its
-            // canvas at full `clipWidth`, so we must generate enough tiles to
-            // cover that width (especially noticeable when zooming in).
             thumbnailClipWidth,
-            clipWidth,
+            // Clamp thumbnail generation to the visible timeline width, just like
+            // regular TimelineClips. This avoids requesting thousands of columns
+            // and prevents blank canvases at max zoom.
+            maxTimelineWidth,
             timelineWidth,
             timelineDuration,
             startFrame,
@@ -314,10 +328,9 @@ const ModelClip: React.FC<Props> = ({
   return (
     <>
       <Group ref={groupRef} width={clipWidth} height={timelineHeight}>
-        <Image
+        <Rect
           x={0}
           y={0}
-          image={displayCanvasRef.current}
           width={clipWidth}
           height={timelineHeight}
           cornerRadius={safeCornerRadius}
@@ -338,6 +351,14 @@ const ModelClip: React.FC<Props> = ({
           shadowBlur={8}
           shadowOffsetY={2}
           shadowOpacity={0.22}
+        />
+        <Image
+          x={imageX}
+          y={0}
+          image={displayCanvasRef.current}
+          width={imageWidth}
+          height={timelineHeight}
+          cornerRadius={safeCornerRadius}
         />
 
         {(() => {
