@@ -9,6 +9,7 @@ import {
   pickMediaPaths,
   resolvePath,
   runSetupScript,
+  setInstallerActive,
   setApiPathSetting,
   setMaskModelSetting,
   setRenderImageStepsSetting,
@@ -164,6 +165,13 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
   const [installJobId, setInstallJobId] = useState<string | null>(null);
 
   const [uiMode, setUiMode] = useState<InstallerUIMode>("setup");
+  // When the installer is rendered automatically (e.g. because !hasBackend), the parent may
+  // switch away as soon as the backend becomes available. Once an install starts we force
+  // the installer to stay mounted until the user explicitly presses "Launch".
+  const requestCloseInstaller = () => {
+    if (installing || uiMode === "installing") return;
+    setShowInstaller(false);
+  };
   const [backendStatus, setBackendStatus] = useState<
     "idle" | "starting" | "started" | "error"
   >("idle");
@@ -185,6 +193,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
   useEffect(() => {
     activePhaseRef.current = activePhase;
   }, [activePhase]);
+  const phaseStateRef = useRef<Record<InstallPhaseId, InstallPhaseState> | null>(null);
   const [phaseState, setPhaseState] = useState<Record<InstallPhaseId, InstallPhaseState>>(() => ({
     download_bundle: { status: "pending", percent: null, message: null },
     extract_bundle: { status: "pending", percent: null, message: null },
@@ -192,6 +201,9 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     verify_attention: { status: "pending", percent: null, message: null },
     update_configs: { status: "pending", percent: null, message: null },
   }));
+  useEffect(() => {
+    phaseStateRef.current = phaseState;
+  }, [phaseState]);
   const extractionFilesRef = useRef<string[]>([]);
   const [extractionListVersion, setExtractionListVersion] = useState<number>(0);
   const extractionPendingRef = useRef<string[]>([]);
@@ -302,6 +314,62 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     setPhaseState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
   };
 
+  const phaseOrder: InstallPhaseId[] = useMemo(
+    () => [
+      "download_bundle",
+      "extract_bundle",
+      "download_models",
+      "verify_attention",
+      "update_configs",
+    ],
+    [],
+  );
+  const phaseIndex = (id: InstallPhaseId) => phaseOrder.indexOf(id);
+
+  const activatePhaseExclusive = (
+    id: InstallPhaseId,
+    patch?: Partial<InstallPhaseState>,
+  ) => {
+    const idx = phaseIndex(id);
+    setPhaseState((prev) => {
+      const next = { ...prev };
+      for (const pid of phaseOrder) {
+        const st = next[pid];
+        if (pid === id) {
+          // Do not override terminal states.
+          if (st.status !== "completed" && st.status !== "skipped" && st.status !== "error") {
+            next[pid] = { ...st, status: "active", ...(patch || {}) };
+          } else if (patch) {
+            next[pid] = { ...st, ...patch };
+          }
+          continue;
+        }
+        if (st.status !== "active") continue;
+        // Ensure only one active phase. When advancing forward, mark prior phase completed.
+        if (phaseIndex(pid) < idx) {
+          next[pid] = {
+            ...st,
+            status: "completed",
+            percent: st.percent ?? 100,
+          };
+        } else {
+          // Defensive: future phase should not be active yet.
+          next[pid] = { ...st, status: "pending" };
+        }
+      }
+      return next;
+    });
+    if (activePhaseRef.current !== id) setActivePhase(id);
+  };
+
+  const completePhase = (id: InstallPhaseId, patch?: Partial<InstallPhaseState>) => {
+    patchPhase(id, {
+      status: "completed",
+      percent: 100,
+      ...(patch || {}),
+    });
+  };
+
   const activeIndex = useMemo(
     () => Math.max(0, steps.findIndex((s) => s.id === activeStep)),
     [activeStep, steps],
@@ -367,6 +435,25 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     };
   };
 
+  const normalizePlatform = (p: string) => {
+    const s = String(p || "").trim().toLowerCase();
+    if (!s) return s;
+    if (s === "windows") return "win32";
+    if (s === "macos") return "darwin";
+    return s;
+  };
+
+  const normalizeArch = (a: string) => {
+    const raw = String(a || "").trim().toLowerCase();
+    if (!raw) return raw;
+    // Normalize separators/aliases commonly seen across Node and release artifacts.
+    const s = raw.replace(/[^a-z0-9]+/g, "_");
+    if (s === "x64" || s === "amd64" || s === "x86_64") return "x86_64";
+    if (s === "arm64" || s === "aarch64") return "arm64";
+    if (s === "ia32" || s === "x86" || s === "i386") return "x86";
+    return s;
+  };
+
   const validateLocalBundlePath = (p: string) => {
     const trimmed = String(p || "").trim();
     if (!trimmed) {
@@ -386,13 +473,15 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       return;
     }
     if (serverBundlesHost) {
-      if (parsed.platform !== serverBundlesHost.platform) {
+      if (
+        normalizePlatform(parsed.platform) !== normalizePlatform(serverBundlesHost.platform)
+      ) {
         setLocalBundleError(
           `Platform mismatch: file is "${parsed.platform}" but this machine is "${serverBundlesHost.platform}"`,
         );
         return;
       }
-      if (parsed.arch !== serverBundlesHost.arch) {
+      if (normalizeArch(parsed.arch) !== normalizeArch(serverBundlesHost.arch)) {
         setLocalBundleError(
           `Architecture mismatch: file is "${parsed.arch}" but this machine is "${serverBundlesHost.arch}"`,
         );
@@ -521,6 +610,18 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       return;
     }
 
+    // Tell main process to suppress any backend auto-starts while the installer is running.
+    try {
+      await setInstallerActive(true, "install");
+    } catch {}
+
+    // Make the installer "sticky" in the parent so it cannot be unmounted mid-install when
+    // launcher status flips from !hasBackend -> hasBackend.
+    setShowInstaller(true);
+
+    // Disable setup navigation immediately (there's a small window before uiMode flips).
+    setInstalling(true);
+
     // Lock the installer UI into phase mode; configuration can no longer be changed.
     setUiMode("installing");
 
@@ -549,6 +650,9 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       unsubscribeProgress = onInstallerProgress(jobId, (ev: any) => {
         if (!ev) return;
         if (ev.phase === "download") {
+          // Enforce sequential UI: ignore late download events once we've moved past download.
+          const dlSt = phaseStateRef.current?.download_bundle?.status;
+          if (dlSt === "completed" || dlSt === "skipped") return;
           const now = Date.now();
           const pctIntRaw =
             typeof ev.percent === "number"
@@ -562,32 +666,26 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
           lastDownloadUiUpdateAtRef.current = now;
           if (pctIntRaw !== null) lastDownloadPctRef.current = pctIntRaw;
 
-          if (activePhaseRef.current !== "download_bundle") {
-            setActivePhase("download_bundle");
-          }
-          patchPhase("download_bundle", {
-            status: "active",
+          activatePhaseExclusive("download_bundle", {
             // Do not clear percent when the event doesn't carry it.
             ...(pctIntRaw !== null ? { percent: pctIntRaw } : {}),
             message: ev.message || "Downloading…",
           });
           if (typeof ev.percent === "number" && ev.percent >= 1) {
-            patchPhase("download_bundle", { status: "completed", percent: 100 });
-            patchPhase("extract_bundle", { status: "active" });
-            if (activePhaseRef.current !== "extract_bundle") {
-              setActivePhase("extract_bundle");
-            }
+            completePhase("download_bundle");
+            activatePhaseExclusive("extract_bundle", { message: "Starting extraction…" });
           }
         } else if (ev.phase === "extract") {
+          // Enforce sequential UI: ignore late extract events once extraction is done.
+          const exSt = phaseStateRef.current?.extract_bundle?.status;
+          if (exSt === "completed" || exSt === "skipped") return;
           const now = Date.now();
           const pctIntRaw =
             typeof ev.percent === "number"
               ? Math.round(Math.max(0, Math.min(1, ev.percent)) * 100)
               : null;
 
-          if (activePhaseRef.current !== "extract_bundle") {
-            setActivePhase("extract_bundle");
-          }
+          activatePhaseExclusive("extract_bundle");
           const shouldUpdate =
             (pctIntRaw !== null && pctIntRaw !== lastExtractPctRef.current) ||
             now - lastExtractUiUpdateAtRef.current > 1200;
@@ -595,7 +693,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
             lastExtractUiUpdateAtRef.current = now;
             if (pctIntRaw !== null) lastExtractPctRef.current = pctIntRaw;
             patchPhase("extract_bundle", {
-              status: "active",
               // Do not clear percent when the event doesn't carry it.
               ...(pctIntRaw !== null ? { percent: pctIntRaw } : {}),
               // Keep the progress/status text generic; filenames are shown only in the extraction log panel.
@@ -616,7 +713,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
             }
           }
           if (typeof ev.percent === "number" && ev.percent >= 1) {
-            patchPhase("extract_bundle", { status: "completed", percent: 100 });
+            completePhase("extract_bundle", { message: "Extraction complete" });
             // Flush any remaining extraction entries.
             flushExtractionEntries();
           }
@@ -636,10 +733,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
               percent: 100,
               message: msg,
             });
-            patchPhase("extract_bundle", { status: "active" });
-            if (activePhaseRef.current !== "extract_bundle") {
-              setActivePhase("extract_bundle");
-            }
+            activatePhaseExclusive("extract_bundle", { message: "Starting extraction…" });
             return;
           }
           // Otherwise attach to the currently active phase.
@@ -648,7 +742,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       });
     }
 
-    setInstalling(true);
     try {
       // IMPORTANT: stop any running Python backend before modifying/installing the runtime/code.
       // Otherwise extraction/setup can fail or the app may keep using an old runtime.
@@ -673,6 +766,14 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       if (!extractRes.success) {
         throw new Error(extractRes.error || "Failed to extract server bundle");
       }
+      // Extraction is complete at this point; ensure phases are consistent even if
+      // progress events were missed or throttled.
+      if (!hasLocal) {
+        completePhase("download_bundle");
+      } else {
+        patchPhase("download_bundle", { status: "skipped", percent: 100 });
+      }
+      completePhase("extract_bundle");
 
       // Persist basic settings used by the launcher / app defaults.
       // - apiPath is used by Launcher as a "we have something installed on disk" fallback.
@@ -693,9 +794,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       // Run setup.py for BOTH:
       // - Download Models (mask + optional RIFE)
       // - Update Configs (render step toggles)
-      setActivePhase("download_models");
-      patchPhase("download_models", {
-        status: "active",
+      activatePhaseExclusive("download_models", {
         percent: 0,
         message: "Starting setup…",
       });
@@ -763,29 +862,29 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
             const pct = pctTask ?? pctOverall;
 
             if (task === "mask" || task === "rife") {
-              if (activePhaseRef.current !== "download_models") {
-                setActivePhase("download_models");
-              }
-              patchPhase("download_models", {
+              activatePhaseExclusive("download_models", {
                 status: status === "error" ? "error" : "active",
                 ...(pct !== null ? { percent: pct } : {}),
                 message: message || "Downloading models…",
               });
             } else if (task === "attention") {
-              if (activePhaseRef.current !== "verify_attention") {
-                setActivePhase("verify_attention");
+              // Attention runs after model downloads; advance phases sequentially.
+              if (phaseStateRef.current?.download_models?.status === "active") {
+                completePhase("download_models", { percent: 100 });
               }
-              patchPhase("verify_attention", {
+              activatePhaseExclusive("verify_attention", {
                 status: status === "error" ? "error" : "active",
                 ...(pct !== null ? { percent: pct } : {}),
                 message: message || "Verifying attention backends…",
               });
               appendAttentionEvent(message || "Verifying attention backends…");
             } else if (task === "config") {
-              if (activePhaseRef.current !== "update_configs") {
-                setActivePhase("update_configs");
+              // Config runs after attention verification; keep things sequential.
+              if (phaseStateRef.current?.verify_attention?.status === "active") {
+                completePhase("verify_attention", { percent: 100 });
               }
-              patchPhase("update_configs", {
+              activatePhaseExclusive("update_configs", {
+                // Keep update_configs active; we'll only mark it completed after ffmpeg install.
                 status: status === "error" ? "error" : "active",
                 ...(pct !== null ? { percent: pct } : {}),
                 message: message || "Updating config…",
@@ -851,21 +950,29 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
 
       await awaitSetupCompletion(jobId!);
 
-      patchPhase("download_models", {
-        status: "completed",
-        percent: 100,
-        message: "Models installed",
-      });
-      patchPhase("verify_attention", {
-        status: "completed",
-        percent: 100,
-        message: "Attention verified",
-      });
+      // Ensure phases are sequentially finalized even if some tasks were skipped.
+      if (phaseStateRef.current?.download_models?.status === "active") {
+        completePhase("download_models", { message: "Models installed" });
+      } else {
+        patchPhase("download_models", {
+          ...(phaseStateRef.current?.download_models?.status === "pending"
+            ? { status: "skipped", percent: 100 }
+            : {}),
+          message: phaseStateRef.current?.download_models?.message || "Models installed",
+        });
+      }
+      if (phaseStateRef.current?.verify_attention?.status === "active") {
+        completePhase("verify_attention", { message: "Attention verified" });
+      } else if (phaseStateRef.current?.verify_attention?.status === "pending") {
+        patchPhase("verify_attention", {
+          status: "skipped",
+          percent: 100,
+          message: "Attention verification skipped",
+        });
+      }
 
       // Update Configs (ffmpeg install + any config flags already applied by setup.py)
-      setActivePhase("update_configs");
-      patchPhase("update_configs", {
-        status: "active",
+      activatePhaseExclusive("update_configs", {
         message: "Installing ffmpeg…",
       });
 
@@ -874,9 +981,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
         throw new Error(ffRes.error || "Failed to install ffmpeg");
       }
 
-      patchPhase("update_configs", {
-        status: "completed",
-        percent: 100,
+      completePhase("update_configs", {
         message: `Completed (ffmpeg: ${ffRes.data?.method})`,
       });
       setUiMode("done");
@@ -884,6 +989,9 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       // After installation completes, start the Python API from the newly installed location.
       setInstallStatus("Installed. Starting backend…");
       setBackendStatus("starting");
+      try {
+        await setInstallerActive(false, "install complete");
+      } catch {}
       const pyRes = await startPythonApi();
       if (!pyRes?.success || !pyRes.data) {
         const msg = pyRes?.error || "Failed to start backend";
@@ -915,6 +1023,9 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       resetToReadyToInstall({ keepError: true });
     } finally {
       setInstalling(false);
+      try {
+        await setInstallerActive(false, "installer finished");
+      } catch {}
       if (unsubscribeProgress) unsubscribeProgress();
       // Flush any remaining extraction entries.
       flushExtractionEntries();
@@ -1398,8 +1509,8 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                     type="button"
                     variant="outline"
                     className="rounded-[6px]  bg-brand-background-light border border-brand-light/5 hover:bg-brand/70 hover:text-brand-light/90 px-6 py-2 dark text-brand-light/90 text-[11.5px]"
-                    disabled={!canGoBack && !hasBackend}
-                    onClick={canGoBack ? goBack : () => setShowInstaller(false)}
+                    disabled={installing || (!canGoBack && !hasBackend)}
+                    onClick={canGoBack ? goBack : requestCloseInstaller}
                   >
                     {canGoBack ? "Back" : hasBackend ? "Cancel" : "Back"}
                   </Button>

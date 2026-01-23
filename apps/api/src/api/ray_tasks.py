@@ -1031,7 +1031,7 @@ def _warmup_engine_from_manifest_impl(
             try:
                 cpu_kwargs = dict(input_kwargs)
                 cpu_kwargs["device"] = torch.device("cpu")
-                _ = UniversalEngine(**cpu_kwargs)
+                _ = UniversalEngine(**cpu_kwargs, engine_label="disk_warmup")
                 disk_ok = True
             except Exception as e:
                 logger.warning(f"Disk warmup failed for {manifest_path}: {e}")
@@ -1050,7 +1050,7 @@ def _warmup_engine_from_manifest_impl(
             )
 
             def _factory():
-                return UniversalEngine(**input_kwargs)
+                return UniversalEngine(**input_kwargs, engine_label="engine_warmup")
 
             allow_pool = not _warm_weights_disabled()
             engine, pooled = pool.acquire(

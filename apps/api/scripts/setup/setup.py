@@ -67,6 +67,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Persist ENABLE_IMAGE_RENDER_STEP=true in config.",
     )
+    
     parser.add_argument(
         "--enable_video_render_steps",
         action="store_true",
@@ -167,12 +168,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     config_store_path = get_config_store_path()
     job_id = (args.job_id or "").strip() or str(uuid.uuid4())
 
-    # Determine which tasks will run for overall progress mapping
+    # Determine which tasks will run for overall progress mapping.
+    # Keep this in the same order we execute below so UIs can render phases sequentially.
     tasks: list[str] = []
-    if args.mask_model_type:
-        tasks.append("mask")
     if args.install_rife:
         tasks.append("rife")
+    if args.mask_model_type:
+        tasks.append("mask")
     # Attention verification should run during install so users can see what backends work.
     # It is opt-out for dev/CI via --skip_attention_verification.
     if not args.skip_attention_verification:
