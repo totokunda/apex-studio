@@ -41,6 +41,8 @@ export async function initApp(initConfig: AppInitConfig) {
     // Global offload defaults (keyed by backend URL + manifest id)
     .init(offloadModule())
     // Register 'app://' protocol before app is ready and before creating the window
+    .init(apexApi())
+    .init(jsonPersistenceModule())
     .init(appDirProtocol())
     // Python process management - starts bundled API in production
     .init(pythonProcess({ devMode: isDev, autoStart: !isDev }))
@@ -51,8 +53,7 @@ export async function initApp(initConfig: AppInitConfig) {
     // Local installer: extract server bundles + ensure ffmpeg is available
     .init(installerModule())
     // Core backend IPC and persistence should be ready before any renderer windows load
-    .init(apexApi())
-    .init(jsonPersistenceModule())
+    
     .init(
       createWindowManagerModule({
         initConfig,
