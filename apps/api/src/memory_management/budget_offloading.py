@@ -581,6 +581,14 @@ class BudgetOffloader:
         # Stored as id(module) -> dict of original callables.
         self._device_move_guard_originals: Dict[int, Dict[str, Any]] = {}
 
+        # Runtime safety: forward-pre hooks that ensure a module's weights are on
+        # the correct device *right before it runs*. This covers:
+        # - modules whose `forward` got replaced after we wrapped it
+        # - dynamically-created submodules after offloading was applied
+        # - edge cases where tied/shared weights get moved by other mechanisms
+        self._ensure_on_call_device_pre_hook_handles: list[Any] = []
+        self._ensure_on_call_device_hooked_module_ids: set[int] = set()
+
         # Streams (mmgp always creates both)
         self.default_stream = torch.cuda.default_stream(torch.device("cuda")) if torch.cuda.is_available() else None
         self._transfer_stream: Optional[torch.cuda.Stream] = torch.cuda.Stream() if torch.cuda.is_available() else None
@@ -789,6 +797,92 @@ class BudgetOffloader:
         except Exception:
             pass
         self._device_move_guard_originals.clear()
+
+    def _install_ensure_on_call_device_pre_hooks(self) -> None:
+        """
+        Install forward-pre hooks on all (current) submodules that:
+        - load required blocks (if budget metadata exists)
+        - guarantee params/buffers are on the call device (typically CUDA)
+
+        This is deliberately redundant with the forward wrappers: it is a
+        correctness backstop that continues to work even if user code replaces
+        `forward` methods or dynamically adds submodules after hook installation.
+        """
+        if not torch.cuda.is_available():
+            return
+        if getattr(self.module, "_apex_budget_ensure_on_call_device_hooks", False):
+            return
+
+        def _register_one(m: torch.nn.Module) -> None:
+            mid = id(m)
+            if mid in self._ensure_on_call_device_hooked_module_ids:
+                return
+
+            def _ensure_new_children(mod: torch.nn.Module) -> None:
+                # Dynamically register for newly-attached children. We keep this
+                # shallow (direct children only); recursion is handled naturally
+                # when those parents execute.
+                try:
+                    for _child_name, child in mod.named_children():
+                        if id(child) not in self._ensure_on_call_device_hooked_module_ids:
+                            _register_one(child)
+                except Exception:
+                    return
+
+            def _pre_hook(mod: torch.nn.Module, args: tuple[Any, ...], kwargs: dict[str, Any]):  # noqa: ARG001
+                try:
+                    if torch.compiler.is_compiling():
+                        return
+                except Exception:
+                    pass
+
+                _ensure_new_children(mod)
+
+                # Ensure correct block residency if budget metadata exists.
+                try:
+                    self._pre_check(mod)
+                except Exception:
+                    pass
+
+                # Always enforce device correctness (this is the core guarantee).
+                try:
+                    self._ensure_params_on_call_device(mod, args, kwargs)
+                except Exception:
+                    pass
+
+            def _pre_hook_no_kwargs(mod: torch.nn.Module, args: tuple[Any, ...]):  # noqa: ARG001
+                return _pre_hook(mod, args, {})
+
+            try:
+                handle = m.register_forward_pre_hook(_pre_hook, with_kwargs=True)  # type: ignore[call-arg]
+            except Exception:
+                try:
+                    handle = m.register_forward_pre_hook(_pre_hook_no_kwargs)
+                except Exception:
+                    return
+
+            self._ensure_on_call_device_pre_hook_handles.append(handle)
+            self._ensure_on_call_device_hooked_module_ids.add(mid)
+
+        for _name, sub in self.module.named_modules():
+            _register_one(sub)
+
+        setattr(self.module, "_apex_budget_ensure_on_call_device_hooks", True)
+
+    def _remove_ensure_on_call_device_pre_hooks(self) -> None:
+        if not getattr(self.module, "_apex_budget_ensure_on_call_device_hooks", False):
+            return
+        for h in list(self._ensure_on_call_device_pre_hook_handles):
+            try:
+                h.remove()
+            except Exception:
+                pass
+        self._ensure_on_call_device_pre_hook_handles.clear()
+        self._ensure_on_call_device_hooked_module_ids.clear()
+        try:
+            delattr(self.module, "_apex_budget_ensure_on_call_device_hooks")
+        except Exception:
+            pass
 
     def _build_block_param_index(self) -> None:
         if self._block_param_index:
@@ -1487,6 +1581,10 @@ def {fname}(module, *args, **kwargs):
             self._install_device_move_guards()
         except Exception:
             pass
+        try:
+            self._install_ensure_on_call_device_pre_hooks()
+        except Exception:
+            pass
         return
 
     def remove_hooks(self) -> None:
@@ -1497,6 +1595,10 @@ def {fname}(module, *args, **kwargs):
         """
         try:
             self._remove_device_move_guards()
+        except Exception:
+            pass
+        try:
+            self._remove_ensure_on_call_device_pre_hooks()
         except Exception:
             pass
         # Root wrapper

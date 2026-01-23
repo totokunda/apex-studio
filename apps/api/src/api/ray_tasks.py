@@ -91,6 +91,20 @@ def _require_tracked_job_or_fail(
         raise
 
 
+def _job_marked_cancelled(job_id: str) -> bool:
+    """
+    Best-effort check for whether the unified job store has marked this job cancelled.
+    """
+    try:
+        from .job_store import job_store as unified_job_store
+
+        data = unified_job_store.get(job_id) or {}
+        override = str((data or {}).get("status_override") or "").strip().lower()
+        return override in {"cancelled", "canceled"}
+    except Exception:
+        return False
+
+
 @ray.remote
 class EngineRunner:
     """
@@ -2647,6 +2661,7 @@ def _run_engine_from_manifest_impl(
     engine = None
     engine_pool_key = None
     engine_pooled = False
+    force_cold_cleanup = False
     raw = None
     config = None
     prepared_inputs: Dict[str, Any] = {}
@@ -3422,9 +3437,15 @@ def _run_engine_from_manifest_impl(
         except Exception:
             pass
 
+        # If the user cancelled/stopped this job, do NOT keep the engine warm.
+        try:
+            force_cold_cleanup = bool(_job_marked_cancelled(job_id))
+        except Exception:
+            force_cold_cleanup = False
+
         # If we are pooling, keep weights warm after the run (unless explicitly disabled).
         # Otherwise, aggressively offload to minimize VRAM/RAM usage.
-        if (not engine_pooled) or _warm_weights_disabled():
+        if force_cold_cleanup or (not engine_pooled) or _warm_weights_disabled():
             try:
                 engine.offload_engine()
             except Exception as e:
@@ -3445,14 +3466,29 @@ def _run_engine_from_manifest_impl(
         # If the engine is pooled, do NOT clear torch caches (keeps it warm).
         # If not pooled, do best-effort offload + cache clearing.
         try:
+            if not force_cold_cleanup:
+                try:
+                    force_cold_cleanup = bool(_job_marked_cancelled(job_id))
+                except Exception:
+                    force_cold_cleanup = False
+
             # Release warm pool lease first so later evictions can happen.
             try:
                 if engine_pooled and engine_pool_key:
-                    _get_engine_warm_pool().release(engine_pool_key)
+                    if force_cold_cleanup:
+                        # Release our lease then evict the entry so it can't stay warm.
+                        _get_engine_warm_pool().release(engine_pool_key)
+                        _get_engine_warm_pool().discard(engine_pool_key, offload=True)
+                    else:
+                        _get_engine_warm_pool().release(engine_pool_key)
             except Exception:
                 pass
 
-            if (not engine_pooled or _warm_weights_disabled()) and engine is not None:
+            if (
+                force_cold_cleanup
+                or (not engine_pooled)
+                or _warm_weights_disabled()
+            ) and engine is not None:
                 try:
                     engine.offload_engine()
                 except Exception:
@@ -3466,7 +3502,9 @@ def _run_engine_from_manifest_impl(
         except Exception as cleanup_err:
             logger.warning(f"run_engine_from_manifest cleanup failed: {cleanup_err}")
         _aggressive_ram_cleanup(
-            clear_torch_cache=(not bool(engine_pooled)) or _warm_weights_disabled()
+            clear_torch_cache=(not bool(engine_pooled))
+            or _warm_weights_disabled()
+            or bool(force_cold_cleanup)
         )
 
 

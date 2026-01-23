@@ -208,7 +208,6 @@ packages/renderer/public/filters
 
 .env
 
-.github/workflows/*
 python-api-bundle/**
 test_model_qwen.py
 test_model.py
@@ -218,3 +217,4 @@ apps/api/apex-test-suite
 apps/api/pytorch
 apps/api/vision
 apps/api/.venv*
+apps/api/dist-intel/*

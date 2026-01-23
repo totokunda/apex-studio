@@ -1454,6 +1454,18 @@ def _apply_group_offloading_hook(
         hook = GroupOffloadingHook(group, config=config)
         registry.register_hook(hook, _GROUP_OFFLOADING)
 
+    # Hard safety: regardless of hook ordering / tied weights / dynamic device
+    # moves, ensure this module's weights live on the onload device right before
+    # it executes.
+    try:
+        _register_ensure_on_device_pre_hook(
+            module,
+            device=config.onload_device,
+            non_blocking=config.non_blocking,
+        )
+    except Exception:
+        pass
+
 
 def _apply_lazy_group_offloading_hook(
     module: torch.nn.Module,
@@ -1473,6 +1485,16 @@ def _apply_lazy_group_offloading_hook(
     if registry.get_hook(_LAZY_PREFETCH_GROUP_OFFLOADING) is not None:
         registry.remove_hook(_LAZY_PREFETCH_GROUP_OFFLOADING, recurse=False)
     registry.register_hook(lazy_prefetch_hook, _LAZY_PREFETCH_GROUP_OFFLOADING)
+
+    # Same safety guarantee for lazy-prefetch mode.
+    try:
+        _register_ensure_on_device_pre_hook(
+            module,
+            device=config.onload_device,
+            non_blocking=config.non_blocking,
+        )
+    except Exception:
+        pass
 
 
 def _gather_parameters_with_no_group_offloading_parent(
