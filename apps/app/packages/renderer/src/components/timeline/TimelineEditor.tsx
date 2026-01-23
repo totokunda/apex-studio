@@ -57,6 +57,7 @@ interface TimelineMomentsProps {
   startPadding: number;
   maxScroll: number;
   thumbY: () => number;
+  onRulerClick: (e: Konva.KonvaEventObject<MouseEvent>) => void;
 }
 
 interface TickMark {
@@ -90,7 +91,7 @@ const getMajorZoomConfigFormat = (
 };
 
 const TimelineMoments: React.FC<TimelineMomentsProps> = React.memo(
-  ({ stageWidth, startPadding, maxScroll, thumbY }) => {
+  ({ stageWidth, startPadding, maxScroll, thumbY, onRulerClick }) => {
     const {
       timelineDuration,
       fps,
@@ -184,8 +185,13 @@ const TimelineMoments: React.FC<TimelineMomentsProps> = React.memo(
           y={0}
           width={stageWidth}
           height={28}
-          fill={maxScroll > 0 && thumbY() > 24 ? "#222124" : undefined}
-          listening={false}
+          // Ensure the ruler area always captures clicks (even when transparent),
+          // so seeking works while vertically scrolled and clips are under it.
+          fill={
+            maxScroll > 0 && thumbY() > 24 ? "#222124" : "rgba(0,0,0,0)"
+          }
+          listening
+          onClick={onRulerClick}
         />
         {tickMark.map((tick, index) => {
           // Calculate x position based on timeline progress
@@ -1763,6 +1769,42 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
 
   const hasClips = useMemo(() => clips.length > 0, [clips]);
 
+  const seekToPointerX = useCallback(
+    (pointerX: number) => {
+      // Map pointer X to frame within the visible window [startFrame, endFrame]
+      const timelinePadding = 24; // left padding used by timeline
+      const [startFrame, endFrame] = controlStore.timelineDuration;
+      const innerX = Math.max(
+        0,
+        Math.min(pointerX - timelinePadding, dimensions.stageWidth),
+      );
+      const progress = dimensions.stageWidth > 0 ? innerX / dimensions.stageWidth : 0;
+      const clampedProgress = Math.max(0, Math.min(1, progress));
+      const targetFrame = Math.round(
+        startFrame + clampedProgress * (endFrame - startFrame),
+      );
+
+      // Pause if playing, then set focus without auto-resume
+      if (controlStore.isPlaying) controlStore.pause();
+      controlStore.setFocusAnchorRatio(clampedProgress);
+      controlStore.setFocusFrame(targetFrame, false);
+      controlStore.setIsAccurateSeekNeeded(true);
+    },
+    [controlStore, controlStore.timelineDuration, dimensions.stageWidth],
+  );
+
+  const handleRulerClick = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      controlStore.clearSelection();
+      setSelectedPreprocessorId(null);
+      const stage = e.target.getStage();
+      const pos = stage?.getPointerPosition();
+      if (!pos) return;
+      seekToPointerX(pos.x);
+    },
+    [controlStore, setSelectedPreprocessorId, seekToPointerX],
+  );
+
   const handleStageClick = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
       // Check if the click target is the stage itself (background click)
@@ -1772,27 +1814,10 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
         const stage = e.target.getStage();
         const pos = stage?.getPointerPosition();
         if (!pos) return;
-        // Map pointer X to frame within the visible window [startFrame, endFrame]
-        const timelinePadding = 24; // left padding used by timeline
-        const [startFrame, endFrame] = controlStore.timelineDuration;
-        const innerX = Math.max(
-          0,
-          Math.min(pos.x - timelinePadding, dimensions.stageWidth),
-        );
-        const progress =
-          dimensions.stageWidth > 0 ? innerX / dimensions.stageWidth : 0;
-        const targetFrame = Math.round(
-          startFrame + progress * (endFrame - startFrame),
-        );
-
-        // Pause if playing, then set focus without auto-resume
-        if (controlStore.isPlaying) controlStore.pause();
-        controlStore.setFocusAnchorRatio(Math.max(0, Math.min(1, progress)));
-        controlStore.setFocusFrame(targetFrame, false);
-        controlStore.setIsAccurateSeekNeeded(true);
+        seekToPointerX(pos.x);
       }
     },
-    [controlStore, setSelectedPreprocessorId],
+    [controlStore, seekToPointerX, setSelectedPreprocessorId],
   );
 
   return (
@@ -1842,12 +1867,13 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
                       />
                     ))}
                   </Layer>
-                  <Layer listening={false} visible={hasClips}>
+                  <Layer visible={hasClips}>
                     {/* Time labels along the top */}
                     <TimelineMoments
                       stageWidth={dimensions.stageWidth}
                       startPadding={24}
                       maxScroll={maxScroll}
+                      onRulerClick={handleRulerClick}
                       thumbY={() => {
                         const trackTop = 24;
                         const trackBottomPad = 8;
