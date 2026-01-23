@@ -1,6 +1,7 @@
 import { AppModule } from "../AppModule.js";
 import { ModuleContext } from "../ModuleContext.js";
 import { getSettingsModule } from "./SettingsModule.js";
+import { createProject } from "./JSONPersistenceModule.js";
 import { protocol, ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
@@ -464,10 +465,15 @@ class AppDirProtocol implements AppModule {
   }
 
   async getActiveFolderUuid(): Promise<string | null> {
+    if (!this.activeProjectId) return null;
     let projectFilesPath = path.join(this.electronApp?.getPath("userData") ?? "", "projects-json", `project-${this.activeProjectId}.json`);
-    let projectFiles = await fsp.readFile(projectFilesPath, "utf8");
-    let projectFilesJson = JSON.parse(projectFiles);
-    return projectFilesJson?.meta?.id ?? null;  
+    try {
+      let projectFiles = await fsp.readFile(projectFilesPath, "utf8");
+      let projectFilesJson = JSON.parse(projectFiles);
+      return projectFilesJson?.meta?.id ?? null;  
+    } catch {
+      return null;
+    }
   }
 
   private withCors(request: Request, response: Response): Response {
@@ -869,8 +875,30 @@ class AppDirProtocol implements AppModule {
     this.rendererDistPath = this.tryResolveRendererDistPath(app);
     const settings = getSettingsModule();
     this.backendUrl = settings.getBackendUrl();
-    this.activeProjectId = settings.getActiveProjectId();
-    this.activeFolderUuid = await this.getActiveFolderUuid();
+    
+    let activeProjectId = settings.getActiveProjectId();
+    
+    // Ensure we have a valid project on startup to prevent crashes.
+    if (!activeProjectId) {
+      try {
+        const userData = app.getPath("userData");
+        const projectsDir = path.join(userData, "projects-json");
+        // Check if we need to create a default project
+        const result = await createProject(projectsDir, "Untitled Project", 24, app.getVersion());
+        activeProjectId = String(result.id);
+        settings.setActiveProjectId(activeProjectId);
+      } catch (e) {
+        console.error("AppDirProtocol: Failed to ensure default project", e);
+      }
+    }
+
+    this.activeProjectId = activeProjectId;
+
+    try {
+      this.activeFolderUuid = await this.getActiveFolderUuid();
+    } catch {
+      this.activeFolderUuid = null;
+    }
 
     settings.on("backend-url-changed", (newUrl: string) => {
       void this.onBackendUrlChanged(newUrl);
