@@ -515,7 +515,7 @@ spec:
         heuristic.
       type: boolean
       panel: vae
-      default: false
+      default: true
       required: false
     - id: vae_tile_sample_min_height
       label: VAE Tile Min Height
