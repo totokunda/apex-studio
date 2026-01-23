@@ -100,19 +100,38 @@ export const ModelGenerationProperties: React.FC<
         // intrinsic dimensions only, and clamp the long side to BASE_LONG_SIDE
         // while preserving aspect ratio (asset is the single source of truth).
         // update endFrame based on the duration of the generation
-        const mediaInfo = getMediaInfoCached(gen.assetId);
+        if (gen.startFrame && gen.endFrame) {
+          updates.startFrame = gen.startFrame;
+          updates.endFrame = gen.endFrame;
+        } else {
+          const mediaInfo = getMediaInfoCached(gen.assetId);
         if (mediaInfo && mediaInfo.duration) {
           let newDuration = Math.floor(mediaInfo.duration * fps);
           updates.endFrame = clip.startFrame + newDuration;
         }
+        }
         
+
         if (gen.transform) {
           updates.transform = {...gen.transform};
         } 
         // update the gen.transform to the current clip.transform
-        const generations = [...(clip?.generations || [])];        
+        const generations = [...(clip?.generations || [])]; 
+        
+        // check if gen has attribute trimStart or trimEnd, if so, update the transform to the current clip.transform
+        if (gen.trimStart) {
+          updates.trimStart = gen.trimStart;
+        }
+        if (gen.trimEnd) {
+          updates.trimEnd = gen.trimEnd;
+        }
 
         generations[index].transform = clip?.transform;
+        generations[index].trimStart = clip?.trimStart;
+        generations[index].trimEnd = clip?.trimEnd;
+        generations[index].startFrame = clip?.startFrame;
+
+        generations[index].endFrame = clip?.endFrame;
         updates.generations = generations;
         if (gen.selectedComponents) {
           updates.selectedComponents = gen.selectedComponents;

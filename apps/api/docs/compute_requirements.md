@@ -38,7 +38,7 @@ Common CUDA compute capabilities:
 - **7.0**: Tesla V100
 - **7.5**: RTX 2080, RTX 2080 Ti, Titan RTX (Turing)
 - **8.0**: A100 (Ampere)
-- **8.6**: RTX 3090, RTX 3080, RTX 4090 (Ampere)
+- **8.6**: RTX 3090, RTX 3080, RTX 3070 (Ampere)
 - **8.9**: RTX 4090, L4, L40 (Ada Lovelace)
 - **9.0**: H100 (Hopper)
 
@@ -50,12 +50,15 @@ List of compute types that this model supports. If the current system's compute 
 
 List of specific CUDA architectures (SM versions) that are allowed. Only use this if you need to whitelist specific architectures. If specified, the current GPU's architecture must be in this list.
 
+See `docs/compute_requirements_architecture_filters.md` for a full guide (allowlist vs denylist, precedence, and copy/paste examples).
+
 Common SM versions:
 - **sm_75**: Turing (RTX 2080, RTX 2080 Ti)
 - **sm_80**: Ampere (A100)
 - **sm_86**: Ampere (RTX 3090, RTX 3080)
 - **sm_89**: Ada Lovelace (RTX 4090, L4, L40)
 - **sm_90**: Hopper (H100)
+
 
 #### `excluded_cuda_architectures` (optional)
 
