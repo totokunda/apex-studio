@@ -10,6 +10,41 @@ from loguru import logger
 _JOB_STORE_ACTOR_NAME = os.getenv("APEX_JOB_STORE_ACTOR_NAME", "apex-unified-job-store")
 
 
+def _cancel_ray_ref(ref: Any, *, job_id: Optional[str] = None) -> None:
+    """
+    Best-effort cancel of a Ray task/actor call.
+
+    Ray does not support `force=True` for actor tasks, and will raise:
+      "force=True is not supported for actor tasks."
+
+    We attempt a forced cancel first (useful for regular tasks), then fall back to a
+    non-forced cancel when the ref is an actor task.
+    """
+
+    if ref is None or isinstance(ref, dict):
+        return
+    if isinstance(ref, list) and len(ref) == 1:
+        ref = ref[0]
+
+    try:
+        ray.cancel(ref, force=True, recursive=True)
+        return
+    except Exception as e:
+        msg = str(e)
+        if "not supported for actor tasks" in msg:
+            # Actor calls can't be force-cancelled; retry without force.
+            if job_id:
+                logger.debug(
+                    f"Job {job_id}: Ray ref looks like an actor task; retrying cancel without force"
+                )
+            try:
+                ray.cancel(ref, recursive=True)
+                return
+            except Exception as e2:
+                raise e2 from e
+        raise
+
+
 @ray.remote
 class UnifiedJobStoreActor:
     """
@@ -348,13 +383,41 @@ class UnifiedJobStoreProxy:
 
         # Try cancel
         try:
-            if isinstance(ref, list) and len(ref) == 1:
-                ref = ref[0]
-            # If "ref" is a dict (legacy/corrupt), there is nothing to cancel at Ray level.
-            if ref is not None and not isinstance(ref, dict):
-                ray.cancel(ref, force=True, recursive=True)
+            _cancel_ray_ref(ref, job_id=job_id)
         except Exception as e:
-            logger.warning(f"Failed to cancel Ray task for job {job_id}: {e}")
+            msg = str(e)
+            # When a ref is an actor task, Ray doesn't support force-cancel; we already
+            # retry without force above, so only warn if cancellation still fails.
+            logger.warning(f"Failed to cancel Ray task for job {job_id}: {msg}")
+
+        # If this is an engine generation job, hard-stop the runner process so we do not
+        # keep the model warm after a stop request. This also guarantees the GPU context
+        # and warm pool are torn down even if Ray cannot cooperatively cancel the actor call.
+        if job_type == "engine":
+            try:
+                from .ray_tasks import kill_engine_runner_actor
+
+                device_type = (meta or {}).get("device_type", None)
+                device_index = (meta or {}).get("device_index", None)
+                if device_type is not None:
+                    dev = str(device_type).strip().lower()
+                    idx = None
+                    try:
+                        idx = int(device_index) if device_index is not None else None
+                    except Exception:
+                        idx = None
+                    if dev in {"cuda", "mps"}:
+                        killed = bool(
+                            kill_engine_runner_actor(device_index=idx, device_type=dev)
+                        )
+                        if killed:
+                            logger.info(
+                                f"Killed EngineRunner actor after cancelling engine job {job_id}"
+                            )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to kill EngineRunner actor after cancelling job {job_id}: {e}"
+                )
 
         # Type-specific cleanup
         if job_type == "components":
@@ -443,7 +506,7 @@ def submit_tracked_job(
     except Exception as e:
         # Fail closed: don't allow work to continue untracked.
         try:
-            ray.cancel(ref, force=True, recursive=True)
+            _cancel_ray_ref(ref, job_id=job_id)
         except Exception:
             pass
         job_store.mark_failed(job_id, f"Failed to attach ref to job store: {e}")
