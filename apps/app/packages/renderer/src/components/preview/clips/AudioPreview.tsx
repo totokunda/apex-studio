@@ -309,14 +309,6 @@ const AudioPreview: React.FC<
   // Load media info to detect audio track and preconfigure worker
   useEffect(() => {
     if (!asset) return;
-    const info = getMediaInfoCached(asset.path);
-    if (info) {
-      mediaInfoRef.current = info;
-      // Preconfigure audio worker early so it's ready when playback starts
-      if (info.audio) {
-        void preconfigureAudioWorker(asset.path, info);
-      }
-    }
     let cancelled = false;
     (async () => {
       try {
@@ -325,12 +317,12 @@ const AudioPreview: React.FC<
           mediaInfoRef.current = info;
           // Preconfigure audio worker early so it's ready when playback starts
           if (info?.audio) {
-            void preconfigureAudioWorker(asset.path, info);
+            await preconfigureAudioWorker(asset.path, info);
           }
         }
       } catch {}
     })();
-  }, [asset]);
+  }, [asset?.id, asset?.path]);
 
   // Pre-seek audio worker when scrubbing while paused for instant playback start
   useEffect(() => {
@@ -880,6 +872,9 @@ const AudioPreview: React.FC<
     disabled,
     isInFrame,
   ]);
+
+
+  
 
   // If the playhead leaves this clip while playing, stop scheduling and stop any queued nodes.
   // This keeps audio accurate during scrubbing / jumping frames.

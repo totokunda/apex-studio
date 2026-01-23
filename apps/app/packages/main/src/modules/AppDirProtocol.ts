@@ -464,10 +464,15 @@ class AppDirProtocol implements AppModule {
   }
 
   async getActiveFolderUuid(): Promise<string | null> {
+    if (!this.activeProjectId) return null;
     let projectFilesPath = path.join(this.electronApp?.getPath("userData") ?? "", "projects-json", `project-${this.activeProjectId}.json`);
-    let projectFiles = await fsp.readFile(projectFilesPath, "utf8");
-    let projectFilesJson = JSON.parse(projectFiles);
-    return projectFilesJson?.meta?.id ?? null;  
+    try {
+      let projectFiles = await fsp.readFile(projectFilesPath, "utf8");
+      let projectFilesJson = JSON.parse(projectFiles);
+      return projectFilesJson?.meta?.id ?? null;  
+    } catch {
+      return null;
+    }
   }
 
   private withCors(request: Request, response: Response): Response {
@@ -869,8 +874,14 @@ class AppDirProtocol implements AppModule {
     this.rendererDistPath = this.tryResolveRendererDistPath(app);
     const settings = getSettingsModule();
     this.backendUrl = settings.getBackendUrl();
+    
     this.activeProjectId = settings.getActiveProjectId();
-    this.activeFolderUuid = await this.getActiveFolderUuid();
+
+    try {
+      this.activeFolderUuid = await this.getActiveFolderUuid();
+    } catch {
+      this.activeFolderUuid = null;
+    }
 
     settings.on("backend-url-changed", (newUrl: string) => {
       void this.onBackendUrlChanged(newUrl);
