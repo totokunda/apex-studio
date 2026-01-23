@@ -15,6 +15,8 @@ os.environ.setdefault("RAY_BACKEND_LOG_LEVEL", "error")
 # Disable abseil failure signal handler stack traces
 os.environ.setdefault("ABSL_FLAGS_symbolize_stacktrace", "0")
 os.environ.setdefault("GLOG_minloglevel", "3")  # Only log fatal errors (3 = FATAL, 2 = ERROR)
+os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
+os.environ.setdefault("RAY_DISABLE_MEMORY_MONITOR", "1")
 
 # Ray init is not thread-safe. We must prevent concurrent init *and* provide a way for
 # other threads to wait until init is fully finished (ray.is_initialized() can become

@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import { join, basename, extname, relative, dirname } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join, basename, extname, relative, dirname, resolve } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 // id should be the basename of the file
 
@@ -15,6 +15,57 @@ interface Filter {
 }
 
 const require = createRequire(import.meta.url);
+
+const tryResolveRendererStaticRoot = (): string | null => {
+  const candidates: string[] = [];
+
+  // Packaged builds (and some dev layouts) where node resolution works.
+  try {
+    const indexHtml = require.resolve("@app/renderer/dist/index.html");
+    candidates.push(dirname(indexHtml));
+  } catch {
+    // ignore
+  }
+
+  // Monorepo dev layout: resolve relative to this module location.
+  // This must work from both TS source (preload/src/...) and built output (preload/dist/...).
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    candidates.push(resolve(here, "../../renderer/dist"));
+    candidates.push(resolve(here, "../../renderer/public"));
+    candidates.push(resolve(here, "../../../renderer/dist"));
+    candidates.push(resolve(here, "../../../renderer/public"));
+  } catch {
+    // ignore
+  }
+
+  // Fallbacks relative to process CWD (varies across tooling).
+  try {
+    candidates.push(resolve(process.cwd(), "packages/renderer/dist"));
+    candidates.push(resolve(process.cwd(), "packages/renderer/public"));
+    candidates.push(resolve(process.cwd(), "apps/app/packages/renderer/dist"));
+    candidates.push(resolve(process.cwd(), "apps/app/packages/renderer/public"));
+  } catch {
+    // ignore
+  }
+
+  // Pick the first candidate that actually contains the filters.
+  for (const root of candidates) {
+    try {
+      if (fs.existsSync(join(root, "filters", "small"))) {
+        return root;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  console.warn(
+    "[fetchFilters] Could not resolve renderer static root (expected to contain filters/*). Candidates:",
+    candidates,
+  );
+  return null;
+};
 
 // Convert snake_case to Title Case
 const snakeCaseToTitleCase = (str: string): string => {
@@ -47,11 +98,14 @@ const findPngFiles = async (
 
 export const fetchFilters = async () => {
   const filters: Filter[] = [];
-  // In packaged builds, the renderer assets live under @app/renderer/dist.
-  // Resolve from the installed package so this works in both dev and packaged modes.
-  const rendererIndex = require.resolve("@app/renderer/dist/index.html");
-  const rendererDistRoot = dirname(rendererIndex);
-  const filtersRoot = join(rendererDistRoot, "filters");
+  // In packaged builds, the renderer assets live under '@app/renderer/dist'.
+  // In dev, they're served by Vite and the source of truth is 'packages/renderer/public'.
+  const rendererStaticRoot = tryResolveRendererStaticRoot();
+  if (!rendererStaticRoot) {
+    return [];
+  }
+
+  const filtersRoot = join(rendererStaticRoot, "filters");
 
   const smallBasePath = join(filtersRoot, "small");
   const fullBasePath = join(filtersRoot, "full");

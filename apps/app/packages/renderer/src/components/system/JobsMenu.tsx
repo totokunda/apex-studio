@@ -4,6 +4,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { ProgressBar } from "@/components/common/ProgressBar";
 import { fetchRayJobs, cancelRayJob, RayJobStatus } from "@/lib/jobs/api";
@@ -66,6 +67,7 @@ const JobsMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [jobsById, setJobsById] = useState<Record<string, TrackedJob>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const lastToastedErrorByJobIdRef = React.useRef<Map<string, string>>(new Map());
   const { updateClip, addAssetAsync,  updatePreprocessor } = useClipStore();
   const clips = useClipStore((s) => s.clips);
   const { fps } = useControlsStore();
@@ -159,6 +161,33 @@ const JobsMenu: React.FC = () => {
       return next;
     });
   }, [polledJobs]);
+
+  // Toast on newly-failed jobs (application errors travel via ws updates / latest.metadata.error).
+  useEffect(() => {
+    try {
+      for (const [jobId, job] of Object.entries(jobsById || {})) {
+        const status = (job?.status || "").toLowerCase();
+        if (status !== "error" && status !== "failed") continue;
+        const meta = (job as any)?.latest?.metadata || {};
+        const msg =
+          (typeof job?.error === "string" && job.error) ||
+          (typeof meta?.error === "string" && meta.error) ||
+          (typeof job?.message === "string" && job.message) ||
+          "Job failed";
+        const last = lastToastedErrorByJobIdRef.current.get(jobId);
+        if (last === msg) continue;
+        lastToastedErrorByJobIdRef.current.set(jobId, msg);
+        const category = (job as any)?.category || "job";
+        toast.error(`${category} failed`, {
+          id: `job-error-${jobId}`,
+          description: msg,
+          duration: 8000,
+        });
+      }
+    } catch {
+      // best-effort only
+    }
+  }, [jobsById]);
 
   useEngineJobClipSync({
     jobsById,
