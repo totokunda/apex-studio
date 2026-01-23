@@ -157,6 +157,11 @@ export class SettingsModule extends EventEmitter implements AppModule {
     return typeof v === "string" ? v : v ? String(v) : null;
   }
 
+  setActiveProjectId(projectId: string | number | null): void {
+    this.store.set("activeProjectId", projectId ?? null);
+    this.emit("active-project-id-changed", projectId ?? null);
+  }
+
   /**
    * Temporarily switch the active backend URL in-memory (emits backend-url-changed),
    * without persisting it to disk. Intended for the Settings "Verify" flow.
