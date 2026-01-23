@@ -117,7 +117,11 @@ def run_engine(request: RunEngineRequest):
         ref = submit_tracked_job(
             job_id=job_id,
             job_type="engine",
-            meta={"manifest_path": manifest_path},
+            meta={
+                "manifest_path": manifest_path,
+                "device_type": device_type,
+                "device_index": device_index,
+            },
             submit=lambda: runner.run_engine_from_manifest.remote(
                 manifest_path,
                 job_id,
