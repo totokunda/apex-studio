@@ -653,7 +653,6 @@ def _build_attention_options(
     # Local import to avoid import cycles at startup
     try:
         from src.attention.functions import (
-            attention_register,
             verify_attention_backends,
         )
     except Exception as e:
