@@ -4,6 +4,7 @@ import { ipcMain } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { getSettingsModule } from "./SettingsModule.js";
 
 type JsonResponse<T> =
   | { success: true; data: T }
@@ -223,6 +224,39 @@ export class JSONPersistenceModule implements AppModule {
 
     this.#projectsDir = rootDir;
     this.#appVersion = app.getVersion?.() ?? undefined;
+    
+    // Check if we need to create a default project
+    const settings = getSettingsModule();
+    let activeProjectId = settings.getActiveProjectId();
+    
+    if (!activeProjectId) {
+      try {
+        let entries: string[] = [];
+        try {
+          entries = await fs.readdir(rootDir);
+        } catch {
+          // dir might not exist yet, createProject handles mkdir
+          entries = [];
+        }
+        
+        let hasProjects = false;
+        for (const entry of entries) {
+           if (/^project-(\d+)\.json$/i.test(entry)) {
+             hasProjects = true;
+             break;
+           }
+        }
+        
+        if (!hasProjects) {
+           const result = await createProject(rootDir, "Project 1", 24, this.#appVersion);
+           activeProjectId = String(result.id);
+           settings.setActiveProjectId(activeProjectId);
+        }
+      } catch (e) {
+        console.error("JSONPersistenceModule: Failed to ensure default project", e);
+      }
+    }
+
     this.registerHandlers();
   }
 

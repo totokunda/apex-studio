@@ -1,7 +1,6 @@
 import { AppModule } from "../AppModule.js";
 import { ModuleContext } from "../ModuleContext.js";
 import { getSettingsModule } from "./SettingsModule.js";
-import { createProject } from "./JSONPersistenceModule.js";
 import { protocol, ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
@@ -876,23 +875,7 @@ class AppDirProtocol implements AppModule {
     const settings = getSettingsModule();
     this.backendUrl = settings.getBackendUrl();
     
-    let activeProjectId = settings.getActiveProjectId();
-    
-    // Ensure we have a valid project on startup to prevent crashes.
-    if (!activeProjectId) {
-      try {
-        const userData = app.getPath("userData");
-        const projectsDir = path.join(userData, "projects-json");
-        // Check if we need to create a default project
-        const result = await createProject(projectsDir, "Untitled Project", 24, app.getVersion());
-        activeProjectId = String(result.id);
-        settings.setActiveProjectId(activeProjectId);
-      } catch (e) {
-        console.error("AppDirProtocol: Failed to ensure default project", e);
-      }
-    }
-
-    this.activeProjectId = activeProjectId;
+    this.activeProjectId = settings.getActiveProjectId();
 
     try {
       this.activeFolderUuid = await this.getActiveFolderUuid();
