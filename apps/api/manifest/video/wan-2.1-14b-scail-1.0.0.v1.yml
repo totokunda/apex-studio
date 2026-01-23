@@ -25,7 +25,6 @@ spec:
   model_type: scail
   denoise_type: base
   default_duration_secs: 5.0
-  min_duration_secs: 1.0
   engine_type: torch
   fps: 16
   compute_requirements:
