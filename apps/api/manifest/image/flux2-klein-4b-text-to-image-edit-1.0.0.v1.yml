@@ -346,6 +346,7 @@ spec:
       type: text
       panel: prompting
       required: true
+    
     - id: resolution
       label: Resolution
       description: Select the resolution of the output image
