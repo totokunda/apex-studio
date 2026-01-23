@@ -256,6 +256,25 @@ def _force_load_buffer(buf: torch.Tensor) -> None:
     del q
 
 
+def _flush_caches() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.synchronize()
+        except Exception:
+            pass
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+            torch.cuda.reset_peak_memory_stats()
+        except Exception:
+            pass
+    try:
+        torch._C._host_emptyCache()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 def _pin_module_to_reserved_memory(
     model: torch.nn.Module,
     *,
@@ -345,9 +364,9 @@ def _pin_module_to_reserved_memory(
 
     # Verify we can allocate at least a small pinned tensor 
     gc.collect()
+    dummy_pinned_tensor = None
     try:
-        dummy = torch.empty(RESERVED_RAM_MIN_AVAILABLE, dtype=torch.uint8, pin_memory=True, device="cpu")
-        del dummy
+        dummy_pinned_tensor = torch.empty(RESERVED_RAM_MIN_AVAILABLE, dtype=torch.uint8, pin_memory=True, device="cpu")
     except Exception:
         return
 
@@ -381,14 +400,17 @@ def _pin_module_to_reserved_memory(
             size = max(int(big_tensors_sizes[last_allocated_big_tensor]), BIG_TENSOR_MIN_SIZE)
             try:
                 if max_reservable > 0 and ((_total_pinned_bytes + total + size) >= max_reservable):
+                    dummy_pinned_tensor = None
                     failed_planned_allocation = True
                     _max_pinnable_bytes = _total_pinned_bytes + total
                     break
                 current_slab = torch.empty(size, dtype=torch.uint8, pin_memory=True, device="cpu")
                 big_tensors.append(current_slab)
             except Exception:
+                dummy_pinned_tensor = None
                 failed_planned_allocation = True
                 _max_pinnable_bytes = _total_pinned_bytes + total
+                _flush_caches()
                 break
             total += size
 
@@ -414,6 +436,8 @@ def _pin_module_to_reserved_memory(
             p.data = _move_to_pinned_tensor(p.data, current_slab, offset, length)
 
         tensor_no += 1
+    
+    del dummy_pinned_tensor
 
     model._pinned_bytes = total  # type: ignore[attr-defined]
     _total_pinned_bytes += total
@@ -1417,6 +1441,7 @@ def {fname}(module, *args, **kwargs):
                     setattr(parent_module, n, q)
                     if tied_param is not None:
                         setattr(tied_param[0], tied_param[1], q)
+                    del p, q
 
         loaded_block = self.loaded_blocks.get(model_id)
         if (not preload) and loaded_block is not None:
@@ -1459,6 +1484,7 @@ def {fname}(module, *args, **kwargs):
             )
             q = _wrap_as_module_tensor(p, is_buffer=is_buffer)
             setattr(parent_module, n, q)
+            del p, q
         if blocks_name is None:
             # Base unload implies LoRAs are no longer resident on GPU.
             self._loras_on_gpu = False

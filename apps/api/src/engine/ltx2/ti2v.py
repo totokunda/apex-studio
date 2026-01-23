@@ -725,7 +725,7 @@ class LTX2TI2VEngine(LTX2Shared):
                 for img in image
             ]
             preprocessed_image = [
-                self.preprocess(img, crf=image_quality_crf) for img in image
+                self.preprocess(img, crf=image_quality_crf) if image_quality_crf > 0 else img for img in image
             ]
             if not use_distilled_stage_2:
                 width, height = image[0].size
