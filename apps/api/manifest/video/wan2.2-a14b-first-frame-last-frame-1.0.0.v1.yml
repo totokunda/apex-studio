@@ -23,7 +23,6 @@ spec:
   denoise_type: moe
   default_duration_secs: 5.0
   fps: 16
-  min_duration_secs: 1.0
   compute_requirements:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
