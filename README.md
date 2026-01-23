@@ -1,7 +1,7 @@
 <h1 align="center">Apex Studio</h1>
 <p align="center">Effortless Open-Source Content Creation. </p>
 <p align="center">
-  <img src="assets/images/apex-studio.png" alt="Apex Studio" />
+  <img src="assets/images/Apex-Studio-Hero.png" alt="Apex Studio" />
 </p>
 
 <p align="center">
