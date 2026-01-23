@@ -12,11 +12,12 @@ except Exception:  # pragma: no cover
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    # Add `apps/api/` to sys.path so `import src...` works when running as script.
+    return Path(__file__).resolve().parent
 
 
 def _run_dir() -> Path:
-    return _repo_root() / "runs" / "ltx2-19b-text-to-image-to-video-1.0.0.v1"
+    return Path("api/runs/ltx2-19b-text-to-image-to-video-1.0.0.v1")
 
 
 def _load_run_inputs() -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -91,13 +92,126 @@ def _sweep_cases() -> List[Tuple[int, int, int]]:
     """
     if _env_flag("APEX_TEST_LTX2_SWEEP", default=False):
         return [
-            (512, 768, 25),
-            (640, 1024, 49),
-            (720, 1280, 73),
-            (896, 1344, 97),
-            (1088, 1440, 121),
+            (720, 1280, 481),
+            (1440, 1920, 161),
+            (1920, 2560, 201),
+            (1920, 2560, 241),
+            (2560, 3440, 281),
         ]
-    return [(512, 768, 25)]
+    return [(1088, 1920, 481)]
+
+
+def _parse_profiles_env() -> List[str]:
+    """
+    Profiles to test, in order.
+
+    - `APEX_TEST_BUDGET_PROFILES=all` -> all 5 profiles
+    - `APEX_TEST_BUDGET_PROFILES=VerylowRAM_LowVRAM,LowRAM_LowVRAM`
+    - `APEX_TEST_BUDGET_PROFILES=5,4,2`
+    """
+    raw = (os.environ.get("APEX_TEST_BUDGET_PROFILES") or "").strip()
+    if not raw:
+        return ["VerylowRAM_LowVRAM"]
+    if raw.lower() == "all":
+        return ["HighRAM_HighVRAM", "HighRAM_LowVRAM", "LowRAM_HighVRAM", "LowRAM_LowVRAM", "VerylowRAM_LowVRAM"]
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _budget_profile_config(profile: str, *, model_id: str = "transformer") -> Dict[str, Any]:
+    """
+    Mirror mmgp profile defaults, mapped into Apex's memory_management config.
+
+    Notes:
+    - `budget_mb=0` means "no budgeting" (full module can stay resident) in this test harness.
+    - `pin_cpu_memory` maps to reserved/pinned RAM behavior.
+    """
+    p = str(profile or "").strip()
+    # accept numeric
+    if p.isdigit():
+        p = {
+            "1": "HighRAM_HighVRAM",
+            "2": "HighRAM_LowVRAM",
+            "3": "LowRAM_HighVRAM",
+            "4": "LowRAM_LowVRAM",
+            "5": "VerylowRAM_LowVRAM",
+        }.get(p, "VerylowRAM_LowVRAM")
+
+    # mmgp-like defaults
+    budget_mb: Any = 0
+    pin_cpu_memory = False
+    if p == "HighRAM_HighVRAM":
+        pin_cpu_memory = True
+        budget_mb = 0
+    elif p == "HighRAM_LowVRAM":
+        pin_cpu_memory = True
+        budget_mb = 3000
+    elif p == "LowRAM_HighVRAM":
+        pin_cpu_memory = (model_id == "transformer")
+        budget_mb = 0
+    elif p == "LowRAM_LowVRAM":
+        pin_cpu_memory = (model_id == "transformer")
+        budget_mb = 3000
+    else:  # VerylowRAM_LowVRAM
+        pin_cpu_memory = False
+        budget_mb = 100 if model_id == "transformer" else 3000
+
+    # Allow env overrides for quick tuning
+    env_budget = os.environ.get("APEX_TEST_BUDGET_MB")
+    if env_budget is not None and env_budget.strip() != "":
+        budget_mb = env_budget.strip()
+
+    async_transfers = _env_flag("APEX_TEST_ASYNC_TRANSFERS", default=False)
+    prefetch = _env_flag("APEX_TEST_PREFETCH", default=False)
+    offload_after_forward = _env_flag("APEX_TEST_OFFLOAD_AFTER_FORWARD", default=True)
+    vram_safety_coefficient = float(os.environ.get("APEX_TEST_VRAM_SAFETY_COEFFICIENT", "0.8") or "0.8")
+
+    return {
+        "offload_mode": "budget",
+        "budget_mb": budget_mb,
+        "async_transfers": async_transfers,
+        "prefetch": prefetch,
+        "pin_cpu_memory": pin_cpu_memory,
+        "vram_safety_coefficient": vram_safety_coefficient,
+        "offload_after_forward": offload_after_forward,
+    }
+
+
+def _inject_budget_offload(engine_kwargs: Dict[str, Any], *, profile: str) -> Dict[str, Any]:
+    engine_kwargs = dict(engine_kwargs)
+    memory_management = dict(engine_kwargs.get("memory_management") or {})
+    
+    # Fallback so any component not explicitly listed below still uses budget offloading.
+    # (BaseEngine resolves `all` when no name/type-specific entry exists.)
+    memory_management.setdefault(
+        "all", {**_budget_profile_config(profile, model_id="all"), **(memory_management.get("all") or {})}
+    )
+
+    component_keys = (
+        "transformer",
+        "text_encoder",
+        "vae",
+        "video_vae",
+        "audio_vae",
+        "transformer_vae",
+        "latent_upsampler",
+        "connectors",
+        "vocoder",
+    )
+    for key in component_keys:
+        memory_management[key] = {
+            **_budget_profile_config(profile, model_id=key),
+            **(memory_management.get(key) or {}),
+        }
+    if "transformer" in memory_management:
+        memory_management["transformer"].setdefault(
+            "block_modules", ["transformer_blocks"]
+        )
+    if "text_encoder" in memory_management:
+        memory_management["text_encoder"].setdefault(
+            "block_modules", ["model.language_model"]
+        )
+    engine_kwargs["memory_management"] = memory_management
+    return engine_kwargs
 
 def run_ltx2_sweep() -> None:
     """
@@ -123,40 +237,48 @@ def run_ltx2_sweep() -> None:
 
     from src.engine.registry import UniversalEngine
 
-    engine_kwargs, base_inputs = _load_run_inputs()
-
-    base_inputs = dict(base_inputs)
-    base_inputs["num_inference_steps"] = int(base_inputs.get("num_inference_steps", 1) or 1)
-    base_inputs["upsample"] = False
-
     os.environ.setdefault("APEX_MEM_DEBUG", "1")
+    profiles = _parse_profiles_env()
 
-    engine = UniversalEngine(**engine_kwargs)
+    for prof in profiles:
+        engine_kwargs, base_inputs = _load_run_inputs()
+        engine_kwargs = _inject_budget_offload(engine_kwargs, profile=prof)
 
-    for (h, w, frames) in _sweep_cases():
-        inputs = dict(base_inputs)
-        inputs["height"] = int(h)
-        inputs["width"] = int(w)
-        inputs["duration"] = int(frames)
+        base_inputs = dict(base_inputs)
+        base_inputs["num_inference_steps"] = 1
+        base_inputs["rope_on_cpu"] = True
 
-        _cuda_reset_peak()
-        before = _cuda_mem_snapshot()
-        t0 = time.time()
-        out = engine.run(**inputs)
-        elapsed = time.time() - t0
-        after = _cuda_mem_snapshot()
+        print(f"\n=== Budget offload profile: {prof} ===")
+        engine = UniversalEngine(**engine_kwargs)
 
-        print(
-            "\n[sweep] "
-            f"h={h} w={w} frames={frames} "
-            f"elapsed={elapsed:.2f}s "
-            f"mem_before={before} "
-            f"mem_after={after} "
-            f"out_type={type(out)}"
-        )
+        for (h, w, frames) in _sweep_cases():
+            inputs = dict(base_inputs)
+            inputs["height"] = int(h)
+            inputs["width"] = int(w)
+            inputs["duration"] = int(frames)
+            print(inputs["height"], inputs["width"], inputs["duration"])
 
-        if out is None:
-            raise RuntimeError("Engine returned None")
+            _cuda_reset_peak()
+            before = _cuda_mem_snapshot()
+            t0 = time.time()
+            out = engine.run(**inputs)
+            elapsed = time.time() - t0
+            after = _cuda_mem_snapshot()
+            from src.utils.save_audio_video import save_video_ltx2
+            save_video_ltx2(out[0], out[1], f"result_{h}_{w}_{frames}")
+
+            print(
+                "\n[sweep] "
+                f"profile={prof} "
+                f"h={h} w={w} frames={frames} "
+                f"elapsed={elapsed:.2f}s "
+                f"mem_before={before} "
+                f"mem_after={after} "
+                f"out_type={type(out)}"
+            )
+
+            if out is None:
+                raise RuntimeError("Engine returned None")
 
 
 if pytest is not None:
