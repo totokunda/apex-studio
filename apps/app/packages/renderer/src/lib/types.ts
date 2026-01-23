@@ -6,8 +6,8 @@ import {
   InputFormat,
   Input,
 } from "mediabunny";
-import { Preprocessor } from "./preprocessor";
-import { ManifestDocument } from "./manifest/api";
+import type { Preprocessor } from "./preprocessor/index.js";
+import type { ManifestDocument } from "./manifest/api.js";
 
 export type ClipType =
   | "video"
