@@ -51,8 +51,8 @@ class ZImageTransformerConverter(TransformerConverter):
             #
             # NOTE: We anchor the top-level replacements to avoid double-application
             # (e.g. "final_layer." is a substring of "all_final_layer.2-1.").
-            r"^final_layer\.": "all_final_layer.2-1.",
-            r"^x_embedder\.": "all_x_embedder.2-1.",
+            r"final_layer.": "all_final_layer.2-1.",
+            r"x_embedder.": "all_x_embedder.2-1.",
             # Attention naming: {q_norm,k_norm,out} -> {norm_q,norm_k,to_out.0}
             ".attention.q_norm.": ".attention.norm_q.",
             ".attention.k_norm.": ".attention.norm_k.",
@@ -229,8 +229,8 @@ class WanS2VTransformerConverter(WanTransformerConverter):
     def __init__(self):
         super().__init__()
         self.new_rename_dict = {
-            r"^causal_audio_encoder\.": "condition_embedder.causal_audio_encoder.",
-            r"^casual_audio_encoder\.": "condition_embedder.causal_audio_encoder.",
+            r"causal_audio_encoder.": "condition_embedder.causal_audio_encoder.",
+            r"casual_audio_encoder.": "condition_embedder.causal_audio_encoder.",
             ".q": ".to_q",
             ".k": ".to_k",
             ".v": ".to_v",

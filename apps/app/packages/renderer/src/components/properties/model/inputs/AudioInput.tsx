@@ -395,7 +395,7 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
         >
           <TabsList
             className={cn(
-              "w-full text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row shadow overflow-hidden",
+              "w-full text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row  overflow-hidden",
               numEligibleTimelineAssets === 0
                 ? "justify-start"
                 : "justify-between cursor-pointer bg-brand-background-light",

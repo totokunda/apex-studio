@@ -101,6 +101,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   private expectedExitUntilMs: number = 0;
   private autoRestartSuppressed: boolean = false;
   private autoRestartSuppressedReason: string | null = null;
+  private installerActive: boolean = false;
+  private installerActiveReason: string | null = null;
+  private installerActiveSinceMs: number | null = null;
   private runtimeVerifyCache:
     | { at: number; ok: boolean; reason?: string }
     | null = null;
@@ -146,11 +149,61 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       await this.app.whenReady();
       // Small delay to ensure window is ready
       setTimeout(() => {
+        if (this.installerActive) {
+          this.appendSupervisorLog(
+            `[PythonProcess] Skipping auto-start while installer is active${this.installerActiveReason ? ` (${this.installerActiveReason})` : ""}`,
+          );
+          return;
+        }
         this.start().catch((err) => {
           console.error("Failed to auto-start Python API:", err);
           this.emit("error", err);
         });
       }, 1000);
+    }
+  }
+
+  /**
+   * While installer is active, we suppress any attempts to start the backend (auto-start,
+   * launcher auto-start, user start) to avoid racing with extraction/setup operations.
+   */
+  isInstallerActive(): boolean {
+    return this.installerActive;
+  }
+
+  async setInstallerActive(active: boolean, reason?: string): Promise<void> {
+    const next = Boolean(active);
+    if (next === this.installerActive) {
+      // Update reason if provided (best-effort).
+      if (next && reason) this.installerActiveReason = String(reason);
+      return;
+    }
+
+    this.installerActive = next;
+    if (next) {
+      this.installerActiveSinceMs = Date.now();
+      this.installerActiveReason = reason ? String(reason) : "installer";
+      this.appendSupervisorLog(
+        `[PythonProcess] Installer active; suppressing backend start/restart${this.installerActiveReason ? ` (${this.installerActiveReason})` : ""}`,
+      );
+      // Ensure watchdog won't restart while we are modifying the runtime.
+      this.desiredRunning = false;
+      this.clearRestartTimer();
+      // Best-effort: stop any running backend so extraction/setup can safely mutate files on disk.
+      try {
+        await this.stop();
+      } catch {}
+    } else {
+      const dur =
+        this.installerActiveSinceMs != null
+          ? `${Math.max(0, Date.now() - this.installerActiveSinceMs)}ms`
+          : null;
+      this.appendSupervisorLog(
+        `[PythonProcess] Installer inactive; backend start allowed${dur ? ` (held ${dur})` : ""}`,
+      );
+      this.installerActiveSinceMs = null;
+      this.installerActiveReason = null;
+      // Note: we do not auto-start here; the installer/launcher decides when to start.
     }
   }
 
@@ -726,17 +779,32 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   async start(): Promise<void> {
-    return await this.startWithOptions();
+    try {
+
+      return await this.startWithOptions();
+    } catch (error) {
+      console.error("Python API startup failed", error);
+      throw error;
+    }
+     
   }
 
   async startWithOptions(opts?: { startupWaitMs?: number }): Promise<void> {
+    
     return await this.enqueue(() => this.startInternal(opts));
   }
 
   private async startInternal(opts?: { startupWaitMs?: number }): Promise<void> {
+    if (this.installerActive) {
+      this.appendSupervisorLog(
+        `[PythonProcess] Ignoring start request while installer is active${this.installerActiveReason ? ` (${this.installerActiveReason})` : ""}`,
+      );
+      return;
+    }
     // The moment start is requested, we consider the backend "desired".
     // This allows fast auto-restart if it crashes during startup.
     this.desiredRunning = true;
+   
 
     if (this.state.status === "running") {
       console.log("Python API is already running");
@@ -750,6 +818,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     this.state.status = "starting";
     this.emit("status", this.state);
+    
 
     // In production, we may be using either:
     // - a python-api shipped inside app resources, OR
@@ -775,6 +844,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       }
     }
 
+
     if (!this.config.devMode && !fs.existsSync(this.bundledPythonPath)) {
       this.state.status = "error";
       this.state.error = `Python runtime not found: ${this.bundledPythonPath}`;
@@ -784,7 +854,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     }
 
     try {
+
       await this.spawnProcess();
+
       await this.waitForHealthy(opts?.startupWaitMs);
       this.startHealthChecks();
 
@@ -793,6 +865,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       this.emit("status", this.state);
       console.log(`Python API started on ${this.state.host}:${this.state.port}`);
     } catch (error) {
+      console.error("Python API startup failed", error);
       // If startup fails, keep desiredRunning=true so the watchdog can retry.
       this.state.status = "error";
       this.state.error = error instanceof Error ? error.message : "Unknown error";
@@ -870,13 +943,11 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       this.bundledBundleRoot = bundleRoot;
       this.bundledPythonPath = pythonExe;
 
-      cmd = pythonExe;
+      cmd = pythonExe
       args = [
         "-m",
         "src",
-        // Avoid Procfile/Honcho indirection; run the API server directly so the
-        // Electron-spawned process remains the true owner of the server tree.
-        "serve",
+        "serve"
       ];
     
     const env = this.buildEnvironment();
@@ -890,6 +961,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       detached: process.platform !== "win32",
     });
 
+  
     this.state.pid = this.process.pid;
     this.lastSpawnedPid = this.process.pid ?? null;
     const spawnedPid = this.process.pid ?? null;

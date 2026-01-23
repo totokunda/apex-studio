@@ -29,6 +29,7 @@ from src.utils.defaults import (
     get_preprocessor_results_path,
     get_postprocessor_results_path,
 )
+import errno
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
@@ -54,12 +55,39 @@ def _start_parent_watchdog() -> None:
         return
 
     def _exists(pid: int) -> bool:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            ERROR_ACCESS_DENIED = 5
+
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+            if not handle:
+                err = ctypes.get_last_error()
+                if err == ERROR_ACCESS_DENIED:
+                    return True  # process likely exists, just can't query it
+                return False
+            try:
+                exit_code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return True  # be conservative; don't self-terminate on query failure
+                return exit_code.value == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+
+        # POSIX
         try:
-            # signal 0: existence check (works on Unix; on Windows it raises if missing)
             os.kill(pid, 0)
             return True
-        except Exception:
+        except ProcessLookupError:
             return False
+        except PermissionError:
+            return True
+        except OSError as e:
+            return getattr(e, "errno", None) == errno.EPERM
 
     def _loop() -> None:
         # small delay so parent fully initializes
