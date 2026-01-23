@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from .ws import router as ws_router
 from .manifest import router as manifest_router
 from .config import router as config_router
@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from typing import Optional
 import os
+import signal
 import threading
 import time
 from .stability import install_stability_middleware
@@ -31,6 +32,7 @@ from src.utils.defaults import (
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
+_shutdown_requested = threading.Event()
 
 
 def _start_parent_watchdog() -> None:
@@ -181,3 +183,31 @@ def ready():
     if _ray_ready:
         return {"status": "ready"}
     return {"status": "starting", "error": _ray_start_error}
+
+
+def _exit_process_soon() -> None:
+    """
+    Trigger process exit after returning the HTTP response.
+    We use SIGTERM so uvicorn can run lifespan shutdown hooks.
+    """
+    time.sleep(0.25)
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except Exception:
+        os._exit(0)
+
+
+@app.post("/shutdown")
+def shutdown(background_tasks: BackgroundTasks):
+    """
+    Best-effort shutdown: stop Ray, then terminate the API process gracefully.
+    """
+    if not _shutdown_requested.is_set():
+        _shutdown_requested.set()
+        try:
+            shutdown_ray()
+        except Exception:
+            # Best-effort; SIGTERM will still trigger shutdown handlers.
+            pass
+        background_tasks.add_task(_exit_process_soon)
+    return {"status": "shutting_down"}
