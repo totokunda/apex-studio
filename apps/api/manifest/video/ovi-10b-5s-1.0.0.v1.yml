@@ -23,9 +23,7 @@ spec:
   engine: wan
   model_type: ovi
   engine_type: torch
-  max_duration_secs: 5.0
   default_duration_secs: 5.0
-  min_duration_secs: 5.0
   fps: 24
   compute_requirements:
     min_cuda_compute_capability: 7.5

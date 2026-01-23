@@ -171,6 +171,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
           )}
         />
       </div>
+      
       {section === "media" && <MediaMenu />}
       {section === "filters" && <FilterMenu />}
       {section === "models" && <ModelMenu />}
