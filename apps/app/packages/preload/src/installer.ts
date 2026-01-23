@@ -94,4 +94,14 @@ export async function ensureFfmpegInstalled(): Promise<
   return await ipcRenderer.invoke("installer:ensure-ffmpeg");
 }
 
+export async function setInstallerActive(
+  active: boolean,
+  reason?: string,
+): Promise<ConfigResponse<{ active: boolean }>> {
+  return await ipcRenderer.invoke("installer:set-active", {
+    active: Boolean(active),
+    reason: reason ? String(reason) : undefined,
+  });
+}
+
 
