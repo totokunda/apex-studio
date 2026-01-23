@@ -3383,17 +3383,17 @@ def _run_engine_from_manifest_impl(
             else render_on_step_callback
         )
 
-        if os.environ.get("ENABLE_PERSIST_RUN_CONFIG", "true") == "true":
+        if _bool_env("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
             _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
 
         # get if the model is video or image
         if has_fps:
             render_on_step = (
-                os.environ.get("ENABLE_VIDEO_RENDER_STEP", "true") == "true"
+                _bool_env("ENABLE_VIDEO_RENDER_STEP", "false") == "true"
             )
         else:
             render_on_step = (
-                os.environ.get("ENABLE_IMAGE_RENDER_STEP", "true") == "true"
+                _bool_env("ENABLE_IMAGE_RENDER_STEP", "false") == "true"
             )
 
         output = engine.run(
