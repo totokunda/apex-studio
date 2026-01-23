@@ -4,12 +4,13 @@ import { ipcMain } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { getSettingsModule } from "./SettingsModule.js";
 
 type JsonResponse<T> =
   | { success: true; data: T }
   | { success: false; error: string };
 
-interface ProjectJsonV1 {
+export interface ProjectJsonV1 {
   version: string;
   meta: {
     id: string;
@@ -34,7 +35,7 @@ interface ProjectJsonV1 {
   [key: string]: unknown;
 }
 
-function ensureProjectJson(
+export function ensureProjectJson(
   raw: any,
   projectId: number,
   appVersion: string | undefined,
@@ -117,6 +118,94 @@ function ensureProjectJson(
   };
 }
 
+export async function createProject(
+  projectsDir: string,
+  name: string,
+  fps: number,
+  appVersion: string | undefined
+) {
+  if (!Number.isFinite(fps) || fps <= 0) {
+    throw new Error("FPS must be a positive number");
+  }
+
+  // Determine next available numeric project id from existing files.
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(projectsDir);
+  } catch {
+    await fs.mkdir(projectsDir, { recursive: true });
+    entries = [];
+  }
+
+  let maxId = 0;
+  for (const entry of entries) {
+    const match = /^project-(\d+)\.json$/i.exec(entry);
+    if (!match) continue;
+    const id = Number(match[1]);
+    if (Number.isInteger(id) && id > maxId) {
+      maxId = id;
+    }
+  }
+  const id = maxId > 0 ? maxId + 1 : 1;
+
+  const now = Date.now();
+  const raw = {
+    version: "1.0.0",
+    meta: {
+      id: String(randomUUID()),
+      name,
+      createdAt: now,
+      lastModified: now,
+    },
+    settings: {
+      fps,
+      aspectRatio: {
+        width: 16,
+        height: 9,
+        id: "16:9",
+      },
+      defaultClipLength: 5,
+    },
+    editorState: {},
+    assets: {},
+    timeline: {
+      tracks: [] as any[],
+      clips: [] as any[],
+    },
+  };
+
+  const baseDoc = ensureProjectJson(
+    raw,
+    id,
+    appVersion,
+  );
+  const filePath = path.join(projectsDir, `project-${id}.json`);
+
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(baseDoc, null, 2),
+    "utf8",
+  );
+
+  const folderUuid =
+    typeof baseDoc.meta?.id === "string" &&
+    baseDoc.meta.id.length > 0
+      ? baseDoc.meta.id
+      : `project-${id}`;
+
+  const aspectRatio =
+    (baseDoc.settings as any)?.aspectRatio ?? undefined;
+
+  return {
+    id,
+    name: baseDoc.meta.name,
+    fps: baseDoc.settings.fps,
+    folderUuid,
+    aspectRatio,
+    filePath
+  };
+}
+
 export class JSONPersistenceModule implements AppModule {
   #projectsDir: string | undefined;
   #appVersion: string | undefined;
@@ -135,6 +224,39 @@ export class JSONPersistenceModule implements AppModule {
 
     this.#projectsDir = rootDir;
     this.#appVersion = app.getVersion?.() ?? undefined;
+    
+    // Check if we need to create a default project
+    const settings = getSettingsModule();
+    let activeProjectId = settings.getActiveProjectId();
+    
+    if (!activeProjectId) {
+      try {
+        let entries: string[] = [];
+        try {
+          entries = await fs.readdir(rootDir);
+        } catch {
+          // dir might not exist yet, createProject handles mkdir
+          entries = [];
+        }
+        
+        let hasProjects = false;
+        for (const entry of entries) {
+           if (/^project-(\d+)\.json$/i.test(entry)) {
+             hasProjects = true;
+             break;
+           }
+        }
+        
+        if (!hasProjects) {
+           const result = await createProject(rootDir, "Project 1", 24, this.#appVersion);
+           activeProjectId = String(result.id);
+           settings.setActiveProjectId(activeProjectId);
+        }
+      } catch (e) {
+        console.error("JSONPersistenceModule: Failed to ensure default project", e);
+      }
+    }
+
     this.registerHandlers();
   }
 
@@ -1190,79 +1312,16 @@ export class JSONPersistenceModule implements AppModule {
           const name = String(payload?.name ?? "").trim() || "Project 1";
           const fps = Number(payload?.fps ?? 24);
 
-          if (!Number.isFinite(fps) || fps <= 0) {
-            return { success: false, error: "FPS must be a positive number" };
-          }
-
-          // Determine next available numeric project id from existing files.
-          const entries = await fs.readdir(this.projectsDir);
-          let maxId = 0;
-          for (const entry of entries) {
-            const match = /^project-(\d+)\.json$/i.exec(entry);
-            if (!match) continue;
-            const id = Number(match[1]);
-            if (Number.isInteger(id) && id > maxId) {
-              maxId = id;
-            }
-          }
-          const id = maxId > 0 ? maxId + 1 : 1;
-
-          const now = Date.now();
-          const raw = {
-            version: "1.0.0",
-            meta: {
-              id: String(randomUUID()),
-              name,
-              createdAt: now,
-              lastModified: now,
-            },
-            settings: {
-              fps,
-              aspectRatio: {
-                width: 16,
-                height: 9,
-                id: "16:9",
-              },
-              defaultClipLength: 5,
-            },
-            editorState: {},
-            assets: {},
-            timeline: {
-              tracks: [] as any[],
-              clips: [] as any[],
-            },
-          };
-
-          const baseDoc = ensureProjectJson(
-            raw,
-            id,
-            this.#appVersion ?? undefined,
-          );
-          const filePath = this.getProjectPath(id);
-
-          await fs.writeFile(
-            filePath,
-            JSON.stringify(baseDoc, null, 2),
-            "utf8",
-          );
-
-          const folderUuid =
-            typeof baseDoc.meta?.id === "string" &&
-            baseDoc.meta.id.length > 0
-              ? baseDoc.meta.id
-              : `project-${id}`;
-
-          const aspectRatio =
-            (baseDoc.settings as any)?.aspectRatio ?? undefined;
+          const result = await createProject(this.projectsDir, name, fps, this.#appVersion);
 
           return {
             success: true,
             data: {
-              id,
-                name: baseDoc.meta.name,
-                fps: baseDoc.settings.fps,
-              folderUuid,
-              aspectRatio,
+              id: result.id,
+              name: result.name,
+              fps: result.fps,
+              folderUuid: result.folderUuid,
+              aspectRatio: result.aspectRatio,
             },
           };
         } catch (error) {
