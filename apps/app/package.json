@@ -21,8 +21,11 @@
     "url": "https://github.com/totokunda/apex-studio.git"
   },
   "publish": [
-      { "provider": "github", "timeout": 600000 }
-    ],
+    {
+      "provider": "github",
+      "timeout": 600000
+    }
+  ],
   "scripts": {
     "build": "npm run build -ws --if-present",
     "compile": "npm run build && electron-builder build --config electron-builder.cjs",
@@ -57,8 +60,6 @@
     "drizzle-kit": "^0.31.7",
     "electron": "^38.1.2",
     "electron-builder": "26.0.12",
-    "ffmpeg-static": "^5.2.0",
-    "ffprobe-static": "^3.1.0",
     "glob": "11.0.3",
     "playwright": "^1.55.0",
     "prettier": "^3.7.1",
@@ -71,6 +72,8 @@
     "@tanstack/react-query": "^5.90.12",
     "drizzle-orm": "^0.44.7",
     "electron-store": "^11.0.2",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
     "mime": "^4.1.0",
     "node-ts": "^8.0.10",
     "soundtouchjs": "^0.2.1",

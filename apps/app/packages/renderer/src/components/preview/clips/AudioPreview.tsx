@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useControlsStore } from "@/lib/control";
 import { useInputControlsStore } from "@/lib/inputControl";
 import { MediaInfo, AudioClipProps } from "@/lib/types";
@@ -60,9 +60,6 @@ const AudioPreview: React.FC<
     preserveInputTiming?: boolean;
   };
 
-  const mediaInfoRef = useRef<MediaInfo | null>(
-    getMediaInfoCached(assetId) || null,
-  );
   const fpsFromControls = useControlsStore((s) => s.fps);
   const fpsByInputId = useInputControlsStore((s) => s.fpsByInputId);
   const fpsFromInputs = fpsByInputId[inputId || ""] ?? fpsFromControls;
@@ -75,6 +72,16 @@ const AudioPreview: React.FC<
   const focusFrameFromInputs = focusFrameByInputId[inputId || ""] ?? 0;
   const focusFrame = inputMode ? focusFrameFromInputs : focusFrameFromControls;
   const getAssetById = useClipStore((s) => s.getAssetById);
+  const asset = useMemo(() => getAssetById(assetId), [assetId, getAssetById]);
+
+  const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(() => {
+    // Try to get from cache initially if we have the asset path
+    // But since asset is derived, we can't easily access it in initial state
+    // unless we trust assetId is the path or we wait for effect.
+    // However, we can try to get it if the asset is already available in store synchronously.
+    const a = getAssetById(assetId);
+    return a ? getMediaInfoCached(a.path) || null : null;
+  });
 
   // In input mode, the AudioPreview expects a clip-local focusFrame (0..span), so we normalize
   // absolute start/end into a 0-based window when needed.
@@ -134,7 +141,9 @@ const AudioPreview: React.FC<
   const soundtouchUnavailableRef = useRef<boolean>(false);
   const soundtouchInitCtxRef = useRef<AudioContext | null>(null);
   const lastConfiguredSpeedRef = useRef<number | null>(null);
-  const asset = useMemo(() => getAssetById(assetId), [assetId]);
+  
+  // Clean up references to old mediaInfoRef
+  // const asset = useMemo(() => getAssetById(assetId), [assetId]); // Moved up
   useEffect(() => {
     const wasPlaying = prevIsPlayingRef.current;
     if (!wasPlaying && isPlaying && isInFrame) {
@@ -308,44 +317,61 @@ const AudioPreview: React.FC<
 
   // Load media info to detect audio track and preconfigure worker
   useEffect(() => {
-    if (!asset) return;
-    const info = getMediaInfoCached(asset.path);
-    if (info) {
-      mediaInfoRef.current = info;
-      // Preconfigure audio worker early so it's ready when playback starts
-      if (info.audio) {
-        void preconfigureAudioWorker(asset.path, info);
-      }
+    if (!asset) {
+      setMediaInfo(null);
+      return;
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        const info = await getMediaInfo(asset?.path ?? "");
-        if (!cancelled) {
-          mediaInfoRef.current = info;
-          // Preconfigure audio worker early so it's ready when playback starts
-          if (info?.audio) {
-            void preconfigureAudioWorker(asset.path, info);
+    
+    let active = true;
+    
+    // First try cache
+    const cached = getMediaInfoCached(asset.path);
+    if (cached) {
+      setMediaInfo(cached);
+      if (cached.audio) {
+        void preconfigureAudioWorker(asset.path, cached);
+      }
+    } else {
+      // If not cached, clear current info while loading to avoid mismatch
+      // But only if the current info belongs to a different asset. 
+      // Since we don't track which asset the info belongs to, and we just switched assets,
+      // it's safer to clear or rely on the fact that we just mounted or assetId changed.
+      // However, to prevent flickering or playing wrong audio, setting to null is safe.
+      setMediaInfo(null);
+      
+      (async () => {
+        try {
+          const info = await getMediaInfo(asset.path);
+          if (active) {
+            setMediaInfo(info);
+            // Preconfigure audio worker early so it's ready when playback starts
+            if (info?.audio) {
+              void preconfigureAudioWorker(asset.path, info);
+            }
           }
-        }
-      } catch {}
-    })();
+        } catch {}
+      })();
+    }
+    
+    return () => {
+      active = false;
+    };
   }, [asset]);
 
   // Pre-seek audio worker when scrubbing while paused for instant playback start
   useEffect(() => {
     if (isPlaying || !asset || !fps || !isInFrame) return;
-    if (!mediaInfoRef.current?.audio) return;
+    if (!mediaInfo?.audio) return;
     
     // Calculate the media timestamp we would seek to
     const speedFactor = Math.max(0.1, speed);
-    const mediaStartOffset = mediaInfoRef.current?.startFrame || 0;
+    const mediaStartOffset = mediaInfo.startFrame || 0;
     const mediaFrameIndex = Math.max(0, Math.floor(currentFrame * speedFactor)) + mediaStartOffset;
     const timestamp = mediaFrameIndex / fps;
     
     // Fire off preseek (non-blocking)
-    void preseekAudioWorker(asset.path, timestamp, mediaInfoRef.current);
-  }, [isPlaying, asset, fps, currentFrame, speed, isInFrame]);
+    void preseekAudioWorker(asset.path, timestamp, mediaInfo);
+  }, [isPlaying, asset, fps, currentFrame, speed, isInFrame, mediaInfo]);
 
   useEffect(() => {
     const onPlaying = async (
@@ -551,8 +577,8 @@ const AudioPreview: React.FC<
       !isInFrame ||
       !isPlaying ||
       !ctx ||
-      !mediaInfoRef.current ||
-      !mediaInfoRef.current.audio ||
+      !mediaInfo ||
+      !mediaInfo.audio ||
       !fps ||
       !Number.isFinite(currentFrame)
     ) {
@@ -584,7 +610,7 @@ const AudioPreview: React.FC<
     
     // Sample from the correct media frame based on speed
     const speedFactor = Math.max(0.1, speed);
-    const mediaStartOffset = mediaInfoRef.current?.startFrame || 0;
+    const mediaStartOffset = mediaInfo.startFrame || 0;
     const mediaFrameIndex =
       Math.max(0, Math.floor(currentStartFrameRef.current * speedFactor)) +
       mediaStartOffset;
@@ -595,8 +621,8 @@ const AudioPreview: React.FC<
     const mediaTimeAtStart =
       (currentStartFrameRef.current * speedFactor + mediaStartOffset) / fps;
     // Extend audio beyond clip boundary for seamless transitions with adjacent clips
-    const endIndex = mediaInfoRef.current?.endFrame
-      ? mediaInfoRef.current.endFrame
+    const endIndex = mediaInfo.endFrame
+      ? mediaInfo.endFrame
       : undefined;
     const asset = getAssetById(assetId);
     if (!asset) return;
@@ -604,7 +630,7 @@ const AudioPreview: React.FC<
     // Start iterator and soundtouch setup in parallel
     const [iteratorResult, soundtouchNode] = await Promise.all([
       getAudioIterator(asset.path, {
-        mediaInfo: mediaInfoRef.current || undefined,
+        mediaInfo: mediaInfo || undefined,
         fps,
         startIndex: mediaFrameIndex,
         endIndex,
@@ -718,7 +744,7 @@ const AudioPreview: React.FC<
       const baseGain = dbToGain(volume || 0);
       const fadeInDuration = fadeIn || 0;
       const fadeOutDuration = fadeOut || 0;
-      const totalDuration = mediaInfoRef.current?.duration || duration;
+      const totalDuration = mediaInfo.duration || duration;
 
       // Set up fade in
       if (fadeInDuration > 0 && timestamp < fadeInDuration) {
@@ -851,7 +877,7 @@ const AudioPreview: React.FC<
     isInFrame,
     isPlaying,
     ctx,
-    mediaInfoRef.current,
+    mediaInfo,
     fps,
     assetId,
     gainNode,
@@ -870,7 +896,7 @@ const AudioPreview: React.FC<
   }, [
     isPlaying,
     ctx,
-    mediaInfoRef.current,
+    mediaInfo,
     assetId,
     fps,
     startRendering,
