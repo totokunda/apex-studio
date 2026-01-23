@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
@@ -118,6 +118,23 @@ interface ItemProps {
   showName?: boolean;
 }
 
+function fileURLToPathInWorker(raw: string): string {
+  try {
+    const u = new URL(raw);
+
+    // For file:// or app:// URLs, use the pathname and strip leading slashes.
+    if (u.protocol === "file:" || u.protocol === "app:") {
+      return decodeURIComponent(u.pathname.replace(/^\/+/, ""));
+    }
+
+    // For other URL schemes, just normalize the pathname.
+    return decodeURIComponent((u.pathname || "").replace(/^\/+/, ""));
+  } catch {
+    // Not a URL – assume it's already a path; just normalize leading slashes.
+    return raw.replace(/^\/+/, "");
+  }
+}
+
 // Stable, memoized thumbnail component to prevent re-renders on parent resize
 export const MediaThumb: React.FC<{
   item: MediaItem;
@@ -125,7 +142,9 @@ export const MediaThumb: React.FC<{
   className?: string;
 }> = React.memo(({ item,  isDragging, className }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
+  const [isHovered, setIsHovered] = useState(false);
 
   const formatDuration = (duration: number) => {
     const hours = Math.floor(duration / 3600);
@@ -251,14 +270,63 @@ export const MediaThumb: React.FC<{
     };
   }, [item.assetUrl, item.type]);
 
+  useEffect(() => {
+    if (item.type !== "video") return;
+    if (isDragging) return;
+    if (!isHovered) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const p = v.play();
+    if (p) p.catch(() => {});
+  }, [isHovered, isDragging, item.assetUrl, item.type]);
+
+  const stopHoverPreview = () => {
+    const v = videoRef.current;
+    if (v) {
+      v.pause();
+      try {
+        v.currentTime = 0;
+      } catch {
+        // ignore
+      }
+    }
+    setIsHovered(false);
+  };
+
+  const videoSrc = useMemo(() => {
+    return isHovered && !isDragging ? `app://user-data/${fileURLToPathInWorker(item.assetUrl)}` : undefined;
+  }, [isHovered, isDragging, item.assetUrl]); 
   return (
     <span
       className={cn(
         "flex flex-row gap-x-2.5 items-center justify-center relative overflow-hidden rounded-md",
         className,
       )}
+      onMouseEnter={() => {
+        if (item.type !== "video") return;
+        if (isDragging) return;
+        setIsHovered(true);
+      }}
+      onMouseLeave={() => {
+        if (item.type !== "video") return;
+        stopHoverPreview();
+      }}
     >
       <canvas ref={canvasRef} className="w-full h-full block" />
+      {item.type === "video" && (
+        <video
+          ref={videoRef}
+          src={videoSrc}
+          className={cn(
+            "absolute inset-0 w-full h-full object-cover transition-opacity duration-150 pointer-events-none",
+            isHovered && !isDragging ? "opacity-100" : "opacity-0",
+          )}
+          preload="none"
+          muted
+          loop
+          playsInline
+        />
+      )}
       {mediaInfo?.duration && (
         <span className="text-[10px] text-brand-light/90 absolute bottom-1 left-1 p-1 rounded bg-brand-background-dark/60 z-10">
           {formatDuration(mediaInfo.duration)}

@@ -342,6 +342,10 @@ export type GenerationModelClipProps = {
   selectedComponents?: Record<string, any>;
   values?: Record<string, any>;
   src?: string;
+  startFrame?: number;
+  endFrame?: number;
+  trimStart?: number;
+  trimEnd?: number;
   // Persist the clip transform used when this generation was previewed/applied
   transform?: ClipTransform;
 };
