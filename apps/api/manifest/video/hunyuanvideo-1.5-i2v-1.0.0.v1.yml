@@ -20,7 +20,6 @@ spec:
   model_type: i2v
   engine_type: torch
   default_duration_secs: 5.0
-  min_duration_secs: 1.0
   fps: 24
   loras:
   - source: Comfy-Org/HunyuanVideo_1.5_repackaged/split_files/loras/hunyuanvideo1.5_t2v_480p_lightx2v_4step_lora_rank_32_bf16.safetensors
