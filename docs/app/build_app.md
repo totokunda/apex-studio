@@ -1,14 +1,14 @@
 # Building Apex Studio
 
-This document describes how to build and package Apex Studio for distribution. The application consists of an Electron frontend and a Python API backend that are bundled together.
+This document describes how to build and package Apex Studio for distribution.
 
 ## Prerequisites
 
 ### All Platforms
 
-- **Node.js** >= 23.0.0
+- **Node.js** >= 24.0.0
 - **npm** >= 10.0.0
-- **Python** >= 3.10
+- **Python** >= 3.12
 - **Git**
 
 ### Platform-Specific
@@ -88,23 +88,8 @@ npm run bundle:win
 npm run bundle:linux
 ```
 
-### Python API Only
-
-Build the Python API bundle separately:
-
-```bash
-# Auto-detect GPU support
-npm run bundle:python
-
-# Force specific GPU backend
-npm run bundle:python:cuda  # NVIDIA CUDA 12.6
-npm run bundle:python:cpu   # CPU only
-npm run bundle:python:mps   # Apple Silicon MPS
-```
 
 ### Electron Only (Using Existing Python Bundle)
-
-If you've already built the Python bundle:
 
 ```bash
 npm run compile         # Current platform
