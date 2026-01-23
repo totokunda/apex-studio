@@ -12,6 +12,7 @@ import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
 import * as tar from "tar-stream";
 import net from "node:net";
+import { pythonProcess } from "./PythonProcess.js";
 
 type ConfigResponse<T> = { success: true; data: T } | { success: false; error: string };
 
@@ -712,6 +713,24 @@ export class InstallerModule implements AppModule {
   async enable(): Promise<void> {
     // idempotent-ish registration
     if (ipcMain.listenerCount("installer:extract-server-bundle") > 0) return;
+
+    ipcMain.handle(
+      "installer:set-active",
+      async (_evt, payload: { active?: boolean; reason?: string }) => {
+        try {
+          const active = Boolean(payload?.active);
+          const reason = payload?.reason ? String(payload.reason) : undefined;
+          await pythonProcess().setInstallerActive(active, reason);
+          return { success: true, data: { active } };
+        } catch (e) {
+          return {
+            success: false,
+            error:
+              e instanceof Error ? e.message : "Failed to set installer active state",
+          };
+        }
+      },
+    );
 
     ipcMain.handle(
       "installer:extract-server-bundle",

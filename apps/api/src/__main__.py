@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, subprocess, signal, psutil, sys, shlex, importlib.util, time, shutil
+import os, subprocess, signal, psutil, sys, shlex, time, shutil
 import re
 import json
 import urllib.request
@@ -67,11 +67,6 @@ def create_envfile(envfile: Path, mode="dev"):
 
 
 app = typer.Typer(help="Apex command line")
-
-
-def _honcho_available() -> bool:
-    return importlib.util.find_spec("honcho") is not None
-
 
 def _is_frozen() -> bool:
     # PyInstaller sets sys.frozen = True in the bundled executable.
@@ -186,10 +181,10 @@ def start(
     ),
 ):
     """
-    Start FastAPI (and anything else in your Procfile) via Honcho.
-    Equivalent to: honcho start -f Procfile [-e .env]
+    Start FastAPI using the `api:` entry in the Procfile.
     """
     cwd = cwd.resolve()
+    
 
     # Allow callers (Electron bundle / CLI users) to override host/port without needing to
     # manage environment variables themselves.
@@ -198,7 +193,7 @@ def start(
     if port is not None:
         os.environ["APEX_PORT"] = str(port)
 
-    # Resolve procfile/envfile relative to cwd (matches how honcho interprets -f/-e)
+    # Resolve procfile/envfile relative to cwd
     procfile_path = procfile if procfile.is_absolute() else (cwd / procfile)
     envfile_path = None
     if envfile is not None:
@@ -215,30 +210,23 @@ def start(
     client_host = (
         "127.0.0.1" if effective_host in {"0.0.0.0", "::", "[::]"} else effective_host
     )
+
+
     print(f"API should be reachable at: http://{client_host}:{effective_port}")
+
 
     log_path = (cwd / "apex-engine-start.log") if daemon else None
     _load_envfile_if_present(envfile_path)
 
-    # In frozen builds we cannot use `sys.executable -m honcho ...` because sys.executable
-    # points to this binary. Use our internal server runner instead.
+    # In frozen builds we cannot rely on `python -m ...` module execution helpers.
+    # Use our internal server runner instead.
     if _is_frozen():
         _run([sys.executable, "serve"], cwd=cwd, daemon=daemon, log_path=log_path)
         return
-
-    if _honcho_available():
-        args = [sys.executable, "-m", "honcho", "start", "-f", str(procfile_path)]
-        if envfile_path is not None:
-            args += ["-e", str(envfile_path)]
-        _run(args, cwd=cwd, daemon=daemon, log_path=log_path)
-        return
-
-    # Fallback: procfile only contains `api:` in our project, so we can run it directly.
-    cmd = _proc_cmd_from_procfile(procfile_path, name="api")
-    if daemon and log_path is not None:
-        with open(log_path, "a", buffering=1) as f:
-            f.write("Honcho not available; running Procfile 'api' command directly.\n")
     
+
+    # Procfile only contains `api:` in our project, so we can run it directly.
+    cmd = _proc_cmd_from_procfile(procfile_path, name="api")
     _run(cmd, cwd=cwd, daemon=daemon, log_path=log_path)
 
 
@@ -380,7 +368,7 @@ def internal_serve(
 
 
 def _find_apex_processes():
-    """Find running processes related to apex engine (uvicorn, ray, honcho)"""
+    """Find running processes related to apex engine (uvicorn, ray)"""
     processes = []
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
@@ -391,8 +379,6 @@ def _find_apex_processes():
                 for pattern in [
                     "uvicorn src.api.main:app",
                     "ray::",
-                    "honcho start",
-                    " -m honcho start",
                 ]
             ):
                 processes.append(proc)
@@ -408,7 +394,7 @@ def stop(
     ),
 ):
     """
-    Stop running Apex Engine processes (uvicorn, ray, honcho).
+    Stop running Apex Engine processes (uvicorn, ray).
     Finds and terminates any existing server processes.
     """
     processes = _find_apex_processes()
@@ -449,10 +435,33 @@ def stop(
 
 # Optional sugar: `apex dev` alias
 @app.command()
-def dev(cwd: Path = Path(".")):
-    """Convenience alias for apex start -f Procfile.dev"""
-    create_procfile(cwd / "Procfile.dev", "dev")
-    _run([sys.executable, "-m", "honcho", "start", "-f", "Procfile.dev"], cwd=cwd)
+def dev(
+    cwd: Path = typer.Option(
+        Path("."), "--cwd", help="Working directory where processes run"
+    ),
+    host: str | None = typer.Option(
+        None,
+        "--host",
+        help="Host to bind the API to (sets APEX_HOST).",
+    ),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        help="Port to bind the API to (sets APEX_PORT).",
+    ),
+    daemon: bool = typer.Option(
+        False, "--daemon", "-d", help="Run as daemon in background"
+    ),
+):
+    """Convenience alias for `apex-engine start -f Procfile.dev`."""
+    start(
+        procfile=Path("Procfile.dev"),
+        envfile=None,
+        cwd=cwd,
+        host=host,
+        port=port,
+        daemon=daemon,
+    )
 
 
 @app.command()

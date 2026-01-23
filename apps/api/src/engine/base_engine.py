@@ -219,6 +219,7 @@ class AutoLoadingHelperDict(dict):
 
 class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     engine_type: Literal["torch", "mlx"] = "torch"
+    engine_label: str | None = None
     config: Dict[str, Any]
     scheduler: SchedulerInterface | None = None
     vae: AutoencoderKL | None = None
@@ -496,7 +497,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             pass
 
         # Validate compute requirements if specified in config
-        self._validate_compute_requirements()
+        if not self.engine_label or self.engine_label == "engine_warmup" or self.engine_label == "disk_warmup":
+            self._validate_compute_requirements()
 
         self.save_path = kwargs.get("save_path", None)
         should_download = kwargs.get("should_download", True)

@@ -106,6 +106,21 @@ class PythonBundler:
         self.venv_python_tag: Optional[str] = None
         self.venv_python_version: Optional[str] = None
 
+    @staticmethod
+    def _normalize_arch(arch: str) -> str:
+        """
+        Normalize architecture strings for bundle naming/metadata.
+
+        Goal: keep bundle artifacts consistent across platforms/toolchains.
+        In particular, Windows commonly reports `AMD64` but we want `x86_64`.
+        """
+        low = (arch or "").strip().lower()
+        if not low:
+            return ""
+        if low in {"amd64", "x64"}:
+            return "x86_64"
+        return low
+
     def _probe_python_info(self, python_exe: Path) -> tuple[Optional[str], Optional[str]]:
         """
         Return (python_tag, python_version) for the given interpreter.
@@ -1466,7 +1481,7 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         manifest = {
             "version": version,
             "platform": self.platform_name,
-            "arch": platform.machine(),
+            "arch": self._normalize_arch(platform.machine()),
             "gpu_support": gpu_type,
             "python_tag": py_tag,
             "python_version": py_ver,
@@ -1516,7 +1531,8 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             prefix = "apex-engine"
         version = self._safe_filename_component(str(m.get("version", "0.0.0")))
         plat = self._safe_filename_component(str(m.get("platform", self.platform_name)))
-        arch = self._safe_filename_component(str(m.get("arch", platform.machine())))
+        arch_raw = str(m.get("arch", platform.machine()))
+        arch = self._safe_filename_component(self._normalize_arch(arch_raw))
         gpu = self._safe_filename_component(
             str(m.get("gpu_support", self.last_gpu_type or "unknown"))
         )
@@ -1566,7 +1582,7 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             # Keep versioning consistent with the full bundle when available.
             "version": str(base.get("version", "0.1.0")),
             "platform": self.platform_name,
-            "arch": platform.machine(),
+            "arch": self._normalize_arch(platform.machine()),
             "gpu_support": gpu_type,
             "python_tag": py_tag,
             "created_at": __import__("datetime").datetime.utcnow().isoformat(),
