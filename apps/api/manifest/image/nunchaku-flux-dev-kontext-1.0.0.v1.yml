@@ -35,6 +35,7 @@ spec:
   attention_types:
   - sdpa
   - flash
+  - sage
   - flash3
   - efficient_dot_product_attention
   - xformers

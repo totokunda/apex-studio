@@ -23,7 +23,6 @@ spec:
   denoise_type: base
   engine_type: torch
   default_duration_secs: 5.0
-  min_duration_secs: 1.0
   fps: 25
   audio_inputs_to_save:
   - person_1_audio
