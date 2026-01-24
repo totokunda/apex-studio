@@ -63,6 +63,18 @@ module.exports = {
     // Size trims:
     // - renderer filter packs are huge; ship "small" and "examples" by default
     ...(bundleFullFilters ? [] : ["!node_modules/@app/renderer/dist/filters/full/**"]),
+    // - never ship renderer source/public trees (dev-only); dist/** is the runtime payload
+    "!node_modules/@app/renderer/public/**",
+    "!node_modules/@app/renderer/src/**",
+    "!node_modules/@app/renderer/scripts/**",
+    "!node_modules/@app/renderer/vite.config.*",
+    "!node_modules/@app/renderer/tailwind.config.*",
+    "!node_modules/@app/renderer/tsconfig*.json",
+    "!node_modules/@app/renderer/components.json",
+    "!node_modules/@app/renderer/index.html",
+    // - ffprobe-static ships multi-platform binaries; keep only Windows x64
+    "!node_modules/ffprobe-static/bin/**",
+    "node_modules/ffprobe-static/bin/win32/x64/**",
     // - model demo media is optional and large; download later if needed
   ],
 
