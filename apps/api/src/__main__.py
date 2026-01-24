@@ -471,6 +471,11 @@ def bundle(
         "--platform",
         help="Target platform for bundle (darwin|linux|win32|auto). Default: auto (this machine).",
     ),
+    arch: str = typer.Option(
+        "auto",
+        "--arch",
+        help="Target CPU architecture for bundle (auto|x86_64|arm64). Default: auto.",
+    ),
     gpu: str = typer.Option(
         "auto",
         "--gpu",
@@ -547,6 +552,8 @@ def bundle(
         str(script),
         "--platform",
         str(platform),
+        "--arch",
+        str(arch),
         "--gpu",
         str(gpu),
         "--output",
@@ -672,6 +679,11 @@ def publish(
         "--platform",
         help="Target platform for bundle (darwin|linux|win32|auto). Default: auto (this machine).",
     ),
+    arch: str = typer.Option(
+        "auto",
+        "--arch",
+        help="Target CPU architecture for bundle (auto|x86_64|arm64). Default: auto.",
+    ),
     gpu: str = typer.Option(
         "auto",
         "--gpu",
@@ -762,6 +774,8 @@ def publish(
         str(bundle_script),
         "--platform",
         str(platform),
+        "--arch",
+        str(arch),
         "--gpu",
         str(gpu),
         "--output",
