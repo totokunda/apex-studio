@@ -4,6 +4,16 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 
+const publishTimeoutMs = (() => {
+  // GitHub uploads can stall on slow/unstable networks; electron-publish uses this as a request/socket timeout.
+  // Override per environment if needed.
+  const raw = process.env.ELECTRON_PUBLISH_TIMEOUT_MS;
+  const fallback = 15 * 60 * 1000; // 15 minutes
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+})();
+
 // Determine if Python API bundle exists
 const pythonApiBundlePath = join(process.cwd(), "python-api-bundle");
 const hasPythonBundle = existsSync(pythonApiBundlePath);
@@ -172,12 +182,14 @@ export default /** @type import('electron-builder').Configuration */
       repo: process.env.GITHUB_REPO || "apex-studio",
       releaseType: "release",
       publishAutoUpdate: true,
+      timeout: publishTimeoutMs,
     },
     // Optional: S3 for faster downloads
     ...(process.env.AWS_S3_BUCKET ? [{
       provider: "s3",
       bucket: process.env.AWS_S3_BUCKET,
       region: process.env.AWS_REGION || "us-east-1",
+      timeout: publishTimeoutMs,
     }] : []),
   ],
   
