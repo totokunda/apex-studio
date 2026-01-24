@@ -75,8 +75,10 @@ const snakeCaseToTitleCase = (str: string): string => {
     .join(" ");
 };
 
-// Recursively find all PNG files in a directory
-const findPngFiles = async (
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+
+// Recursively find all image files in a directory
+const findImageFiles = async (
   dir: string,
   baseDir: string,
 ): Promise<string[]> => {
@@ -86,9 +88,12 @@ const findPngFiles = async (
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      const nestedFiles = await findPngFiles(fullPath, baseDir);
+      const nestedFiles = await findImageFiles(fullPath, baseDir);
       files.push(...nestedFiles);
-    } else if (entry.isFile() && extname(entry.name).toLowerCase() === ".png") {
+    } else if (
+      entry.isFile() &&
+      IMAGE_EXTENSIONS.has(extname(entry.name).toLowerCase())
+    ) {
       files.push(relative(baseDir, fullPath));
     }
   }
@@ -118,8 +123,10 @@ export const fetchFilters = async () => {
   const hasFull = fs.existsSync(fullBasePath);
   const hasExamples = fs.existsSync(exampleBasePath);
 
-  // Find all PNG files in the small directory
-  const smallFiles = await findPngFiles(smallBasePath, smallBasePath);
+  // Find all PNG files in the small directory (this is the canonical list of filters)
+  const smallFiles = (await findImageFiles(smallBasePath, smallBasePath)).filter(
+    (p) => extname(p).toLowerCase() === ".png",
+  );
 
   for (const relPath of smallFiles) {
     const fileName = basename(relPath, extname(relPath));
@@ -129,19 +136,39 @@ export const fetchFilters = async () => {
     const fullPathCandidate = join(fullBasePath, relPath);
     const fullPath = hasFull && fs.existsSync(fullPathCandidate) ? fullPathCandidate : smallPath;
 
+    // Examples may be stored as JPEG/WebP for size, while small/full remain PNG.
+    // Try to match by basename regardless of extension.
     const exampleFsPathCandidate = join(exampleBasePath, relPath);
-    const exampleFsPath =
-      hasExamples && fs.existsSync(exampleFsPathCandidate) ? exampleFsPathCandidate : smallPath;
+    let exampleFsPath: string | null =
+      hasExamples && fs.existsSync(exampleFsPathCandidate) ? exampleFsPathCandidate : null;
+
+    const relDir = dirname(relPath);
+    const baseNameNoExt = basename(relPath, extname(relPath));
+    let exampleRelPath = relPath;
+
+    if (!exampleFsPath && hasExamples) {
+      for (const ext of [".jpg", ".jpeg", ".png", ".webp"]) {
+        const candidateRel = join(relDir, `${baseNameNoExt}${ext}`);
+        const candidateFs = join(exampleBasePath, candidateRel);
+        if (fs.existsSync(candidateFs)) {
+          exampleFsPath = candidateFs;
+          exampleRelPath = candidateRel;
+          break;
+        }
+      }
+    }
+
+    const effectiveExampleFsPath = exampleFsPath ?? smallPath;
 
     // Renderer-facing URL-ish path (used in <img src="...">).
     // Always use forward slashes.
     const examplePath = (
-      hasExamples && fs.existsSync(exampleFsPathCandidate)
-        ? `filters/examples/${relPath}`
+      exampleFsPath
+        ? `filters/examples/${exampleRelPath}`
         : `filters/small/${relPath}`
     ).replace(/\\/g, "/");
 
-    const exampleAssetUrl = pathToFileURL(exampleFsPath).href;
+    const exampleAssetUrl = pathToFileURL(effectiveExampleFsPath).href;
 
     // Extract category from the immediate parent directory
     const dirPath = dirname(relPath);
