@@ -28,6 +28,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import https from "node:https";
 import { pipeline } from "node:stream/promises";
+import { ensureVCRedist } from "./ensure-vc-redist.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -279,6 +280,20 @@ async function buildElectronPackages() {
   }
 }
 
+async function ensureWindowsPrereqs(config) {
+  const wantsWindows =
+    config.platform === "win32" || config.platform === "all" || process.platform === "win32";
+  if (!wantsWindows) return;
+
+  // Ensure NSIS can embed the MSVC runtime installer for users (PyTorch dependency).
+  try {
+    await ensureVCRedist();
+  } catch (e) {
+    // If this fails, Windows installers may still build, but users can hit the torch c10.dll error.
+    log(`Warning: failed to fetch vc_redist.x64.exe: ${e?.message || e}`, "warning");
+  }
+}
+
 // Step 3: Package with electron-builder
 async function packageApp(config) {
   log("Packaging application with electron-builder...", "step");
@@ -378,6 +393,9 @@ async function main() {
 
     // Build Electron packages
     await buildElectronPackages();
+
+    // Ensure platform prerequisites are bundled (Windows: VC++ redistributable)
+    await ensureWindowsPrereqs(config);
 
     // Package the app
     await packageApp(config);
