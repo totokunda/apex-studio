@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -420,10 +421,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         if "mask" not in trackers:
             return
         frac, md = trackers["mask"].update(current, total, label)
+        filename = md.get("filename") or ""
+
+        # Remove UUID (standard v4 pattern) or long hex hashes (SHA256) if present
+        filename = re.sub(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64}",
+            "",
+            filename,
+            flags=re.I,
+        )
+        # Clean up any leftover underscores/hyphens from the removal
+        filename = re.sub(r"[-_]{2,}", "-", filename).strip("-_ ")
+
+        if filename:
+            md["filename"] = filename
+
         emit(
             "mask",
             frac,
-            f"Downloading mask model… {md.get('filename')}",
+            f"Downloading mask model… {filename}",
             md,
         )
 
@@ -433,10 +449,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         if "rife" not in trackers:
             return
         frac, md = trackers["rife"].update(current, total, label)
+        filename = md.get("filename") or ""
+
+        # Remove UUID (standard v4 pattern) or long hex hashes (SHA256) if present
+        filename = re.sub(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64}",
+            "",
+            filename,
+            flags=re.I,
+        )
+        # Clean up any leftover underscores/hyphens from the removal
+        filename = re.sub(r"[-_]{2,}", "-", filename).strip("-_ ")
+
+        if filename:
+            md["filename"] = filename
+
         emit(
             "rife",
             frac,
-            f"Downloading RIFE… {md.get('filename')}",
+            f"Downloading RIFE… {filename}",
             md,
         )
 

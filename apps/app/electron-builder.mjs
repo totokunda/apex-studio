@@ -106,10 +106,6 @@ export default /** @type import('electron-builder').Configuration */
         target: "nsis",
         arch: ["x64"],
       },
-      {
-        target: "portable",
-        arch: ["x64"],
-      },
     ],
     icon: "buildResources/icon.ico",
     signDlls: true,
@@ -136,11 +132,6 @@ export default /** @type import('electron-builder').Configuration */
     include: "buildResources/installer.nsh",
   },
 
-  // Windows "portable" target options
-  portable: {
-    artifactName: "${name}-${version}-${os}-${arch}-portable.${ext}",
-  },
-  
   // Linux configuration
   linux: {
     target: [
