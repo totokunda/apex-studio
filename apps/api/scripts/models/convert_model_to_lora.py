@@ -310,7 +310,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--base_model",
-        default="/home/tosin_coverquick_co/apex/Wan-22-TI2V-Base",
         help="Path to base weights (a .safetensors/.pt file OR a directory of weight shards).",
     )
     parser.add_argument(
@@ -320,12 +319,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--new_ckpt",
-        default="/home/tosin_coverquick_co/apex-diffusion/components/af18e595fc128bba84f88a92bd6e26bff7fb6e27659ab1846547518b75d2d3bb_Wan2_2-TI2V-5B-Turbo_fp16.safetensors",
         help="Path to tuned weights (a .safetensors/.pt file OR a directory of weight shards).",
     )
     parser.add_argument(
         "--out",
-        default="/home/tosin_coverquick_co/apex/lora_delta.safetensors",
         help="Output LoRA file path (.safetensors recommended).",
     )
     parser.add_argument(
