@@ -22,6 +22,10 @@ module.exports = {
   appId: "com.apex.studio",
   productName: "Apex Studio",
 
+  // Keep ASAR enabled (default). We intentionally avoid broad `asarUnpack` globs,
+  // because @electron/asar uses minimatch internally and can throw "pattern is too long"
+  // when unpack patterns expand into huge brace patterns on large trees.
+
   directories: {
     output: "dist",
     buildResources: "buildResources",
@@ -46,12 +50,6 @@ module.exports = {
   // NOTE: electron-builder doesn't define a `${target}` macro at this level.
   // Windows target-specific names are configured under `win.target` below.
   artifactName: "${name}-${version}-${os}-${arch}.${ext}",
-
-  // Filters can be very large (especially "full"). Keep them outside ASAR to reduce
-  // memory pressure during packaging and to make runtime file access predictable.
-  asarUnpack: [
-    "**/filters/**",
-  ],
 
   // Keep packaging minimal: include our entry point and only built artifacts from workspace packages.
   files: [

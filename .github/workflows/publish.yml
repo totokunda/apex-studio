@@ -49,7 +49,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           # Used by our electron-builder config to set upload/API timeouts.
           ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
-        run: npm run publish -- --publish-timeout-ms $env:ELECTRON_PUBLISH_TIMEOUT_MS
+        run: npm run publish
 
   publish-macos:
     name: Publish (macOS)
@@ -86,7 +86,7 @@ jobs:
           # Keep mac publish stable by shipping small-only filter pack by default.
           APEX_BUNDLE_FILTERS_FULL: "0"
           APEX_BUNDLE_FILTERS_EXAMPLES: "0"
-        run: npm run publish -- --arch ${{ matrix.arch }} --publish-timeout-ms $ELECTRON_PUBLISH_TIMEOUT_MS
+        run: npm run publish
 
   publish-linux:
     name: Publish (Linux)
@@ -122,4 +122,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           # Used by our electron-builder config to set upload/API timeouts.
           ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
-        run: npm run publish -- --publish-timeout-ms $ELECTRON_PUBLISH_TIMEOUT_MS
+        run: npm run publish
