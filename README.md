@@ -25,7 +25,10 @@ git lfs install
 
 # Clone + init submodules
 git clone --recurse-submodules https://github.com/totokunda/apex-studio.git
+
 cd apex-studio
+
+# Or git submodule update --init --recursive
 
 # Fetch LFS files (recommended after cloning)
 git lfs pull

@@ -43,6 +43,7 @@ import { usePreprocessorsListQuery } from "@/lib/preprocessor/queries";
 import { useControlsStore } from "@/lib/control";
 import { TbEdit, TbPhoto } from "react-icons/tb";
 import { MediaDialog } from "@/components/dialogs/MediaDialog";
+import ServerMediaPickerGrid from "./ServerMediaPickerGrid";
 
 export type ImageSelection = AnyClipProps | null;
 
@@ -80,9 +81,9 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
   onSelectComplete,
 }) => {
   const isUserInteractingRef = useRef(false);
-  const [selectedTab, setSelectedTab] = useState<"timeline" | "library">(
-    "library",
-  );
+  const [selectedTab, setSelectedTab] = useState<
+    "timeline" | "library" | "generations" | "processors"
+  >("library");
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [filteredMediaItems, setFilteredMediaItems] = useState<MediaItem[]>([]);
@@ -275,6 +276,8 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
     [getClipById, onChange, onSelectComplete],
   );
 
+  const isMediaTab = selectedTab === "library";
+
   return (
     <PopoverContent
       side="left"
@@ -301,82 +304,101 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
         className=""
         value={selectedTab}
         onValueChange={(value) =>
-          setSelectedTab(value as "timeline" | "library")
+          setSelectedTab(
+            value as "timeline" | "library" | "generations" | "processors",
+          )
         }
       >
-        <div
-          className={cn(
-            "w-full flex flex-row items-center gap-x-2 justify-between",
-          )}
-        >
+        <div className="w-full flex flex-col gap-y-2">
+          <div className="w-full flex flex-row items-center justify-between gap-x-2">
+            <span className="relative w-full">
+              <LuSearch
+                className={cn(
+                  "w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2",
+                  isMediaTab ? "text-brand-light/50" : "text-brand-light/20",
+                )}
+              />
+              <input
+                type="text"
+                placeholder={
+                  isMediaTab ? "Search for media" : "Search disabled"
+                }
+                disabled={!isMediaTab}
+                className={cn(
+                  "w-full h-full pl-7! text-brand-light text-[10.5px] font-normal bg-brand rounded-[7px] border border-brand-light/10 p-2 outline-none",
+                  !isMediaTab && "opacity-50 cursor-not-allowed",
+                )}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </span>
+            <button
+              onClick={handleUpload}
+              className={cn(
+                "w-fit h-full flex flex-row items-center justify-center gap-x-1.5 bg-brand-background-light hover:bg-brand-light/10 transition-all duration-200 cursor-pointer rounded py-1.5 px-3",
+              )}
+            >
+              <LuUpload className="w-3.5 h-3.5 text-brand-light" />
+              <span className="text-brand-light text-[10.5px] font-medium">
+                Upload
+              </span>
+            </button>
+          </div>
           <TabsList
             className={cn(
-              "w-full  text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row  overflow-hidden",
-              numEligibleTimelineAssets === 0
-                ? "justify-start"
-                : "justify-between  cursor-pointer  bg-brand-background-light",
+              "w-full text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row justify-between cursor-pointer bg-brand-background-light overflow-hidden",
             )}
           >
             <TabsTrigger
               value="library"
               className={cn(
-                " w-full py-1.5 flex items-center",
-                selectedTab === "library" && numEligibleTimelineAssets > 0
-                  ? "bg-brand-accent-shade"
-                  : "",
-                numEligibleTimelineAssets === 0
-                  ? "cursor-default justify-start px-2.5"
-                  : "cursor-pointer   justify-center px-4",
+                "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
+                selectedTab === "library" ? "bg-brand-accent-shade" : "",
               )}
             >
-              Media Library
+              Media
             </TabsTrigger>
             <TabsTrigger
               hidden={numEligibleTimelineAssets === 0}
               value="timeline"
               className={cn(
-                "px-4 w-full py-1.5 cursor-pointer flex items-center justify-center",
+                "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
                 selectedTab === "timeline" ? "bg-brand-accent-shade" : "",
               )}
             >
-              Timeline Assets
+              Timeline
+            </TabsTrigger>
+            <TabsTrigger
+              value="generations"
+              className={cn(
+                "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
+                selectedTab === "generations" ? "bg-brand-accent-shade" : "",
+              )}
+            >
+              Generations
+            </TabsTrigger>
+            <TabsTrigger
+              value="processors"
+              className={cn(
+                "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
+                selectedTab === "processors" ? "bg-brand-accent-shade" : "",
+              )}
+            >
+              Processors
             </TabsTrigger>
           </TabsList>
-          <button
-            onClick={handleUpload}
-            className={cn(
-              "w-fit h-full mr-2 flex flex-row items-center justify-center gap-x-1.5 bg-brand-background-light hover:bg-brand-light/10 transition-all duration-200 cursor-pointer rounded py-1.5",
-              numEligibleTimelineAssets === 0 ? "px-5" : "px-3",
-            )}
-          >
-            <LuUpload className="w-3.5 h-3.5 text-brand-light" />
-            <span className="text-brand-light text-[10.5px] font-medium">
-              Upload
-            </span>
-          </button>
         </div>
         <TabsContent
           value="library"
           className="w-full h-full flex flex-col py-2 gap-y-2 outline-none"
         >
-          <div className="w-full flex flex-row items-center justify-between gap-x-2">
-            <span className="relative w-full">
-              <LuSearch className="w-3.5 h-3.5 text-brand-light/50 absolute left-2 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search for media"
-                className="w-full h-full pl-8 text-brand-light text-[10.5px] font-normal bg-brand rounded-[7px] border border-brand-light/10 p-2 outline-none"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </span>
-          </div>
           <ScrollArea className="w-full h-96">
-            <div className="w-full h-full grid grid-cols-2 gap-3">
-              {filteredMediaItems.map((media) => (
-                <div
-                  key={media.name}
-                  onClick={() => {
+            <div className="w-full px-3">
+              <div className="w-full h-full grid grid-cols-2 gap-3">
+                {filteredMediaItems.map((media) => (
+                  <div
+                    key={media.name}
+                    onClick={() => {
                     // Selecting a library item should clear timeline selection
                     clearSelectedAsset();
                     const targetClipId = `media:${media.assetUrl}`;
@@ -449,42 +471,219 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
                       onChange(clip as AnyClipProps);
                       onSelectComplete?.();
                     }
-                  }}
-                  className={cn(
-                    "w-full flex flex-col items-center justify-center gap-y-1.5 cursor-pointer group relative",
-                  )}
-                >
-                  <div className="relative">
-                    <div
-                      className={cn(
-                        "absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center",
-                        value && value.clipId === `media:${media.assetUrl}`
-                          ? "opacity-100"
-                          : "opacity-0",
-                      )}
-                    >
+                    }}
+                    className={cn(
+                      "w-full flex flex-col items-center justify-center gap-y-1.5 cursor-pointer group relative",
+                    )}
+                  >
+                    <div className="relative">
                       <div
                         className={cn(
-                          "rounded-full py-1 px-3  bg-brand-light/10 flex items-center justify-center font-medium text-[10.5px] w-fit",
+                          "absolute top-0 left-0 w-full h-full bg-brand-background-light/50 backdrop-blur-sm rounded-md z-20 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center",
                           value && value.clipId === `media:${media.assetUrl}`
-                            ? "bg-brand-light/20"
-                            : "",
+                            ? "opacity-100"
+                            : "opacity-0",
                         )}
                       >
-                        {value && value.clipId === `media:${media.assetUrl}`
-                          ? "Selected"
-                          : "Use as Input"}
+                        <div
+                          className={cn(
+                            "rounded-full py-1 px-3  bg-brand-light/10 flex items-center justify-center font-medium text-[10.5px] w-fit",
+                            value && value.clipId === `media:${media.assetUrl}`
+                              ? "bg-brand-light/20"
+                              : "",
+                          )}
+                        >
+                          {value && value.clipId === `media:${media.assetUrl}`
+                            ? "Selected"
+                            : "Use as Input"}
+                        </div>
                       </div>
+                      <MediaThumb key={media.name} item={media} />
                     </div>
-                    <MediaThumb key={media.name} item={media} />
+                    <div className="text-brand-light/90 text-[9.5px] text-start truncate w-full text-ellipsis overflow-hidden group-hover:text-brand-light transition-all duration-200">
+                      {media.name}
+                    </div>
                   </div>
-                  <div className="text-brand-light/90 text-[9.5px] text-start truncate w-full text-ellipsis overflow-hidden group-hover:text-brand-light transition-all duration-200">
-                    {media.name}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </ScrollArea>
+        </TabsContent>
+        <TabsContent
+          value="generations"
+          className="w-full h-full flex flex-col py-2 gap-y-2 outline-none"
+        >
+          <ServerMediaPickerGrid
+            enabled={selectedTab === "generations"}
+            mediaType="generations"
+            allowedTypes={["image", "video"]}
+            showItemName={false}
+            isSelected={(item) => value?.clipId === `media:${item.assetUrl}`}
+            onSelect={(item) => {
+              clearSelectedAsset();
+              const targetClipId = `media:${item.assetUrl}`;
+              const isSame = value && value.clipId === targetClipId;
+              if (isSame) {
+                onChange(null);
+                onSelectComplete?.();
+                return;
+              }
+              void (async () => {
+                const info = item.mediaInfo ?? (await getMediaInfo(item.assetUrl));
+                const ext = getLowercaseExtension(item.assetUrl);
+                const isVid = VIDEO_EXTS.includes(ext);
+                if (isVid) {
+                  const duration = Math.max(
+                    1,
+                    Math.floor((info?.duration || 0) * fps),
+                  );
+                  const mw =
+                    info?.video?.displayWidth ??
+                    (info as any)?.video?.width ??
+                    0;
+                  const mh =
+                    info?.video?.displayHeight ??
+                    (info as any)?.video?.height ??
+                    0;
+                  const mar = mw && mh ? mw / mh : undefined;
+                  const asset = addAsset({
+                    path: item.assetUrl,
+                    modelInputAsset: true,
+                  });
+                  const clip: VideoClipProps = {
+                    type: "video",
+                    clipId: targetClipId,
+                    assetId: asset.id,
+                    startFrame: 0,
+                    endFrame: duration,
+                    mediaWidth: mw || undefined,
+                    mediaHeight: mh || undefined,
+                    mediaAspectRatio:
+                      typeof mar === "number" && isFinite(mar) && mar > 0
+                        ? mar
+                        : undefined,
+                    preprocessors: [],
+                    masks: [],
+                  } as any;
+                  onChange(clip as AnyClipProps);
+                  onSelectComplete?.();
+                } else {
+                  const iw = info?.image?.width ?? 0;
+                  const ih = info?.image?.height ?? 0;
+                  const iar = iw && ih ? iw / ih : undefined;
+                  const asset = addAsset({
+                    path: item.assetUrl,
+                    modelInputAsset: true,
+                  });
+                  const clip: ImageClipProps = {
+                    type: "image",
+                    clipId: targetClipId,
+                    assetId: asset.id,
+                    startFrame: 0,
+                    endFrame: 1,
+                    mediaWidth: iw || undefined,
+                    mediaHeight: ih || undefined,
+                    mediaAspectRatio:
+                      typeof iar === "number" && isFinite(iar) && iar > 0
+                        ? iar
+                        : undefined,
+                    preprocessors: [],
+                    masks: [],
+                  } as any;
+                  onChange(clip as AnyClipProps);
+                  onSelectComplete?.();
+                }
+              })();
+            }}
+          />
+        </TabsContent>
+        <TabsContent
+          value="processors"
+          className="w-full h-full flex flex-col py-2 gap-y-2 outline-none"
+        >
+          <ServerMediaPickerGrid
+            enabled={selectedTab === "processors"}
+            mediaType="processors"
+            allowedTypes={["image", "video"]}
+            showItemName={false}
+            isSelected={(item) => value?.clipId === `media:${item.assetUrl}`}
+            onSelect={(item) => {
+              clearSelectedAsset();
+              const targetClipId = `media:${item.assetUrl}`;
+              const isSame = value && value.clipId === targetClipId;
+              if (isSame) {
+                onChange(null);
+                onSelectComplete?.();
+                return;
+              }
+              void (async () => {
+                const info = item.mediaInfo ?? (await getMediaInfo(item.assetUrl));
+                const ext = getLowercaseExtension(item.assetUrl);
+                const isVid = VIDEO_EXTS.includes(ext);
+                if (isVid) {
+                  const duration = Math.max(
+                    1,
+                    Math.floor((info?.duration || 0) * fps),
+                  );
+                  const mw =
+                    info?.video?.displayWidth ??
+                    (info as any)?.video?.width ??
+                    0;
+                  const mh =
+                    info?.video?.displayHeight ??
+                    (info as any)?.video?.height ??
+                    0;
+                  const mar = mw && mh ? mw / mh : undefined;
+                  const asset = addAsset({
+                    path: item.assetUrl,
+                    modelInputAsset: true,
+                  });
+                  const clip: VideoClipProps = {
+                    type: "video",
+                    clipId: targetClipId,
+                    assetId: asset.id,
+                    startFrame: 0,
+                    endFrame: duration,
+                    mediaWidth: mw || undefined,
+                    mediaHeight: mh || undefined,
+                    mediaAspectRatio:
+                      typeof mar === "number" && isFinite(mar) && mar > 0
+                        ? mar
+                        : undefined,
+                    preprocessors: [],
+                    masks: [],
+                  } as any;
+                  onChange(clip as AnyClipProps);
+                  onSelectComplete?.();
+                } else {
+                  const iw = info?.image?.width ?? 0;
+                  const ih = info?.image?.height ?? 0;
+                  const iar = iw && ih ? iw / ih : undefined;
+                  const asset = addAsset({
+                    path: item.assetUrl,
+                    modelInputAsset: true,
+                  });
+                  const clip: ImageClipProps = {
+                    type: "image",
+                    clipId: targetClipId,
+                    assetId: asset.id,
+                    startFrame: 0,
+                    endFrame: 1,
+                    mediaWidth: iw || undefined,
+                    mediaHeight: ih || undefined,
+                    mediaAspectRatio:
+                      typeof iar === "number" && isFinite(iar) && iar > 0
+                        ? iar
+                        : undefined,
+                    preprocessors: [],
+                    masks: [],
+                  } as any;
+                  onChange(clip as AnyClipProps);
+                  onSelectComplete?.();
+                }
+              })();
+            }}
+          />
         </TabsContent>
         <TabsContent value="timeline" className="outline-none">
           <TimelineSearch
