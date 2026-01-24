@@ -84,8 +84,8 @@ function exeName(cmd: "ffmpeg" | "ffprobe") {
 
 function resolveApiBundleRoot(apiInstallDir: string): string {
   /**
-   * We want the directory that contains the bundled venv at:
-   *   <bundleRoot>/apex-studio/(bin|Scripts)/python
+   * We want the directory that contains the bundled portable Python at:
+   *   <bundleRoot>/apex-studio/(python.exe|bin/python|bin/python3)
    *
    * Bundle layouts we support (apiInstallDir is user-chosen install dir / extraction dir):
    * - <apiInstallDir>/python-api/apex-engine/apex-studio/...
@@ -124,11 +124,17 @@ function resolveApiBundleRoot(apiInstallDir: string): string {
 function resolveExtractedPythonExe(bundleRoot: string): string | null {
   // Mirror the structure used in packaged builds:
   //   <bundleRoot>/apex-studio/bin/python (mac/linux)
-  //   <bundleRoot>/apex-studio/Scripts/python.exe (win)
+  //   <bundleRoot>/apex-studio/bin/python3 (mac/linux)
+  //   <bundleRoot>/apex-studio/python.exe (win)
+  //   <bundleRoot>/apex-studio/Scripts/python.exe (legacy bundles)
   const base = path.join(bundleRoot, "apex-studio");
   const candidates =
     process.platform === "win32"
-      ? [path.join(base, "Scripts", "python.exe")]
+      ? [
+          path.join(base, "python.exe"),
+          path.join(base, "Scripts", "python.exe"),
+          path.join(base, "install", "python.exe"),
+        ]
       : [path.join(base, "bin", "python"), path.join(base, "bin", "python3")];
   for (const p of candidates) {
     try {
@@ -136,6 +142,51 @@ function resolveExtractedPythonExe(bundleRoot: string): string | null {
     } catch {}
   }
   return null;
+}
+
+function readPyVenvCfgHome(venvRoot: string): string | null {
+  /**
+   * Windows venv launchers can emit errors like:
+   *   "No Python at 'C:\\Users\\...\\Python312\\python.exe'"
+   *
+   * That path is not chosen by our Electron installer; it's typically the `home = ...`
+   * value inside `<venvRoot>/pyvenv.cfg`, which is stamped at venv creation time.
+   */
+  const cfgPath = path.join(venvRoot, "pyvenv.cfg");
+  try {
+    if (!fs.existsSync(cfgPath)) return null;
+    const txt = fs.readFileSync(cfgPath, "utf8");
+    for (const raw of txt.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const m = /^home\s*=\s*(.+)\s*$/i.exec(line);
+      if (!m) continue;
+      const home = m[1]?.trim();
+      return home ? home : null;
+    }
+  } catch {}
+  return null;
+}
+
+function resolveRuntimeRootFromPythonExe(pythonExe: string): string {
+  /**
+   * Derive the runtime root directory containing `Lib/` (Windows) or `lib/` + `bin/` (mac/linux).
+   *
+   * Supports both:
+   * - portable runtime layout: <root>/python.exe (win) or <root>/bin/python (posix)
+   * - legacy venv layout: <root>/Scripts/python.exe (win) or <root>/bin/python (posix)
+   */
+  const p = String(pythonExe || "").trim();
+  if (!p) return "";
+  const dir = path.dirname(p);
+  const base = path.basename(dir).toLowerCase();
+  if (process.platform === "win32") {
+    // .../apex-studio/python.exe -> apex-studio
+    // .../apex-studio/Scripts/python.exe -> apex-studio
+    return base === "scripts" ? path.dirname(dir) : dir;
+  }
+  // .../apex-studio/bin/python -> apex-studio
+  return base === "bin" ? path.dirname(dir) : dir;
 }
 
 function resolveDevApiRoot(): string | null {
@@ -310,6 +361,27 @@ async function validateExtractedBundleOrThrow(opts: {
       settled = true;
       if (code === 0) return resolve();
       const out = `${stdout}\n${stderr}`.trim();
+      // Improve diagnostics for a common Windows failure mode: venv launcher can't find its "home" Python.
+      // This is usually caused by shipping a non-relocatable venv that still points at the build machine's Python.
+      if (process.platform === "win32" && (code === 103 || /No Python at/i.test(out))) {
+        const runtimeRoot = resolveRuntimeRootFromPythonExe(pythonExe);
+        const home = runtimeRoot ? readPyVenvCfgHome(runtimeRoot) : null;
+        const msgLines = [
+          `Bundle validation failed (exit ${code}).`,
+          out ? `Output:\n${out}` : "Output: (empty)",
+          "",
+          "This looks like a Windows venv launcher error (non-portable venv).",
+          `We executed the bundled interpreter at: ${pythonExe}`,
+          home
+            ? `But <bundle>/apex-studio/pyvenv.cfg has home = ${home} (so the launcher expects a base Python at that location).`
+            : "But we could not read <bundle>/apex-studio/pyvenv.cfg to determine the venv 'home' path.",
+          "",
+          "Fix: rebuild the API bundle with a truly portable Python distribution for Windows (not a standard venv tied to a machine path),",
+          "or install Python at the referenced 'home' path (not recommended for distribution).",
+          "Bundling is implemented in: apps/api/scripts/bundling/bundle_python.py",
+        ];
+        return reject(new Error(msgLines.join("\n")));
+      }
       reject(new Error(`Bundle validation failed (exit ${code}). Output:\n${out}`));
     });
   });
@@ -429,71 +501,189 @@ async function downloadToTempFile(opts: {
   url: string;
   assetName?: string;
   onProgress?: (ev: InstallerProgressEvent) => void;
+  /**
+   * Number of retries after the first attempt. (Total attempts = retries + 1)
+   * Defaults to 4 (5 total attempts).
+   */
+  retries?: number;
+  /**
+   * Base retry delay in milliseconds (exponential backoff is applied).
+   * Defaults to 750ms.
+   */
+  retryDelayMs?: number;
 }): Promise<string> {
-  const res = await fetch(opts.url);
-  if (!res.ok) {
-    throw new Error(`Download failed: ${res.status} ${res.statusText}`);
-  }
-  if (!res.body) throw new Error("Download failed: empty body");
-
-  const totalBytesHeader = res.headers.get("content-length");
-  const totalBytes = totalBytesHeader ? Number(totalBytesHeader) : undefined;
-
   const safeName = (opts.assetName || "bundle.tar.zst").replace(/[^\w.\-]+/g, "_");
   const outPath = path.join(os.tmpdir(), `apex-server-bundle-${randomUUID()}-${safeName}`);
   await fsp.mkdir(path.dirname(outPath), { recursive: true });
-  const ws = fs.createWriteStream(outPath);
-  const body = Readable.fromWeb(res.body as any);
-  let downloadedBytes = 0;
-  let lastEmitAt = 0;
-  const emit = () => {
-    const now = Date.now();
-    if (now - lastEmitAt < 120) return;
-    lastEmitAt = now;
-    const percent =
-      typeof totalBytes === "number" && totalBytes > 0
-        ? Math.max(0, Math.min(1, downloadedBytes / totalBytes))
-        : undefined;
-    opts.onProgress?.({
-      phase: "download",
-      downloadedBytes,
-      totalBytes,
-      percent,
-      message:
-        percent !== undefined
-          ? `Downloading… ${Math.round(percent * 100)}%`
-          : "Downloading…",
-    });
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, Math.floor(ms))));
+
+  const retries = typeof opts.retries === "number" ? Math.max(0, Math.floor(opts.retries)) : 4;
+  const maxAttempts = retries + 1;
+  const baseDelayMs =
+    typeof opts.retryDelayMs === "number" ? Math.max(0, Math.floor(opts.retryDelayMs)) : 750;
+
+  const isRetryableStatus = (status: number) => {
+    // Retry for transient server/network edge cases.
+    if (status === 408) return true; // Request Timeout
+    if (status === 409) return true; // Conflict (can happen with CDN edge races)
+    if (status === 425) return true; // Too Early
+    if (status === 429) return true; // Too Many Requests
+    if (status >= 500 && status <= 599) return true; // Server errors
+    return false;
   };
-  body.on("data", (chunk: string | Buffer) => {
-    downloadedBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
-    emit();
-  });
-  opts.onProgress?.({
-    phase: "download",
-    downloadedBytes: 0,
-    totalBytes,
-    percent: 0,
-    message: "Starting download…",
-  });
-  try {
-    await pipeline(body, ws);
-  } catch (e) {
-    // If the pipeline errors mid-stream, ensure we don't leave a partial temp file behind.
+
+  const computeDelayMs = (attempt: number, retryAfterMs?: number) => {
+    // attempt is 1-based; apply backoff starting at attempt 2.
+    const exp = Math.max(0, attempt - 2);
+    const backoff = baseDelayMs * Math.pow(2, Math.min(6, exp));
+    // jitter in [0.85, 1.15]
+    const jitter = 0.85 + Math.random() * 0.3;
+    const computed = Math.floor(backoff * jitter);
+    if (typeof retryAfterMs === "number" && retryAfterMs > 0) return Math.max(retryAfterMs, computed);
+    return computed;
+  };
+
+  const parseRetryAfterMs = (res: any): number | undefined => {
     try {
-      ws.destroy();
+      const ra = res?.headers?.get?.("retry-after");
+      if (!ra) return undefined;
+      const s = String(ra).trim();
+      if (!s) return undefined;
+      // Can be seconds or an HTTP-date.
+      const asSeconds = Number(s);
+      if (Number.isFinite(asSeconds) && asSeconds >= 0) return Math.floor(asSeconds * 1000);
+      const asDate = Date.parse(s);
+      if (!Number.isNaN(asDate)) return Math.max(0, asDate - Date.now());
     } catch {}
+    return undefined;
+  };
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // Always restart from scratch each attempt to avoid silently accepting corrupt partial downloads.
     await safeRemovePath(outPath);
-    throw e;
+
+    let res: any | null = null;
+    let ws: fs.WriteStream | null = null;
+    let downloadedBytes = 0;
+    let totalBytes: number | undefined;
+    let lastEmitAt = 0;
+    const emit = () => {
+      const now = Date.now();
+      if (now - lastEmitAt < 120) return;
+      lastEmitAt = now;
+      const percent =
+        typeof totalBytes === "number" && totalBytes > 0
+          ? Math.max(0, Math.min(1, downloadedBytes / totalBytes))
+          : undefined;
+      opts.onProgress?.({
+        phase: "download",
+        downloadedBytes,
+        totalBytes,
+        percent,
+        message:
+          percent !== undefined
+            ? `Downloading… ${Math.round(percent * 100)}%`
+            : "Downloading…",
+      });
+    };
+
+    try {
+      if (attempt === 1) {
+        opts.onProgress?.({
+          phase: "download",
+          downloadedBytes: 0,
+          totalBytes: undefined,
+          percent: 0,
+          message: "Starting download…",
+        });
+      } else {
+        opts.onProgress?.({
+          phase: "status",
+          message: `Download failed; retrying (attempt ${attempt}/${maxAttempts})…`,
+        });
+        opts.onProgress?.({
+          phase: "download",
+          downloadedBytes: 0,
+          totalBytes: undefined,
+          percent: 0,
+          message: `Restarting download… (attempt ${attempt}/${maxAttempts})`,
+        });
+      }
+
+      res = await fetch(opts.url);
+      if (!res?.ok) {
+        const status = Number(res?.status || 0);
+        const statusText = res?.statusText ? String(res.statusText) : "";
+        const err = new Error(`Download failed: ${status || "unknown"} ${statusText}`.trim());
+        (err as any).status = status;
+        throw err;
+      }
+      if (!res.body) throw new Error("Download failed: empty body");
+
+      const totalBytesHeader = res.headers.get("content-length");
+      totalBytes = totalBytesHeader ? Number(totalBytesHeader) : undefined;
+
+      ws = fs.createWriteStream(outPath, { flags: "w" });
+      const body = Readable.fromWeb(res.body as any);
+      body.on("data", (chunk: string | Buffer) => {
+        downloadedBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+        emit();
+      });
+
+      // Emit an immediate update once we know content-length (if present).
+      opts.onProgress?.({
+        phase: "download",
+        downloadedBytes: 0,
+        totalBytes,
+        percent: 0,
+        message: "Downloading…",
+      });
+
+      await pipeline(body, ws);
+
+      opts.onProgress?.({
+        phase: "download",
+        downloadedBytes: typeof totalBytes === "number" ? totalBytes : downloadedBytes,
+        totalBytes,
+        percent: 1,
+        message: "Download complete",
+      });
+      return outPath;
+    } catch (e) {
+      lastError = e;
+
+      // Ensure we don't leave a partial temp file behind.
+      try {
+        ws?.destroy();
+      } catch {}
+      await safeRemovePath(outPath);
+
+      const status = (e as any)?.status;
+      const retryable = typeof status === "number" ? isRetryableStatus(status) : true;
+      if (!retryable || attempt >= maxAttempts) throw e;
+
+      const retryAfterMs = parseRetryAfterMs(res);
+      const delayMs = computeDelayMs(attempt, retryAfterMs);
+      const msg = e instanceof Error ? e.message : String(e);
+      opts.onProgress?.({
+        phase: "status",
+        message: `Download error: ${msg}. Retrying in ${Math.max(1, Math.round(delayMs / 100) / 10)}s…`,
+      });
+      await sleep(delayMs);
+      continue;
+    } finally {
+      // Best-effort: stop any in-flight body stream if we're retrying.
+      try {
+        await res?.body?.cancel?.();
+      } catch {}
+    }
   }
-  opts.onProgress?.({
-    phase: "download",
-    downloadedBytes: typeof totalBytes === "number" ? totalBytes : downloadedBytes,
-    totalBytes,
-    percent: 1,
-    message: "Download complete",
-  });
-  return outPath;
+
+  // Should be unreachable due to returns/throws above, but keep TS happy.
+  throw lastError instanceof Error ? lastError : new Error("Download failed");
 }
 
 async function removeAppleDoubleFilesRecursively(opts: {
@@ -633,10 +823,7 @@ async function removeAppleDoublePyFiles(opts: {
   const pythonExe = opts.pythonExe;
   const onStatus = opts.onStatus;
 
-  const venvRoot =
-    process.platform === "win32"
-      ? path.dirname(path.dirname(pythonExe)) // .../apex-studio/Scripts/python.exe -> .../apex-studio
-      : path.dirname(path.dirname(pythonExe)); // .../apex-studio/bin/python -> .../apex-studio
+  const venvRoot = resolveRuntimeRootFromPythonExe(pythonExe);
 
   const sitePackageCandidates: string[] = [];
   if (process.platform === "win32") {
