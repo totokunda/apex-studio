@@ -16,7 +16,6 @@ const publishTimeoutMs = (() => {
 })();
 
 const bundleFullFilters = process.env.APEX_BUNDLE_FILTERS_FULL === "1";
-const bundleFilterExamples = process.env.APEX_BUNDLE_FILTERS_EXAMPLES === "1";
 
 /** @type {import("electron-builder").Configuration} */
 module.exports = {
@@ -51,7 +50,7 @@ module.exports = {
   // Filters can be very large (especially "full"). Keep them outside ASAR to reduce
   // memory pressure during packaging and to make runtime file access predictable.
   asarUnpack: [
-    "node_modules/@app/renderer/dist/filters/**",
+    "node_modules/@app/renderer/dist/filters/**/*",
   ],
 
   // Keep packaging minimal: include our entry point and only built artifacts from workspace packages.
@@ -60,13 +59,13 @@ module.exports = {
     pkg.main,
 
     // Exclude everything first, then explicitly include only built outputs.
-    "!node_modules/@app/**",
-    "node_modules/@app/**/dist/**",
-    "node_modules/@app/**/package.json",
+    "!node_modules/@app/**/*",
+    "node_modules/@app/*/dist/**/*",
+    "node_modules/@app/*/package.json",
 
     // Size trims:
     // - renderer filter packs are huge; ship "small" and "examples" by default
-    ...(bundleFullFilters ? [] : ["!node_modules/@app/renderer/dist/filters/full/**"]),
+    ...(bundleFullFilters ? [] : ["!node_modules/@app/renderer/dist/filters/full/**/*"]),
     // - model demo media is optional and large; download later if needed
   ],
 
