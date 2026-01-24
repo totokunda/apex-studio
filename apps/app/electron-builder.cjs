@@ -50,7 +50,7 @@ module.exports = {
   // Filters can be very large (especially "full"). Keep them outside ASAR to reduce
   // memory pressure during packaging and to make runtime file access predictable.
   asarUnpack: [
-    "node_modules/@app/renderer/dist/filters/**/*",
+    "**/filters/**",
   ],
 
   // Keep packaging minimal: include our entry point and only built artifacts from workspace packages.
@@ -58,14 +58,13 @@ module.exports = {
     "LICENSE*",
     pkg.main,
 
-    // Exclude everything first, then explicitly include only built outputs.
-    "!node_modules/@app/**/*",
-    "node_modules/@app/*/dist/**/*",
+    // Include built outputs from workspace packages.
+    "node_modules/@app/*/dist/**",
     "node_modules/@app/*/package.json",
 
     // Size trims:
     // - renderer filter packs are huge; ship "small" and "examples" by default
-    ...(bundleFullFilters ? [] : ["!node_modules/@app/renderer/dist/filters/full/**/*"]),
+    ...(bundleFullFilters ? [] : ["!node_modules/@app/renderer/dist/filters/full/**"]),
     // - model demo media is optional and large; download later if needed
   ],
 
