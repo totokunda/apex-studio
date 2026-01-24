@@ -51,9 +51,13 @@ jobs:
           ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
         run: npm run publish -- --publish-timeout-ms $env:ELECTRON_PUBLISH_TIMEOUT_MS
 
-  publish-macos-arm64:
-    name: Publish (macOS arm64)
+  publish-macos:
+    name: Publish (macOS)
     runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
     timeout-minutes: 180
 
     steps:
@@ -84,42 +88,7 @@ jobs:
           # Keep mac publish stable by shipping small-only filter pack by default.
           APEX_BUNDLE_FILTERS_FULL: "0"
           APEX_BUNDLE_FILTERS_EXAMPLES: "0"
-        run: npm run publish -- --arch arm64 --publish-timeout-ms $ELECTRON_PUBLISH_TIMEOUT_MS
-
-  publish-macos-x64:
-    name: Publish (macOS x64)
-    runs-on: macos-13
-    timeout-minutes: 180
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "apps/app/package-lock.json"
-
-      - name: Install dependencies
-        working-directory: apps/app
-        run: npm ci
-
-      - name: Publish
-        working-directory: apps/app
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          # Avoid Node "JavaScript heap out of memory" (~2GB default limit).
-          NODE_OPTIONS: --max-old-space-size=8192
-          # Used by our electron-builder config to set upload/API timeouts.
-          ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
-          # Keep mac publish stable by shipping small-only filter pack by default.
-          APEX_BUNDLE_FILTERS_FULL: "0"
-          APEX_BUNDLE_FILTERS_EXAMPLES: "0"
-        run: npm run publish -- --arch x64 --publish-timeout-ms $ELECTRON_PUBLISH_TIMEOUT_MS
+        run: npm run publish -- --arch ${{ matrix.arch }} --publish-timeout-ms $ELECTRON_PUBLISH_TIMEOUT_MS
 
   publish-linux:
     name: Publish (Linux)
