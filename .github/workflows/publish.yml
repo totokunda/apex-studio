@@ -44,6 +44,8 @@ jobs:
       - name: Publish
         working-directory: apps/app
         env:
+          # Avoid Node "JavaScript heap out of memory" (~2GB default limit).
+          NODE_OPTIONS: --max-old-space-size=8192
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           # Used by our electron-builder config to set upload/API timeouts.
           ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
@@ -149,6 +151,7 @@ jobs:
       - name: Publish
         working-directory: apps/app
         env:
+          NODE_OPTIONS: --max-old-space-size=8192
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           # Used by our electron-builder config to set upload/API timeouts.
           ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
