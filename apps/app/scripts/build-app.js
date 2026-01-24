@@ -21,6 +21,8 @@
  *   --skip-sign                          Skip code signing
  *   --publish                            Publish release after build
  *   --draft                              Create draft release
+ *   --publish-timeout-ms <number>        Publish/upload request timeout in ms (default: 900000)
+ *   --publish-debug                      Enable extra publish diagnostics (electron-builder debug logs)
  */
 
 import { spawn, execSync } from "node:child_process";
@@ -44,6 +46,8 @@ function parseArgs() {
     skipSign: false,
     publish: false,
     draft: false,
+    publishTimeoutMs: null,
+    publishDebug: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -63,6 +67,18 @@ function parseArgs() {
         break;
       case "--draft":
         config.draft = true;
+        break;
+      case "--publish-timeout-ms": {
+        const raw = args[++i];
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) {
+          throw new Error(`Invalid --publish-timeout-ms value: ${JSON.stringify(raw)}`);
+        }
+        config.publishTimeoutMs = Math.floor(n);
+        break;
+      }
+      case "--publish-debug":
+        config.publishDebug = true;
         break;
       case "--help":
       case "-h":
@@ -87,6 +103,8 @@ Options:
   --skip-sign                          Skip code signing
   --publish                            Publish release after build
   --draft                              Create draft release
+  --publish-timeout-ms <number>        Publish/upload request timeout in ms (default: 900000)
+  --publish-debug                      Enable extra publish diagnostics (electron-builder debug logs)
   --help, -h                           Show this help message
 
 Environment Variables:
@@ -96,7 +114,9 @@ Environment Variables:
   APPLE_IDENTITY        Code signing identity (certificate name)
   WINDOWS_CERT_FILE     Path to Windows code signing certificate (.pfx)
   WINDOWS_CERT_PASSWORD Password for the certificate
-  GITHUB_TOKEN          GitHub token for publishing releases
+  GH_TOKEN / GITHUB_TOKEN / GITHUB_RELEASE_TOKEN   GitHub token for publishing releases
+  ELECTRON_PUBLISH_TIMEOUT_MS                      Upload/API request timeout in ms (default: 900000)
+  DEBUG                                           Set to "electron-builder" to see publish HTTP logs
 
 Examples:
   # Build for current platform
@@ -110,6 +130,12 @@ Examples:
 
   # Build and publish release
   node scripts/build-app.js --publish
+
+  # Publish with a longer timeout (20 minutes)
+  node scripts/build-app.js --publish --publish-timeout-ms 1200000
+
+  # Publish with verbose electron-builder logs
+  node scripts/build-app.js --publish --publish-debug
 `);
 }
 
@@ -294,6 +320,14 @@ async function packageApp(config) {
     const env = {
       ...process.env
     };
+    // Allow overriding publish timeout from CLI; electron-builder config reads this env var.
+    if (config.publishTimeoutMs != null) {
+      env.ELECTRON_PUBLISH_TIMEOUT_MS = String(config.publishTimeoutMs);
+    }
+    if (config.publishDebug) {
+      // builder-util-runtime uses debug("electron-builder") for HTTP request/response logs.
+      env.DEBUG = env.DEBUG ? `${env.DEBUG},electron-builder` : "electron-builder";
+    }
     await runCommand("npx", args, { cwd: APP_ROOT, env });
     log("Application packaged successfully", "success");
     return true;
