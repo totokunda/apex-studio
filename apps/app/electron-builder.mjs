@@ -43,7 +43,10 @@ export default /** @type import('electron-builder').Configuration */
    * It is recommended to avoid using non-standard characters such as spaces in artifact names,
    * as they can unpredictably change during deployment, making them impossible to locate and download for update.
    */
-  artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+  // Use `${name}` (package.json name) to avoid spaces in filenames.
+  // NOTE: electron-builder doesn't define a `${target}` macro at this level.
+  // Windows target-specific names are configured under `win.target` below.
+  artifactName: "${name}-${version}-${os}-${arch}.${ext}",
   
   files: [
     "LICENSE*",
@@ -117,6 +120,7 @@ export default /** @type import('electron-builder').Configuration */
   },
   
   nsis: {
+    artifactName: "${name}-${version}-${os}-${arch}-setup.${ext}",
     oneClick: false,
     allowToChangeInstallationDirectory: true,
     perMachine: false,
@@ -130,6 +134,11 @@ export default /** @type import('electron-builder').Configuration */
     license: "LICENSE",
     // Custom NSIS script for Python runtime setup
     include: "buildResources/installer.nsh",
+  },
+
+  // Windows "portable" target options
+  portable: {
+    artifactName: "${name}-${version}-${os}-${arch}-portable.${ext}",
   },
   
   // Linux configuration
