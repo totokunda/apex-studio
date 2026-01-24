@@ -56,8 +56,6 @@ jobs:
     runs-on: macos-14
     strategy:
       fail-fast: false
-      matrix:
-        arch: [arm64, x64]
     timeout-minutes: 180
 
     steps:
