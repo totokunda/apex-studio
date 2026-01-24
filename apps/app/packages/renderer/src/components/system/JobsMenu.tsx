@@ -164,6 +164,13 @@ const JobsMenu: React.FC = () => {
 
   // Toast on newly-failed jobs (application errors travel via ws updates / latest.metadata.error).
   useEffect(() => {
+    const capitalizeWords = (s: string) =>
+      String(s || "")
+        .split(/[\s_-]+/g)
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+
     try {
       for (const [jobId, job] of Object.entries(jobsById || {})) {
         const status = (job?.status || "").toLowerCase();
@@ -177,8 +184,8 @@ const JobsMenu: React.FC = () => {
         const last = lastToastedErrorByJobIdRef.current.get(jobId);
         if (last === msg) continue;
         lastToastedErrorByJobIdRef.current.set(jobId, msg);
-        const category = (job as any)?.category || "job";
-        toast.error(`${category} failed`, {
+        const category = String((job as any)?.category || "job");
+        toast.error(`${capitalizeWords(category)} Failed`, {
           id: `job-error-${jobId}`,
           description: msg,
           duration: 8000,
