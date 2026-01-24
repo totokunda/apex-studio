@@ -50,14 +50,21 @@ function parseArgs() {
     publishDebug: false,
   };
 
+  const requireValue = (flag, value) => {
+    if (!value || String(value).startsWith("--")) {
+      throw new Error(`Missing value for ${flag}`);
+    }
+    return value;
+  };
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     switch (arg) {
       case "--platform":
-        config.platform = args[++i];
+        config.platform = requireValue("--platform", args[++i]);
         break;
       case "--arch":
-        config.arch = args[++i];
+        config.arch = requireValue("--arch", args[++i]);
         break;
       case "--skip-sign":
         config.skipSign = true;
@@ -69,7 +76,7 @@ function parseArgs() {
         config.draft = true;
         break;
       case "--publish-timeout-ms": {
-        const raw = args[++i];
+        const raw = requireValue("--publish-timeout-ms", args[++i]);
         const n = Number(raw);
         if (!Number.isFinite(n) || n <= 0) {
           throw new Error(`Invalid --publish-timeout-ms value: ${JSON.stringify(raw)}`);
@@ -84,6 +91,8 @@ function parseArgs() {
       case "-h":
         printHelp();
         process.exit(0);
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
     }
   }
 
