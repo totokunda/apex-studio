@@ -3,9 +3,11 @@
  * Apex Studio Full Build Script
  * 
  * This script orchestrates the complete build process:
- * 1. Builds the Python API bundle
- * 2. Builds the Electron app with workspace packages
- * 3. Packages everything together with electron-builder
+ * 1. Builds the Electron app with workspace packages
+ * 2. Packages everything together with electron-builder
+ *
+ * Note: Python API bundling is handled by the server-side bundler under `apps/api/scripts/bundle_python.py`
+ * and/or separate workflows; this script assumes the Python bundle is already available (or intentionally omitted).
  * 
  * Usage:
  *   node scripts/build-app.js [options]
@@ -13,11 +15,6 @@
  * Options:
  *   --platform [darwin|linux|win32|all]  Target platform (default: current)
  *   --arch [x64|arm64|universal]         Target architecture (default: current)
- *   --cuda [auto|cpu|mps|rocm|cuda118|cuda121|cuda124|cuda126|cuda128]  GPU support (default: auto)
- *   --python <python3.12>               Python executable to run bundler + create venv (default: auto-detect)
- *   --require-python312                 Fail if bundler isn't running under Python 3.12.x
- *   --skip-rust                          Skip building/installing Rust wheels during bundling
- *   --skip-python                        Skip Python bundling (use existing)
  *   --skip-sign                          Skip code signing
  *   --publish                            Publish release after build
  *   --draft                              Create draft release
@@ -133,9 +130,6 @@ Examples:
 
   # Build for macOS with Apple Silicon
   node scripts/build-app.js --platform darwin --arch arm64
-
-  # Build for Windows with CPU-only Python
-  node scripts/build-app.js --platform win32 --cuda cpu
 
   # Build and publish release
   node scripts/build-app.js --publish

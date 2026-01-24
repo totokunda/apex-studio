@@ -524,7 +524,6 @@ def bundle(
     This is a thin wrapper around `scripts/bundle_python.py` with sensible defaults:
     - platform/gpu default to auto-detect for this machine
     - tar.zst enabled with level 12
-    - signing enabled
     """ 
     
     project_root = Path(__file__).resolve().parent.parent  # apps/api/
@@ -565,9 +564,11 @@ def bundle(
         cmd += ["--bundle-version", str(effective_version)]
     if venv_python:
         cmd += ["--python", str(venv_python)]
-    if tar_zst:
-        cmd.append("--tar-zst")
-        cmd += ["--tar-zst-level", str(int(tar_zst_level))]
+    # Bundler writes .tar.zst by default; disable explicitly when requested.
+    if not tar_zst:
+        cmd.append("--no-tar-zst")
+    # Always forward compression level (used when tar.zst is enabled).
+    cmd += ["--tar-zst-level", str(int(tar_zst_level))]
 
     # Run from the API project root so relative paths (like ./dist) behave as expected.
     proc = subprocess.Popen(cmd, cwd=str(project_root))
@@ -767,10 +768,9 @@ def publish(
         str(output),
         "--bundle-version",
         str(version),
-        "--tar-zst",
-        "--tar-zst-level",
-        str(int(tar_zst_level)),
     ]
+    # Bundler writes .tar.zst by default; just set the level.
+    bundle_cmd += ["--tar-zst-level", str(int(tar_zst_level))]
     if venv_python:
         bundle_cmd += ["--python", str(venv_python)]
 

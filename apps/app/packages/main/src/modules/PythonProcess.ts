@@ -312,33 +312,24 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       const resourcesPath = process.resourcesPath!;
       
       if (platform === "darwin") {
-        // macOS: venv-based bundle
-        return path.join(
-          resourcesPath,
-          "python-api",
-          "apex-engine",
-          "apex-studio",
-          "bin",
-          "python"
-        );
+        // macOS: portable Python bundle (no venv)
+        const base = path.join(resourcesPath, "python-api", "apex-engine", "apex-studio", "bin");
+        const py = path.join(base, "python");
+        const py3 = path.join(base, "python3");
+        return fs.existsSync(py3) && !fs.existsSync(py) ? py3 : py;
       } else if (platform === "win32") {
         return path.join(
           resourcesPath,
           "python-api",
           "apex-engine",
           "apex-studio",
-          "Scripts",
           "python.exe"
         );
       } else {
-        return path.join(
-          resourcesPath,
-          "python-api",
-          "apex-engine",
-          "apex-studio",
-          "bin",
-          "python"
-        );
+        const base = path.join(resourcesPath, "python-api", "apex-engine", "apex-studio", "bin");
+        const py = path.join(base, "python");
+        const py3 = path.join(base, "python3");
+        return fs.existsSync(py3) && !fs.existsSync(py) ? py3 : py;
       }
     } else {
       // Development: use system Python or virtual environment
@@ -448,8 +439,18 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     const base = path.join(bundleRoot, "apex-studio");
     const candidates =
       process.platform === "win32"
-        ? [path.join(base, "Scripts", "python.exe")]
-        : [path.join(base, "bin", "python"), path.join(base, "bin", "python3")];
+        ? [
+            // New portable runtime layout (preferred)
+            path.join(base, "python.exe"),
+            // Legacy venv layout (older bundles)
+            path.join(base, "Scripts", "python.exe"),
+            // Some extracted layouts
+            path.join(base, "install", "python.exe"),
+          ]
+        : [
+            path.join(base, "bin", "python"),
+            path.join(base, "bin", "python3"),
+          ];
     for (const p of candidates) {
       try {
         if (fs.existsSync(p)) return p;
