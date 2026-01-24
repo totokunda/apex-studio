@@ -1,0 +1,109 @@
+name: Publish (electron-builder)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_timeout_ms:
+        description: "Upload/API request timeout in milliseconds"
+        required: false
+        default: "3600000"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-windows:
+    name: Publish (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "apps/app/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: apps/app
+        run: npm ci
+
+      - name: Publish
+        working-directory: apps/app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Used by our electron-builder config to set upload/API timeouts.
+          ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
+        run: npm run publish -- --publish-timeout-ms $env:ELECTRON_PUBLISH_TIMEOUT_MS
+
+  publish-macos:
+    name: Publish (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "apps/app/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: apps/app
+        run: npm ci
+
+      - name: Publish
+        working-directory: apps/app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Used by our electron-builder config to set upload/API timeouts.
+          ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
+        run: npm run publish -- --publish-timeout-ms $ELECTRON_PUBLISH_TIMEOUT_MS
+
+  publish-linux:
+    name: Publish (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "apps/app/package-lock.json"
+
+      - name: Install system dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 build-essential python3
+
+      - name: Install dependencies
+        working-directory: apps/app
+        run: npm ci
+
+      - name: Publish
+        working-directory: apps/app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Used by our electron-builder config to set upload/API timeouts.
+          ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
+        run: npm run publish -- --publish-timeout-ms $ELECTRON_PUBLISH_TIMEOUT_MS
