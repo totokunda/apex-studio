@@ -5,7 +5,7 @@ Entrypoint for bundling the Python API.
 The implementation lives under `scripts/bundling/bundle_python.py`.
 
 Example:
-    python scripts/bundle_python.py --platform auto --gpu auto --output ./dist --tar-zst --tar-zst-level 12 --sign
+    python scripts/bundle_python.py --platform auto --gpu auto --output ./dist --tar-zst-level 12
 """
 
 from __future__ import annotations

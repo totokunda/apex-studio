@@ -231,7 +231,7 @@ image_interpolation_test: linear
 image_interpolation_train: linear
 init_lbo: true
 init_path: null
-input_model_path: /home/tosin_coverquick_co/apex/ts/nlf_l_multi_0.3.2.torchscript
+input_model_path: null
 jpeg_aug_prob: 0.25
 lbo_concat_coord: false
 lbo_eigval_regul: 0.0001
@@ -262,7 +262,7 @@ occlude_aug_prob: 0.5
 occlude_aug_prob_2d: 0.7
 occlude_aug_scale: 1
 optimizer: adamw
-output_model_path: /home/tosin_coverquick_co/apex/ts/nlf_l_multi_0.3.2_test.torchscript
+output_model_path: null
 pad_white_pixels: false
 partial_visibility_prob: 0.15
 patch_embed_lr_factor: 0.2

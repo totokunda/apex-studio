@@ -101,7 +101,7 @@ spec:
     extra_kwargs:
       load_from_config: true
     model_path:
-    - path: /home/tosin_coverquick_co/apex/Wan2.2-Lightning/Wan2.2-T2V-A14B/high_noise_model
+    - path: Wan-AI/Wan2.2-T2V-A14B/high_noise_model
       variant: default
       precision: fp16
       type: safetensors
@@ -197,7 +197,7 @@ spec:
     extra_kwargs:
       load_from_config: true
     model_path:
-    - path: /home/tosin_coverquick_co/apex/Wan2.2-Lightning/Wan2.2-T2V-A14B/low_noise_model
+    - path: Wan-AI/Wan2.2-T2V-A14B/low_noise_model
       variant: default
       precision: fp16
       type: safetensors
