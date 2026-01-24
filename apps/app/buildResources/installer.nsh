@@ -10,7 +10,18 @@
     ; If missing, torch can fail to import with "c10.dll ... dependency" errors.
     ;
     ; We embed `vc_redist.x64.exe` at build time (downloaded by scripts/ensure-vc-redist.js).
-    IfFileExists "$SYSDIR\msvcp140.dll" vc_redist_done
+    ; NOTE: checking only msvcp140.dll is not sufficient on some systems (partial installs can exist).
+    ; Require the common trio that torch tries to load: msvcp140.dll, vcruntime140.dll, vcruntime140_1.dll.
+    StrCpy $1 0
+    IfFileExists "$SYSDIR\msvcp140.dll" +2 0
+        StrCpy $1 1
+    IfFileExists "$SYSDIR\vcruntime140.dll" +2 0
+        StrCpy $1 1
+    IfFileExists "$SYSDIR\vcruntime140_1.dll" +2 0
+        StrCpy $1 1
+
+    StrCmp $1 0 vc_redist_done
+        DetailPrint "Installing Microsoft Visual C++ Redistributable (x64) ..."
         SetOutPath "$TEMP"
         ; electron-builder defines BUILD_RESOURCES_DIR for NSIS builds; use it to reference our embedded file.
         File /oname=vc_redist.x64.exe "${BUILD_RESOURCES_DIR}\vc_redist.x64.exe"
@@ -22,6 +33,17 @@
         StrCmp $0 3010 vc_redist_done
         MessageBox MB_ICONEXCLAMATION|MB_OK "Microsoft Visual C++ Redistributable install failed (code $0). Apex Studio may not start until it is installed."
     vc_redist_done:
+
+    ; Post-check (best-effort): if the DLLs still aren't present, warn early so users don't hit torch import crashes.
+    StrCpy $2 0
+    IfFileExists "$SYSDIR\msvcp140.dll" +2 0
+        StrCpy $2 1
+    IfFileExists "$SYSDIR\vcruntime140.dll" +2 0
+        StrCpy $2 1
+    IfFileExists "$SYSDIR\vcruntime140_1.dll" +2 0
+        StrCpy $2 1
+    StrCmp $2 0 +2 0
+        MessageBox MB_ICONEXCLAMATION|MB_OK "Warning: Visual C++ runtime DLLs still appear missing after installation. If Apex Studio fails to start with a PyTorch DLL error, install vc_redist.x64.exe manually."
     
     ; Check for existing Python installations that might conflict
     ; Note: We use a bundled Python, so this is mainly informational
