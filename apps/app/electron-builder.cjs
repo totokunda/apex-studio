@@ -132,10 +132,6 @@ module.exports = {
         target: "nsis",
         arch: ["x64"],
       },
-      {
-        target: "portable",
-        arch: ["x64"],
-      },
     ],
     icon: "buildResources/icon.ico",
   },
@@ -155,11 +151,6 @@ module.exports = {
     license: "LICENSE",
     // Custom NSIS script for Python runtime setup
     include: "buildResources/installer.nsh",
-  },
-
-  // Windows "portable" target options
-  portable: {
-    artifactName: "${name}-${version}-${os}-${arch}-portable.${ext}",
   },
 
   // Linux configuration
