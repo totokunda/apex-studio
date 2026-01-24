@@ -185,7 +185,7 @@ After building, you'll find the distributables in `apps/app/dist/`:
 | macOS | DMG | `Apex Studio-{version}-mac-{arch}.dmg` |
 | macOS | ZIP | `Apex Studio-{version}-mac-{arch}.zip` |
 | Windows | Installer | `Apex Studio-{version}-win-x64.exe` |
-| Windows | Portable | `Apex Studio-{version}-win-x64-portable.exe` |
+| Windows | Setup (NSIS) | `apex-studio-{version}-win-x64-setup.exe` |
 | Linux | Debian | `Apex Studio-{version}-linux-x64.deb` |
 | Linux | AppImage | `Apex Studio-{version}-x64.AppImage` |
 | Linux | Tarball | `Apex Studio-{version}-linux-x64.tar.gz` |
@@ -245,8 +245,10 @@ spctl -a -vv "/path/to/Apex Studio.app"
 
 ### Windows: Missing Dependencies
 
-If the app fails to start, install the Visual C++ Redistributable:
-- Download from [Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+If a packaged Windows build fails to start with a PyTorch DLL error (e.g. `c10.dll`), it's usually due to a missing Visual C++ runtime.
+
+- **NSIS installer builds**: the installer will automatically install the required Visual C++ Redistributable when needed.
+- **Portable builds**: you may still need to manually install the Visual C++ Redistributable from Microsoft: `https://aka.ms/vs/17/release/vc_redist.x64.exe`
 
 ### Linux: CUDA Not Detected
 

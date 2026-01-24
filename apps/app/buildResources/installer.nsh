@@ -6,6 +6,23 @@
 !macroend
 
 !macro customInstall
+    ; Ensure MSVC runtime (PyTorch dependency on Windows).
+    ; If missing, torch can fail to import with "c10.dll ... dependency" errors.
+    ;
+    ; We embed `vc_redist.x64.exe` at build time (downloaded by scripts/ensure-vc-redist.js).
+    IfFileExists "$SYSDIR\msvcp140.dll" vc_redist_done
+        SetOutPath "$TEMP"
+        ; electron-builder defines BUILD_RESOURCES_DIR for NSIS builds; use it to reference our embedded file.
+        File /oname=vc_redist.x64.exe "${BUILD_RESOURCES_DIR}\vc_redist.x64.exe"
+        ExecWait '"$TEMP\vc_redist.x64.exe" /install /quiet /norestart' $0
+        Delete "$TEMP\vc_redist.x64.exe"
+
+        ; Treat success (0) and reboot-required (3010) as OK.
+        StrCmp $0 0 vc_redist_done
+        StrCmp $0 3010 vc_redist_done
+        MessageBox MB_ICONEXCLAMATION|MB_OK "Microsoft Visual C++ Redistributable install failed (code $0). Apex Studio may not start until it is installed."
+    vc_redist_done:
+    
     ; Check for existing Python installations that might conflict
     ; Note: We use a bundled Python, so this is mainly informational
     
