@@ -65,9 +65,8 @@ module.exports = {
     "node_modules/@app/**/package.json",
 
     // Size trims:
-    // - renderer filter packs are huge; ship "small" only by default
+    // - renderer filter packs are huge; ship "small" and "examples" by default
     ...(bundleFullFilters ? [] : ["!node_modules/@app/renderer/dist/filters/full/**"]),
-    ...(bundleFilterExamples ? [] : ["!node_modules/@app/renderer/dist/filters/examples/**"]),
     // - model demo media is optional and large; download later if needed
   ],
 

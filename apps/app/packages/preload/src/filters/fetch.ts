@@ -96,6 +96,9 @@ const findPngFiles = async (
   return files;
 };
 
+
+
+
 export const fetchFilters = async () => {
   const filters: Filter[] = [];
   // In packaged builds, the renderer assets live under '@app/renderer/dist'.
