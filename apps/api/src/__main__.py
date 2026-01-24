@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, subprocess, signal, psutil, sys, shlex, time, shutil
+import os, subprocess, signal, psutil, sys, shlex, time
 import re
 import json
 import urllib.request
@@ -7,6 +7,7 @@ import urllib.parse
 import platform as _platform
 from dataclasses import dataclass
 from typing import Any, Optional
+import sys
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
@@ -71,6 +72,40 @@ app = typer.Typer(help="Apex command line")
 def _is_frozen() -> bool:
     # PyInstaller sets sys.frozen = True in the bundled executable.
     return bool(getattr(sys, "frozen", False))
+
+
+def _resolve_python_runner() -> str:
+    """
+    Return the best-guess Python interpreter path for launching child Python processes.
+
+    Why this exists:
+    - In some Windows entrypoint/wrapper scenarios, `sys.executable` may point at the
+      *entrypoint executable* (e.g. `apex-engine.exe`) rather than `python.exe`.
+      If we use that as the runner, subprocesses can exit immediately (or behave
+      unexpectedly), making it look like `subprocess.run(...)` isn't waiting.
+    """
+    exe = Path(sys.executable).resolve()
+    name = exe.name.lower()
+
+    # Most common: already a Python interpreter.
+    if name.startswith("python"):
+        return str(exe)
+
+    # Windows venv entrypoints typically live next to `python.exe`.
+    if sys.platform == "win32":
+        candidate = exe.with_name("python.exe")
+        if candidate.exists():
+            return str(candidate)
+
+    # Fallback: CPython exposes the base executable (may be outside a venv).
+    base = getattr(sys, "_base_executable", None)
+    if base:
+        base_path = Path(str(base)).resolve()
+        if base_path.exists():
+            return str(base_path)
+
+    # Last resort: whatever we were given.
+    return str(exe)
 
 
 def _load_envfile_if_present(envfile: Path | None) -> None:
@@ -505,23 +540,7 @@ def bundle(
         12,
         "--tar-zst-level",
         help="Zstd compression level for .tar.zst (default: 12).",
-    ),
-    venv_python: str | None = typer.Option(
-        None,
-        "--python",
-        help=(
-            "Python interpreter to use for the bundled venv (forwarded to bundler). "
-            "If omitted, bundler chooses a recommended interpreter automatically."
-        ),
-    ),
-    runner_python: str = typer.Option(
-        "python3.12",
-        "--runner-python",
-        help=(
-            "Python interpreter used to run the bundling script itself (default: python3.12). "
-            "Falls back to the current interpreter if not found on PATH."
-        ),
-    ),
+    )
 ):
     """
     Bundle the Python API for distribution.
@@ -536,16 +555,7 @@ def bundle(
     if not script.exists():
         raise typer.BadParameter(f"Bundling script not found: {script}")
     
-
-
-    runner = shutil.which(runner_python) or runner_python
-    if shutil.which(runner_python) is None and runner_python == "python3.12":
-        # Best-effort fallback for dev environments where python3.12 isn't installed.
-        runner = sys.executable
-        print(
-            "Warning: `python3.12` not found on PATH; "
-            f"running bundler with current interpreter: {runner}"
-        )
+    runner = sys.executable
 
     cmd: list[str] = [
         runner,
@@ -569,8 +579,6 @@ def bundle(
     effective_version = _with_nightly_version(str(effective_version or "0.0.0"), nightly)
     if effective_version:
         cmd += ["--bundle-version", str(effective_version)]
-    if venv_python:
-        cmd += ["--python", str(venv_python)]
     # Bundler writes .tar.zst by default; disable explicitly when requested.
     if not tar_zst:
         cmd.append("--no-tar-zst")
@@ -699,22 +707,6 @@ def publish(
         "--tar-zst-level",
         help="Zstd compression level for .tar.zst (default: 12).",
     ),
-    venv_python: str | None = typer.Option(
-        None,
-        "--python",
-        help=(
-            "Python interpreter to use for the bundled venv (forwarded to bundler). "
-            "If omitted, bundler chooses a recommended interpreter automatically."
-        ),
-    ),
-    runner_python: str = typer.Option(
-        "python3.12",
-        "--runner-python",
-        help=(
-            "Python interpreter used to run the bundling script itself (default: python3.12). "
-            "Falls back to the current interpreter if not found on PATH."
-        ),
-    ),
     repo_id: str | None = typer.Option(
         None,
         "--repo-id",
@@ -755,17 +747,12 @@ def publish(
     if effective_platform == "auto":
         effective_platform = sys.platform
     
-    bundle_script = project_root / "scripts" / "bundle_python.py"
+    # Call the real bundler implementation directly (avoid wrapper exec semantics on Windows).
+    bundle_script = project_root / "scripts" / "bundling" / "bundle_python.py"
     if not bundle_script.exists():
         raise typer.BadParameter(f"Bundling script not found: {bundle_script}")
 
-    runner = shutil.which(runner_python) or runner_python
-    if shutil.which(runner_python) is None and runner_python == "python3.12":
-        runner = sys.executable
-        print(
-            "Warning: `python3.12` not found on PATH; "
-            f"running bundler with current interpreter: {runner}"
-        )
+    runner = _resolve_python_runner()
 
     started_at = time.time()
 
@@ -785,18 +772,25 @@ def publish(
     ]
     # Bundler writes .tar.zst by default; just set the level.
     bundle_cmd += ["--tar-zst-level", str(int(tar_zst_level))]
-    if venv_python:
-        bundle_cmd += ["--python", str(venv_python)]
+
+    # Ensure bundler emits python-api + python-code tarballs (python-api scope also triggers code tar).
+    bundle_cmd += ["--tar-zst-scope", "python-api"]
 
     # Run from the API project root so relative paths (like ./dist) behave as expected.
-    proc = subprocess.Popen(bundle_cmd, cwd=str(project_root))
     try:
-        proc.wait()
+        env = os.environ.copy()
+        # Ensure bundler logs stream immediately (avoid Python stdio buffering).
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        subprocess.run(
+            bundle_cmd,
+            cwd=str(project_root),
+            env=env,
+            check=True,
+            text=True,
+        )
     except KeyboardInterrupt:
-        proc.terminate()
-        proc.wait()
-    if proc.returncode != 0:
-        raise SystemExit(proc.returncode)
+        raise SystemExit(130)
+
 
     # Resolve the bundler output directory relative to apps/api/ (since we ran with cwd=project_root).
     out_dir = output if output.is_absolute() else (project_root / output)
@@ -809,8 +803,30 @@ def publish(
     # Prefer tarballs created by *this* publish run.
     api_recent = [p for p in api_candidates if p.stat().st_mtime >= started_at - 2]
     code_recent = [p for p in code_candidates if p.stat().st_mtime >= started_at - 2]
-    api_tar = _pick_newest(api_recent or api_candidates)
-    code_tar = _pick_newest(code_recent or code_candidates)
+    api_tar_candidates = api_recent or api_candidates
+    code_tar_candidates = code_recent or code_candidates
+    if not api_tar_candidates or not code_tar_candidates:
+        # Provide actionable diagnostics instead of a generic "No paths provided".
+        try:
+            existing = sorted(
+                [p.name for p in out_dir.iterdir() if p.is_file()],
+                key=lambda s: s.lower(),
+            )
+        except Exception:
+            existing = []
+
+        raise typer.BadParameter(
+            "Bundling completed, but expected .tar.zst artifacts were not found.\n"
+            f"- output dir: {out_dir}\n"
+            f"- expected api glob: python-api-{safe_version}-*.tar.zst\n"
+            f"- expected code glob: python-code-{safe_version}-*.tar.zst\n"
+            f"- found files: {existing[:50]}{' ...' if len(existing) > 50 else ''}\n"
+            "If bundling was interrupted, re-run `apex-engine publish`.\n"
+            "If you disabled tar output, run with `--tar-zst` (or omit `--no-tar-zst`)."
+        )
+
+    api_tar = _pick_newest(api_tar_candidates)
+    code_tar = _pick_newest(code_tar_candidates)
 
     upload_script = project_root / "scripts" / "release" / "upload_release_artifacts.py"
     if not upload_script.exists():
