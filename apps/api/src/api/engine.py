@@ -95,6 +95,7 @@ def run_engine(request: RunEngineRequest):
     try:
         from .ray_tasks import get_engine_runner_actor  # lazy import to avoid cycles
         from .ray_app import get_ray_app
+        from .ray_log_utils import extract_worker_id_and_pid, tail_worker_logs_from_ray_sessions
 
         # Ensure Ray is initialized (warm actor lookup/creation requires it).
         get_ray_app()
@@ -152,7 +153,19 @@ def engine_result(job_id: str):
             error=result.get("error"),
         )
     except Exception as e:
-        return ResultResponse(job_id=job_id, status="error", error=str(e))
+        # When Ray workers crash (e.g. native access violations / segfaults),
+        # Ray surfaces a generic "worker died" error. Attach the worker log tail
+        # to make root-causing possible from the UI.
+        msg = str(e)
+        try:
+            wid, pid = extract_worker_id_and_pid(msg)
+            if wid:
+                tail = tail_worker_logs_from_ray_sessions(worker_id=wid, worker_pid=pid)
+                if tail:
+                    msg = msg + "\n\n" + tail
+        except Exception:
+            pass
+        return ResultResponse(job_id=job_id, status="error", error=msg)
 
 
 @router.post("/cancel/{job_id}", response_model=JobResponse)
