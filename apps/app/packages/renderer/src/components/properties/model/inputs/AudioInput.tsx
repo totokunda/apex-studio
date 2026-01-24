@@ -43,6 +43,7 @@ import { MediaDialog } from "@/components/dialogs/MediaDialog";
 import { CircularAudioVisualizer } from "./CircularAudioVisualizer";
 import TimelineClipPosterPreview from "./TimelineClipPosterPreview";
 import ServerMediaPickerGrid from "./ServerMediaPickerGrid";
+import { useServerMediaHasAny } from "./useServerMediaHasAny";
 
 const isVideo = (path: string) => {
   const ext = getLowercaseExtension(path);
@@ -78,6 +79,7 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
     "timeline" | "library" | "generations" | "processors"
   >("library");
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [mediaLoaded, setMediaLoaded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filteredMediaItems, setFilteredMediaItems] = useState<MediaItem[]>([]);
   const { clips } = useClipStore();
@@ -127,8 +129,10 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
             a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
           );
         setMediaItems(results);
+        setMediaLoaded(true);
       } catch {
         // Swallow errors; UI handles toasts elsewhere.
+        setMediaLoaded(true);
       }
     })();
   }, [mediaLibraryVersion]);
@@ -143,6 +147,18 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
         !clip.hidden,
     ).length;
   }, [clips, clipId]);
+
+  const folderUuid = getActiveProject()?.folderUuid;
+  const { hasAny: hasGenerationsAny } = useServerMediaHasAny({
+    folderUuid,
+    type: "generations",
+    allowedTypes: ["audio", "video"],
+  });
+  const { hasAny: hasProcessorsAny } = useServerMediaHasAny({
+    folderUuid,
+    type: "processors",
+    allowedTypes: ["audio", "video"],
+  });
 
   const handleUpload = useCallback(async () => {
     try {
@@ -287,6 +303,38 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
     [getClipById, onChange, addAsset, getAssetById, clearSelectedAsset],
   );
 
+  const hasMediaAny = mediaLoaded ? mediaItems.length > 0 : null;
+  const hasTimelineAny = numEligibleTimelineAssets > 0;
+
+  const visibleTabs = useMemo(() => {
+    const tabs: Array<"library" | "timeline" | "generations" | "processors"> =
+      [];
+    if (hasMediaAny !== false) tabs.push("library");
+    if (hasTimelineAny) tabs.push("timeline");
+    if (hasGenerationsAny !== false) tabs.push("generations");
+    if (hasProcessorsAny !== false) tabs.push("processors");
+    return tabs;
+  }, [hasMediaAny, hasTimelineAny, hasGenerationsAny, hasProcessorsAny]);
+
+  const isResolved =
+    hasMediaAny !== null &&
+    hasGenerationsAny !== null &&
+    hasProcessorsAny !== null;
+
+  const isAbsolutelyEmpty =
+    isResolved &&
+    hasMediaAny === false &&
+    !hasTimelineAny &&
+    hasGenerationsAny === false &&
+    hasProcessorsAny === false;
+
+  useEffect(() => {
+    if (isAbsolutelyEmpty) return;
+    if (visibleTabs.includes(selectedTab)) return;
+    const next = visibleTabs[0];
+    if (next) setSelectedTab(next);
+  }, [selectedTab, visibleTabs, isAbsolutelyEmpty]);
+
   const isMediaTab = selectedTab === "library";
 
   const renderMediaLibrary = () => (
@@ -418,175 +466,201 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
               </span>
             </button>
           </div>
-          <TabsList
-            className={cn(
-              "w-full text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row justify-between cursor-pointer bg-brand-background-light overflow-hidden",
-            )}
-          >
-            <TabsTrigger
-              value="library"
+          {!isAbsolutelyEmpty && visibleTabs.length > 1 ? (
+            <TabsList
               className={cn(
-                "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
-                selectedTab === "library" ? "bg-brand-accent-shade" : "",
+                "w-full text-brand-light text-[10.5px] rounded font-medium text-start flex flex-row justify-between cursor-pointer bg-brand-background-light overflow-hidden",
               )}
             >
-              Media
-            </TabsTrigger>
-            <TabsTrigger
-              hidden={numEligibleTimelineAssets === 0}
-              value="timeline"
-              className={cn(
-                "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
-                selectedTab === "timeline" ? "bg-brand-accent-shade" : "",
+              {visibleTabs.includes("library") && (
+                <TabsTrigger
+                  value="library"
+                  className={cn(
+                    "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
+                    selectedTab === "library" ? "bg-brand-accent-shade" : "",
+                  )}
+                >
+                  Media
+                </TabsTrigger>
               )}
-            >
-              Timeline
-            </TabsTrigger>
-            <TabsTrigger
-              value="generations"
-              className={cn(
-                "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
-                selectedTab === "generations" ? "bg-brand-accent-shade" : "",
+              {visibleTabs.includes("timeline") && (
+                <TabsTrigger
+                  value="timeline"
+                  className={cn(
+                    "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
+                    selectedTab === "timeline" ? "bg-brand-accent-shade" : "",
+                  )}
+                >
+                  Timeline
+                </TabsTrigger>
               )}
-            >
-              Generations
-            </TabsTrigger>
-            <TabsTrigger
-              value="processors"
-              className={cn(
-                "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
-                selectedTab === "processors" ? "bg-brand-accent-shade" : "",
+              {visibleTabs.includes("generations") && (
+                <TabsTrigger
+                  value="generations"
+                  className={cn(
+                    "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
+                    selectedTab === "generations" ? "bg-brand-accent-shade" : "",
+                  )}
+                >
+                  Generations
+                </TabsTrigger>
               )}
-            >
-              Processors
-            </TabsTrigger>
-          </TabsList>
+              {visibleTabs.includes("processors") && (
+                <TabsTrigger
+                  value="processors"
+                  className={cn(
+                    "w-full py-1.5 cursor-pointer flex items-center justify-center px-4",
+                    selectedTab === "processors" ? "bg-brand-accent-shade" : "",
+                  )}
+                >
+                  Processors
+                </TabsTrigger>
+              )}
+            </TabsList>
+          ) : (
+            isAbsolutelyEmpty && (
+              <div className="w-full h-40 flex flex-col items-center justify-center text-brand-light/70 text-[10.5px] gap-y-1">
+                <div className="text-brand-light/90 font-medium">
+                  Nothing available
+                </div>
+                <div className="text-brand-light/50">
+                  No media, timeline assets, or generations yet.
+                </div>
+              </div>
+            )
+          )}
         </div>
-        <TabsContent value="library">{renderMediaLibrary()}</TabsContent>
-        <TabsContent
-          value="generations"
-          className="w-full h-full flex flex-col py-2 gap-y-2 outline-none"
-        >
-          <ServerMediaPickerGrid
-            enabled={selectedTab === "generations"}
-            mediaType="generations"
-            allowedTypes={["audio", "video"]}
-            filterItem={(it) => it.type === "audio" || it.type === "video"}
-            showItemName={false}
-            isSelected={(item) => value?.clipId === `media:${item.assetUrl}`}
-            onSelect={(item) => {
-              clearSelectedAsset();
-              const isSelected = value?.clipId === `media:${item.assetUrl}`;
-              if (isSelected) {
-                onChange(null);
-                return;
-              }
-              void (async () => {
-                const info = item.mediaInfo ?? (await getMediaInfo(item.assetUrl));
-                const durationFrames = Math.max(
-                  1,
-                  Math.floor((info?.duration || 0) * fps),
-                );
-                if (item.type === "audio") {
-                  const asset = addAsset({
-                    path: item.assetUrl,
-                    modelInputAsset: true,
-                  });
-                  const clip: AudioClipProps = {
-                    type: "audio",
-                    clipId: `media:${item.assetUrl}`,
-                    assetId: asset.id,
-                    startFrame: 0,
-                    endFrame: durationFrames,
-                  } as any;
-                  onChange(clip);
-                  return;
-                }
-                // video → extract audio track
-                const url = item.assetUrl + (isVideo(item.assetUrl) ? "#audio" : "");
-                // best-effort: hint media-info cache for audio track
-                try {
-                  void getMediaInfo(url);
-                } catch {}
-                const asset = addAsset({ path: url, modelInputAsset: true });
-                const clip: AudioClipProps = {
-                  type: "audio",
-                  clipId: `media:${item.assetUrl}`,
-                  assetId: asset.id,
-                  startFrame: 0,
-                  endFrame: durationFrames,
-                } as any;
-                onChange(clip);
-              })();
-            }}
-          />
-        </TabsContent>
-        <TabsContent
-          value="processors"
-          className="w-full h-full flex flex-col py-2 gap-y-2 outline-none"
-        >
-          <ServerMediaPickerGrid
-            enabled={selectedTab === "processors"}
-            mediaType="processors"
-            allowedTypes={["audio", "video"]}
-            filterItem={(it) => it.type === "audio" || it.type === "video"}
-            showItemName={false}
-            isSelected={(item) => value?.clipId === `media:${item.assetUrl}`}
-            onSelect={(item) => {
-              clearSelectedAsset();
-              const isSelected = value?.clipId === `media:${item.assetUrl}`;
-              if (isSelected) {
-                onChange(null);
-                return;
-              }
-              void (async () => {
-                const info = item.mediaInfo ?? (await getMediaInfo(item.assetUrl));
-                const durationFrames = Math.max(
-                  1,
-                  Math.floor((info?.duration || 0) * fps),
-                );
-                if (item.type === "audio") {
-                  const asset = addAsset({
-                    path: item.assetUrl,
-                    modelInputAsset: true,
-                  });
-                  const clip: AudioClipProps = {
-                    type: "audio",
-                    clipId: `media:${item.assetUrl}`,
-                    assetId: asset.id,
-                    startFrame: 0,
-                    endFrame: durationFrames,
-                  } as any;
-                  onChange(clip);
-                  return;
-                }
-                const url = item.assetUrl + (isVideo(item.assetUrl) ? "#audio" : "");
-                try {
-                  void getMediaInfo(url);
-                } catch {}
-                const asset = addAsset({ path: url, modelInputAsset: true });
-                const clip: AudioClipProps = {
-                  type: "audio",
-                  clipId: `media:${item.assetUrl}`,
-                  assetId: asset.id,
-                  startFrame: 0,
-                  endFrame: durationFrames,
-                } as any;
-                onChange(clip);
-              })();
-            }}
-          />
-        </TabsContent>
-        <TabsContent value="timeline" className="outline-none">
-          <TimelineSearch
-            isAssetSelected={(clipId) => {
-              if (!value) return false;
-              return clipId === value.clipId;
-            }}
-            types={["audio", "video", "group"]}
-            excludeClipId={clipId || undefined}
-          />
-        </TabsContent>
+        {!isAbsolutelyEmpty && (
+          <>
+            <TabsContent value="library">{renderMediaLibrary()}</TabsContent>
+            <TabsContent
+              value="generations"
+              className="w-full h-full flex flex-col py-2 gap-y-2 outline-none"
+            >
+              <ServerMediaPickerGrid
+                enabled={selectedTab === "generations"}
+                mediaType="generations"
+                allowedTypes={["audio", "video"]}
+                filterItem={(it) => it.type === "audio" || it.type === "video"}
+                showItemName={false}
+                isSelected={(item) => value?.clipId === `media:${item.assetUrl}`}
+                onSelect={(item) => {
+                  clearSelectedAsset();
+                  const isSelected = value?.clipId === `media:${item.assetUrl}`;
+                  if (isSelected) {
+                    onChange(null);
+                    return;
+                  }
+                  void (async () => {
+                    const info =
+                      item.mediaInfo ?? (await getMediaInfo(item.assetUrl));
+                    const durationFrames = Math.max(
+                      1,
+                      Math.floor((info?.duration || 0) * fps),
+                    );
+                    if (item.type === "audio") {
+                      const asset = addAsset({
+                        path: item.assetUrl,
+                        modelInputAsset: true,
+                      });
+                      const clip: AudioClipProps = {
+                        type: "audio",
+                        clipId: `media:${item.assetUrl}`,
+                        assetId: asset.id,
+                        startFrame: 0,
+                        endFrame: durationFrames,
+                      } as any;
+                      onChange(clip);
+                      return;
+                    }
+                    const url =
+                      item.assetUrl + (isVideo(item.assetUrl) ? "#audio" : "");
+                    try {
+                      void getMediaInfo(url);
+                    } catch {}
+                    const asset = addAsset({ path: url, modelInputAsset: true });
+                    const clip: AudioClipProps = {
+                      type: "audio",
+                      clipId: `media:${item.assetUrl}`,
+                      assetId: asset.id,
+                      startFrame: 0,
+                      endFrame: durationFrames,
+                    } as any;
+                    onChange(clip);
+                  })();
+                }}
+              />
+            </TabsContent>
+            <TabsContent
+              value="processors"
+              className="w-full h-full flex flex-col py-2 gap-y-2 outline-none"
+            >
+              <ServerMediaPickerGrid
+                enabled={selectedTab === "processors"}
+                mediaType="processors"
+                allowedTypes={["audio", "video"]}
+                filterItem={(it) => it.type === "audio" || it.type === "video"}
+                showItemName={false}
+                isSelected={(item) => value?.clipId === `media:${item.assetUrl}`}
+                onSelect={(item) => {
+                  clearSelectedAsset();
+                  const isSelected = value?.clipId === `media:${item.assetUrl}`;
+                  if (isSelected) {
+                    onChange(null);
+                    return;
+                  }
+                  void (async () => {
+                    const info =
+                      item.mediaInfo ?? (await getMediaInfo(item.assetUrl));
+                    const durationFrames = Math.max(
+                      1,
+                      Math.floor((info?.duration || 0) * fps),
+                    );
+                    if (item.type === "audio") {
+                      const asset = addAsset({
+                        path: item.assetUrl,
+                        modelInputAsset: true,
+                      });
+                      const clip: AudioClipProps = {
+                        type: "audio",
+                        clipId: `media:${item.assetUrl}`,
+                        assetId: asset.id,
+                        startFrame: 0,
+                        endFrame: durationFrames,
+                      } as any;
+                      onChange(clip);
+                      return;
+                    }
+                    const url =
+                      item.assetUrl + (isVideo(item.assetUrl) ? "#audio" : "");
+                    try {
+                      void getMediaInfo(url);
+                    } catch {}
+                    const asset = addAsset({ path: url, modelInputAsset: true });
+                    const clip: AudioClipProps = {
+                      type: "audio",
+                      clipId: `media:${item.assetUrl}`,
+                      assetId: asset.id,
+                      startFrame: 0,
+                      endFrame: durationFrames,
+                    } as any;
+                    onChange(clip);
+                  })();
+                }}
+              />
+            </TabsContent>
+            <TabsContent value="timeline" className="outline-none">
+              <TimelineSearch
+                isAssetSelected={(clipId) => {
+                  if (!value) return false;
+                  return clipId === value.clipId;
+                }}
+                types={["audio", "video", "group"]}
+                excludeClipId={clipId || undefined}
+              />
+            </TabsContent>
+          </>
+        )}
       </Tabs>
     </PopoverContent>
   );
