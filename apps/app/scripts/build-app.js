@@ -116,7 +116,7 @@ Options:
 
 Environment Variables:
   APPLE_ID              Apple ID for notarization
-  APPLE_APP_PASSWORD    App-specific password for notarization
+  APPLE_APP_SPECIFIC_PASSWORD    App-specific password for notarization
   APPLE_TEAM_ID         Apple Developer Team ID
   APPLE_IDENTITY        Code signing identity (certificate name)
   WINDOWS_CERT_FILE     Path to Windows code signing certificate (.pfx)

@@ -17,6 +17,17 @@ const publishTimeoutMs = (() => {
 
 const bundleFullFilters = process.env.APEX_BUNDLE_FILTERS_FULL === "1";
 
+// electron-builder v26 expects `mac.notarize` to be a boolean.
+// Per schema: it controls whether to DISABLE electron-builder's notarization integration.
+// We disable notarization when we don't have the required environment variables.
+const hasMacNotarizeEnv =
+  // App Store Connect API key flow
+  (process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) ||
+  // Apple ID + app-specific password flow
+  (process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID) ||
+  // Keychain profile flow
+  (process.env.APPLE_KEYCHAIN && process.env.APPLE_KEYCHAIN_PROFILE);
+
 /** @type {import("electron-builder").Configuration} */
 module.exports = {
   appId: "com.apex.studio",
@@ -101,7 +112,8 @@ module.exports = {
       "^python-api/.*\\.pyc$",
       "^python-api/.*/__pycache__/.*",
     ],
-    notarize: process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD && process.env.APPLE_TEAM_ID ? true : false
+    // `true` disables notarization; `false` enables it (when env vars are set).
+    notarize: !Boolean(hasMacNotarizeEnv),
   },
   dmg: {
     contents: [
@@ -116,7 +128,7 @@ module.exports = {
         path: "/Applications",
       },
     ],
-    sign: false, // DMG signing is often not needed and can cause issues
+    sign: true, // DMG signing is often not needed and can cause issues
   },
 
   // Windows configuration
