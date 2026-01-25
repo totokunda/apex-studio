@@ -23,6 +23,13 @@ import { getSettingsModule } from "./SettingsModule.js";
 
 const require = createRequire(import.meta.url);
 
+type KillPortFn = (port: number, protocol?: "tcp" | "udp") => Promise<unknown>;
+const killPort: KillPortFn = (() => {
+  // `kill-port` is CommonJS; in NodeNext/ESM we load it via `createRequire`.
+  const mod = require("kill-port");
+  return (mod?.default ?? mod) as KillPortFn;
+})();
+
 // Configuration constants
 const DEFAULT_API_PORT = 8765;
 const DEFAULT_API_HOST = "127.0.0.1";
@@ -1049,6 +1056,19 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     if (!Number.isFinite(port) || port <= 0) return;
 
     const execAsync = promisify(exec);
+
+    // First attempt: use `kill-port` to free the port (best-effort).
+    // We still keep the OS-specific fallback below as a backstop.
+    try {
+      await killPort(port, "tcp");
+      logger(`[PythonProcess] kill-port: ensured port ${port} is free (tcp)`);
+      // Give the OS a brief moment to release the socket.
+      await this.sleep(100);
+    } catch (e) {
+      logger(
+        `[PythonProcess] kill-port error on port ${port}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
 
     const listListeningPids = async (): Promise<Set<number>> => {
       const pids = new Set<number>();
