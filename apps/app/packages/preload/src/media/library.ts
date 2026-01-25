@@ -399,8 +399,6 @@ async function listServerMediaPage(
       }
     }
 
-    console.log("candidates", candidates);
-
 
     if (candidates.length === 0) return { items: [], nextCursor: null };
 
