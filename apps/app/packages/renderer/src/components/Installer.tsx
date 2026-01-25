@@ -545,11 +545,53 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
           prerelease: it.prerelease,
         }));
 
-        setAvailableServerBundles(normalized);
+        // Default bundle ordering: prefer CUDA first (then ROCm/MPS), then CPU.
+        // This makes "recommended" defaults match GPU-first expectations on capable machines.
+        const devicePriority = (d: string) => {
+          const s = String(d || "").trim().toLowerCase();
+          if (s === "cuda" || s.startsWith("cuda")) return 0;
+          if (s === "rocm" || s.startsWith("rocm")) return 1;
+          if (s === "mps" || s === "metal") return 2;
+          if (s === "cpu") return 3;
+          return 9;
+        };
+        const parseSemver = (v: string) => {
+          // Accept "v0.1.0" or "0.1.0" (ignore any suffix)
+          const s = String(v || "").trim().replace(/^v/i, "");
+          const m = /^(\d+)\.(\d+)\.(\d+)/.exec(s);
+          if (!m) return null;
+          return [Number(m[1]), Number(m[2]), Number(m[3])] as const;
+        };
+        const cmpSemverDesc = (a: string, b: string) => {
+          const av = parseSemver(a);
+          const bv = parseSemver(b);
+          if (!av && !bv) return 0;
+          if (!av) return 1;
+          if (!bv) return -1;
+          if (av[0] !== bv[0]) return bv[0] - av[0];
+          if (av[1] !== bv[1]) return bv[1] - av[1];
+          return bv[2] - av[2];
+        };
+
+        const sorted = normalized
+          .map((b, idx) => ({ ...b, __idx: idx }))
+          .sort((a, b) => {
+            const dp = devicePriority(a.device) - devicePriority(b.device);
+            if (dp !== 0) return dp;
+            // Prefer non-prerelease when otherwise equal.
+            const preA = a.prerelease ? 1 : 0;
+            const preB = b.prerelease ? 1 : 0;
+            if (preA !== preB) return preA - preB;
+            const sv = cmpSemverDesc(a.tagVersion, b.tagVersion);
+            if (sv !== 0) return sv;
+            // Stable fallback: preserve source order
+            return a.__idx - b.__idx;
+          })
+          .map(({ __idx, ...b }) => b);
+
+        setAvailableServerBundles(sorted);
         setSelectedServerBundleKey(
-          normalized.length > 0
-            ? `${normalized[0]!.tag}::${normalized[0]!.assetName}`
-            : null,
+          sorted.length > 0 ? `${sorted[0]!.tag}::${sorted[0]!.assetName}` : null,
         );
         setShowSelectedBundleDetails(false);
         setServerBundlesLoading(false);

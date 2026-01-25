@@ -46,6 +46,16 @@ def _progress_tqdm(desc: str) -> Tuple[tqdm, ProgressCb]:
     return bar, cb
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        v = os.environ.get(name)
+        if v is None:
+            return int(default)
+        return int(str(v).strip())
+    except Exception:
+        return int(default)
+
+
 class DownloadMixin:
     logger: Logger = logger
 
@@ -1681,7 +1691,13 @@ class DownloadMixin:
             )
 
     @retry(
-        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15)
+        stop=stop_after_attempt(
+            # Large artifacts + flaky networks need more than 3 attempts.
+            # Keep it configurable via env.
+            _int_env("APEX_DOWNLOAD_MAX_ATTEMPTS", 25)
+        ),
+        wait=wait_exponential(multiplier=1, min=4, max=15),
+        reraise=True,
     )
     def _download_from_url(
         self,
@@ -1734,6 +1750,8 @@ class DownloadMixin:
         relative_path_from_url = parsed_url.path.lstrip("/")
         # Build base headers (may be extended for specific providers like CivitAI)
         base_headers = dict(get_default_headers(url))
+        # Prefer identity encoding so byte counts match file writes (and avoid decompression overhead).
+        base_headers.setdefault("Accept-Encoding", "identity")
 
         # Compute deterministic destination
         if dest_path:
@@ -2026,8 +2044,25 @@ class DownloadMixin:
                     # Best-effort Rust fast-path: if it fails for any reason, fall back
                     # to the Python downloader (which also supports resuming from .part).
                     #
-                    # Do not delete part_path here; keeping it enables the Python path
-                    # to resume if Rust wrote any partial bytes.
+                    # IMPORTANT: Rust uses sparse/random-access writes and tracks completed
+                    # ranges in a sidecar file: `{part_path}.ranges`.
+                    #
+                    # Python's resumable downloader is append-based and MUST NOT operate
+                    # on Rust partials (it would think the preallocated `.part` is complete).
+                    #
+                    # If a Rust `.ranges` file exists, we re-raise so the tenacity retry
+                    # will attempt Rust again and resume properly from those ranges.
+                    ranges_path = f"{part_path}.ranges"
+                    if os.path.exists(ranges_path) and _bool_env(
+                        "APEX_RUST_RESUME_ON_FAILURE", True
+                    ):
+                        self.logger.warning(
+                            f"Rust downloader failed for {log_name} but resume state exists ({ranges_path}); "
+                            "retrying Rust to resume (not falling back to Python). "
+                            "Set APEX_RUST_RESUME_ON_FAILURE=0 to force Python fallback.",
+                            exc_info=True,
+                        )
+                        raise
                     if os.path.exists(file_path):
                         self.logger.info(
                             f"Rust downloader errored but {file_path} exists; using existing file."
@@ -2044,9 +2079,32 @@ class DownloadMixin:
                     except Exception:
                         pass
 
-            # Determine resume offset if a partial file exists
+            # Determine resume offset if a partial file exists.
+            # NOTE: If a Rust `.ranges` file exists, the `.part` file may be preallocated to
+            # full size and contain holes. Python's append-based resume cannot safely reuse it.
             resume_size = 0
-            if os.path.exists(part_path):
+            ranges_path = f"{part_path}.ranges"
+            if os.path.exists(ranges_path):
+                # Best-effort safety: avoid treating Rust sparse partials as "complete".
+                # If we got here, Rust is disabled/unavailable; restart cleanly.
+                try:
+                    self.logger.warning(
+                        f"Found Rust resume metadata next to {part_path}; Python downloader cannot resume sparse partials. "
+                        "Deleting Rust partial state and restarting download from scratch."
+                    )
+                except Exception:
+                    pass
+                try:
+                    if os.path.exists(part_path):
+                        os.remove(part_path)
+                except Exception:
+                    pass
+                try:
+                    os.remove(ranges_path)
+                except Exception:
+                    pass
+                resume_size = 0
+            elif os.path.exists(part_path):
                 try:
                     resume_size = os.path.getsize(part_path)
                 except OSError:
