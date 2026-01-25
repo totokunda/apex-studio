@@ -101,9 +101,8 @@ module.exports = {
       "^python-api/.*\\.pyc$",
       "^python-api/.*/__pycache__/.*",
     ],
-    notarize: process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD
+    notarize: process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD && process.env.APPLE_TEAM_ID ? true : false
   },
-
   dmg: {
     contents: [
       {
