@@ -160,6 +160,65 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to free memory: {e}")
 
+    # Best-effort: cancel any active processor jobs and stop mask tracking streams.
+    # This helps ensure `/system/free-memory` also frees resources used by preprocessors,
+    # postprocessors, and masks (which should not persist/warm).
+    cancelled_processor_jobs: List[str] = []
+    cancelled_mask_tracking_ids: List[str] = []
+    mask_cleanup: Optional[Dict[str, Any]] = None
+    try:
+        # Cancel running/queued pre/postprocessor jobs tracked in the unified job store.
+        from .job_store import job_store
+
+        def _cancel_processors_sync() -> List[str]:
+            cancelled: List[str] = []
+            try:
+                all_ids = list(job_store.all_job_ids())
+            except Exception:
+                all_ids = []
+            for jid in all_ids:
+                try:
+                    info = job_store.get(jid) or {}
+                    jtype = str(info.get("type") or "").strip().lower()
+                    if jtype not in {"preprocessor", "postprocessor"}:
+                        continue
+                    st = (job_store.status(jid) or {}).get("status", "")
+                    if str(st).strip().lower() in {"running", "queued"}:
+                        job_store.cancel(jid)
+                        cancelled.append(str(jid))
+                except Exception:
+                    continue
+            return cancelled
+
+        cancelled_processor_jobs = await _run_blocking(_cancel_processors_sync)
+    except Exception:
+        cancelled_processor_jobs = []
+
+    try:
+        # Cooperative cancellation for mask tracking streams running in this API process.
+        from .mask import ACTIVE_TRACKING, CANCEL_TRACKING
+
+        try:
+            active_ids = list(ACTIVE_TRACKING)
+        except Exception:
+            active_ids = []
+        for mid in active_ids:
+            try:
+                CANCEL_TRACKING.add(mid)
+                cancelled_mask_tracking_ids.append(str(mid))
+            except Exception:
+                pass
+    except Exception:
+        cancelled_mask_tracking_ids = []
+
+    try:
+        # Clear any in-process SAM2 predictor singletons/caches (best-effort).
+        from src.mask.mask import free_mask_memory
+
+        mask_cleanup = free_mask_memory(hard=True)
+    except Exception:
+        mask_cleanup = None
+
     # Backward-friendly: keep `offloaded` as a flat module_id -> location mapping.
     # Also include per-engine details for debugging.
     aggregated: Dict[str, Any] = {}
@@ -193,6 +252,9 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
         ),
         "target": request.target,
         "actor_killed": actor_killed,
+        "cancelled_processor_jobs": cancelled_processor_jobs,
+        "cancelled_mask_tracking_ids": cancelled_mask_tracking_ids,
+        "mask_cleanup": mask_cleanup,
     }
 
 
