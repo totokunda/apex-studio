@@ -576,6 +576,12 @@ class AppDirProtocol implements AppModule {
       const userDataDir = this.electronApp?.getPath("userData") ?? "";
       let filePath = decodeURIComponent(urlObj.pathname);
       filePath = path.posix.normalize(filePath).replace(/\\/g, "/");
+      // On Windows, `file://C:/...` (and similar custom protocols) often arrive as `/C:/...`.
+      // If this is a drive-letter path, strip any leading slashes so Node fs APIs resolve it correctly.
+      const withoutLeadingSlashes = filePath.replace(/^\/+/, "");
+      if (/^[a-zA-Z]:\//.test(withoutLeadingSlashes)) {
+        filePath = withoutLeadingSlashes;
+      }
       let folderUuidFromUrl = urlObj.searchParams.get("folderUuid");
       if (!folderUuidFromUrl) {
         folderUuidFromUrl = this.activeFolderUuid;
