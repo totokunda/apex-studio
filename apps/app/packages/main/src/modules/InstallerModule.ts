@@ -933,6 +933,20 @@ export class InstallerModule implements AppModule {
             _evt.sender.send(`installer:progress:${jobId}`, ev);
           };
 
+          // Defensive: ensure the backend is stopped before we touch any on-disk runtime/code.
+          // The renderer also requests this, but enforcing in main avoids races and protects
+          // against alternate callers.
+          try {
+            sendProgress({ phase: "status", message: "Stopping backend (installer)…" });
+            const py = pythonProcess();
+            // Keep installer active so auto-start/restart and manual start requests are suppressed.
+            await py.setInstallerActive(true, "installer:extract-server-bundle");
+            // Ensure we actually stop even if installerActive was already true (setInstallerActive is idempotent).
+            await py.stop();
+            // Best-effort: give Windows a moment to release file handles after termination.
+            await new Promise<void>((resolve) => setTimeout(resolve, 250));
+          } catch {}
+
           const destinationDir = String(req?.destinationDir || "").trim();
           if (!destinationDir) throw new Error("destinationDir is required");
           assertSafeInstallDir(destinationDir);
@@ -1027,6 +1041,12 @@ export class InstallerModule implements AppModule {
           // - Only now do we remove the previous install and move the staged dir into place.
           if (hasExistingInstall) {
             sendProgress({ phase: "status", message: "Replacing existing install…" });
+            // Extra safety: stop again right before the swap in case something re-spawned.
+            try {
+              const py = pythonProcess();
+              await py.stop();
+              await new Promise<void>((resolve) => setTimeout(resolve, 250));
+            } catch {}
             try {
               await fsp.rm(destinationAbs, { recursive: true, force: true });
             } catch {}
@@ -1099,6 +1119,16 @@ export class InstallerModule implements AppModule {
           } catch {}
         };
         try {
+          // Defensive: setup writes into the runtime and can download/patch packages.
+          // Ensure the backend is stopped and cannot restart while setup runs.
+          try {
+            sendStatus("Stopping backend (installer)…");
+            const py = pythonProcess();
+            await py.setInstallerActive(true, "installer:run-setup");
+            await py.stop();
+            await new Promise<void>((resolve) => setTimeout(resolve, 250));
+          } catch {}
+
           const apexHomeDir = String(req?.apexHomeDir || "").trim();
           const apiInstallDir = String(req?.apiInstallDir || "").trim();
           if (!apexHomeDir) throw new Error("apexHomeDir is required");
