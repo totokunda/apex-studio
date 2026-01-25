@@ -77,10 +77,8 @@ export default /** @type import('electron-builder').Configuration */
       // Skip signing certain Python files that may cause issues
       "python-api/**/*.pyc",
       "python-api/**/__pycache__/**",
-    ],
-    notarize: process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD ? {
-      teamId: process.env.APPLE_TEAM_ID,
-    } : false,
+      ],
+      notarize: process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD && process.env.APPLE_TEAM_ID ? true : false,
   },
   
   dmg: {
