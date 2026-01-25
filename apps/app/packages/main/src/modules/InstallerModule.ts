@@ -924,6 +924,8 @@ export class InstallerModule implements AppModule {
       async (_evt, req: ExtractBundleRequest): Promise<ConfigResponse<{ extractedTo: string }>> => {
         const tempPathsToCleanup: string[] = [];
         let stagingDirToCleanup: string | null = null;
+        let destinationAbsForFailureCleanup: string | null = null;
+        let shouldCleanupDestinationAbsOnFailure = false;
         try {
           const jobId = String(req?.jobId || randomUUID());
           const sendProgress = (ev: InstallerProgressEvent) => {
@@ -934,6 +936,7 @@ export class InstallerModule implements AppModule {
           if (!destinationDir) throw new Error("destinationDir is required");
           assertSafeInstallDir(destinationDir);
           const destinationAbs = path.resolve(destinationDir);
+          destinationAbsForFailureCleanup = destinationAbs;
 
           const src = req?.source;
           if (!src || (src.kind !== "local" && src.kind !== "remote")) {
@@ -942,6 +945,13 @@ export class InstallerModule implements AppModule {
 
           // If destination already contains an install, use a staging directory so we can
           // validate the new bundle before swapping it into place.
+          const destExistedBefore = (() => {
+            try {
+              return fs.existsSync(destinationAbs);
+            } catch {
+              return false;
+            }
+          })();
           const hasExistingInstall = await isNonEmptyDir(destinationAbs);
           const effectiveDestinationDir = hasExistingInstall
             ? path.join(path.dirname(destinationAbs), `.apex-install-staging-${randomUUID()}`)
@@ -952,6 +962,19 @@ export class InstallerModule implements AppModule {
               phase: "status",
               message: "Existing install detected; extracting into staging directory for safe reinstall…",
             });
+          }
+          // Cleanup policy (requested):
+          // If this is a fresh install into the default "apex-server" folder and anything fails
+          // during download/extraction/validation, delete the folder so we don't leave a partially
+          // working install behind.
+          //
+          // For reinstalls, we extract into staging and only swap after validation; staging cleanup
+          // is already handled in finally.
+          try {
+            const base = path.basename(destinationAbs).toLowerCase();
+            shouldCleanupDestinationAbsOnFailure = !hasExistingInstall && (base === "apex-server" || !destExistedBefore);
+          } catch {
+            shouldCleanupDestinationAbsOnFailure = !hasExistingInstall && !destExistedBefore;
           }
           await fsp.mkdir(effectiveDestinationDir, { recursive: true });
 
@@ -1011,6 +1034,13 @@ export class InstallerModule implements AppModule {
           sendProgress({ phase: "status", message: "Bundle extracted" });
           return { success: true, data: { extractedTo: destinationAbs } };
         } catch (e) {
+          // If this was a fresh install into apex-server (or into a directory we created),
+          // delete the destination to avoid leaving a partial installation around.
+          if (shouldCleanupDestinationAbsOnFailure && destinationAbsForFailureCleanup) {
+            try {
+              await safeRemovePath(destinationAbsForFailureCleanup);
+            } catch {}
+          }
           return { success: false, error: e instanceof Error ? e.message : "Failed to extract bundle" };
         } finally {
           if (stagingDirToCleanup) {

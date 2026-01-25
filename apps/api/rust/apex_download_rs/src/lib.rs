@@ -557,14 +557,14 @@ fn download_from_url(
                     }
                     Ok(Err(e)) => {
                         cancel.store(true, Ordering::Relaxed);
-                        let _ = fs::remove_file(&part_path2);
-                        let _ = fs::remove_file(&ranges_path);
+                        // IMPORTANT: keep partial state on failure so a subsequent attempt can resume.
+                        // The Python wrapper will prefer retrying Rust when `{part_path}.ranges` exists.
                         return Err(e);
                     }
                     Err(e) => {
                         cancel.store(true, Ordering::Relaxed);
-                        let _ = fs::remove_file(&part_path2);
-                        let _ = fs::remove_file(&ranges_path);
+                        // IMPORTANT: keep partial state on failure so a subsequent attempt can resume.
+                        // The Python wrapper will prefer retrying Rust when `{part_path}.ranges` exists.
                         return Err(PyRuntimeError::new_err(format!("Task error: {e}")));
                     }
                 }

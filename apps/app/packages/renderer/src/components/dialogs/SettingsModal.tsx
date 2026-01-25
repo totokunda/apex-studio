@@ -49,6 +49,7 @@ import {
     TabsTrigger,
   } from "@/components/ui/tabs";
 import { useQueryClient } from "@tanstack/react-query";
+import { formatErrMessage, looksLikeSslCertError } from "@/lib/formatErrMessage";
 
 interface SettingsModalProps {
   open: boolean;
@@ -68,6 +69,49 @@ const normalizeUrl = (value: string | null | undefined): string => {
     return trimmed.replace(/\/$/, "");
   }
 };
+
+function InlineUpdateError({
+  message,
+  expanded,
+  onToggle,
+}: {
+  message: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const raw = String(message || "").trim();
+  const summary = formatErrMessage(raw, { maxLen: 220 });
+  const hasDetails = raw.length > 220 || raw.includes("\n");
+  const isSsl = looksLikeSslCertError(raw);
+
+  return (
+    <div className="text-[10px] text-red-400">
+      <div>{summary}</div>
+      {isSsl ? (
+        <div className="mt-1 text-[10px] text-brand-light/60">
+          SSL certificate verification failed. If you&apos;re behind a proxy, install your root CA / configure your
+          system certificates (Windows Update can refresh root certs).
+        </div>
+      ) : null}
+
+      {hasDetails ? (
+        <button
+          type="button"
+          className="mt-1 text-[10px] text-brand-light/70 underline underline-offset-2 hover:text-brand-light"
+          onClick={onToggle}
+        >
+          {expanded ? "Hide details" : "Show details"}
+        </button>
+      ) : null}
+
+      {expanded ? (
+        <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md border border-white/10 bg-black/30 p-2 text-[9.5px] leading-snug text-brand-light/70">
+          {raw}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
@@ -173,6 +217,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     useState<boolean>(false);
   const [isApplyingApiUpdate, setIsApplyingApiUpdate] =
     useState<boolean>(false);
+  const [appUpdateErrorExpanded, setAppUpdateErrorExpanded] =
+    useState<boolean>(false);
+  const [apiUpdateErrorExpanded, setApiUpdateErrorExpanded] =
+    useState<boolean>(false);
 
   const [memoryKnobs, setMemoryKnobs] = useState<Record<string, any> | null>(null);
   const [isLoadingMemoryKnobs, setIsLoadingMemoryKnobs] = useState<boolean>(false);
@@ -214,9 +262,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await checkForAppUpdates();
       await refreshAppUpdate();
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : "Failed to check for app updates.",
-      );
+      const msg = e instanceof Error ? e.message : "Failed to check for app updates.";
+      toast.error(formatErrMessage(msg), {
+        description: looksLikeSslCertError(msg)
+          ? "SSL certificate verification failed. If you're behind a corporate proxy, install your root CA / configure system certificates."
+          : undefined,
+      });
     } finally {
       setIsCheckingAppUpdate(false);
     }
@@ -228,7 +279,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await downloadAppUpdate();
       await refreshAppUpdate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to download update.");
+      const msg = e instanceof Error ? e.message : "Failed to download update.";
+      toast.error(formatErrMessage(msg), {
+        description: looksLikeSslCertError(msg)
+          ? "SSL certificate verification failed. Check your system certificate store / proxy configuration."
+          : undefined,
+      });
     } finally {
       setIsDownloadingAppUpdate(false);
     }
@@ -239,7 +295,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       await installAppUpdate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to restart and install.");
+      const msg = e instanceof Error ? e.message : "Failed to restart and install.";
+      toast.error(formatErrMessage(msg));
       setIsInstallingAppUpdate(false);
     }
   };
@@ -256,9 +313,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await checkForApiUpdates();
       await refreshApiUpdate();
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : "Failed to check for engine updates.",
-      );
+      const msg = e instanceof Error ? e.message : "Failed to check for engine updates.";
+      toast.error(formatErrMessage(msg), {
+        description: looksLikeSslCertError(msg)
+          ? "SSL certificate verification failed while checking for engine updates."
+          : undefined,
+      });
     } finally {
       setIsCheckingApiUpdate(false);
     }
@@ -281,7 +341,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
       await refreshApiUpdate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to update engine.");
+      const msg = e instanceof Error ? e.message : "Failed to update engine.";
+      toast.error(formatErrMessage(msg), {
+        description: looksLikeSslCertError(msg)
+          ? "SSL certificate verification failed while downloading the update."
+          : undefined,
+      });
     } finally {
       setIsApplyingApiUpdate(false);
     }
@@ -292,11 +357,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await setApiAllowNightlyUpdates(Boolean(checked));
       await refreshApiUpdate();
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : "Failed to update nightly setting.",
-      );
+      const msg = e instanceof Error ? e.message : "Failed to update nightly setting.";
+      toast.error(formatErrMessage(msg));
     }
   };
+
+  // Collapse error details when the underlying error clears/changes.
+  useEffect(() => {
+    if (!appUpdateState?.errorMessage) setAppUpdateErrorExpanded(false);
+  }, [appUpdateState?.errorMessage]);
+
+  useEffect(() => {
+    if (!apiUpdateState?.errorMessage) setApiUpdateErrorExpanded(false);
+  }, [apiUpdateState?.errorMessage]);
 
   const updateStatusLabel = (lastCheckedAt?: number) => {
     if (!lastCheckedAt) return null;
@@ -1256,9 +1329,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   ) : null}
                 </div>
                 {appUpdateState?.errorMessage ? (
-                  <div className="text-[10px] text-red-400">
-                    {appUpdateState.errorMessage}
-                  </div>
+                  <InlineUpdateError
+                    message={appUpdateState.errorMessage}
+                    expanded={appUpdateErrorExpanded}
+                    onToggle={() => setAppUpdateErrorExpanded((v) => !v)}
+                  />
                 ) : null}
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1323,9 +1398,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   ) : null}
                 </div>
                 {apiUpdateState?.errorMessage ? (
-                  <div className="text-[10px] text-red-400">
-                    {apiUpdateState.errorMessage}
-                  </div>
+                  <InlineUpdateError
+                    message={apiUpdateState.errorMessage}
+                    expanded={apiUpdateErrorExpanded}
+                    onToggle={() => setApiUpdateErrorExpanded((v) => !v)}
+                  />
                 ) : null}
                 {apiUpdateState?.status === "updating" ? (
                   <div className="text-[10px] text-brand-light/70">
