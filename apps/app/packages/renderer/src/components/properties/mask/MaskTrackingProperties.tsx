@@ -27,6 +27,7 @@ import {
   attachToMaskTrack,
   createThenTrackMask,
   normalizePoints,
+  normalizePointsWithLabels,
   normalizeBox,
   trackShapes,
   createMask as createMaskApi,
@@ -34,6 +35,7 @@ import {
 } from "@/lib/mask/api";
 import PropertiesSlider from "../PropertiesSlider";
 import Konva from "konva";
+import { getCropOffset } from "@/components/preview/mask/touch";
 Konva;
 
 interface MaskTrackingPropertiesProps {
@@ -63,6 +65,121 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
   const fps = useControlsStore((s) => s.fps || 24);
 
   const isVideoClip = clip?.type === "video";
+
+  const getFiniteNumber = (value: number | undefined | null): number =>
+    Number.isFinite(value) ? (value as number) : 0;
+
+  const normalizeMaskPointForRotation = (
+    x: number,
+    y: number,
+    transform?: any,
+  ): { x: number; y: number } => {
+    if (!transform) return { x, y };
+
+    const { offsetX, offsetY } = getCropOffset(transform);
+    const rotation = getFiniteNumber(transform.rotation);
+    const originX = getFiniteNumber(transform.x);
+    const originY = getFiniteNumber(transform.y);
+
+    // No rotation: encode only the crop offset into mask space
+    if (Math.abs(rotation) < 1e-6) {
+      return {
+        x: x - originX + offsetX,
+        y: y - originY + offsetY,
+      };
+    }
+
+    const angleRad = (rotation * Math.PI) / 180;
+    const dx = x - originX;
+    const dy = y - originY;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    const unrotatedX = cos * dx + sin * dy;
+    const unrotatedY = -sin * dx + cos * dy;
+
+    return {
+      x: unrotatedX + offsetX,
+      y: unrotatedY + offsetY,
+    };
+  };
+
+  const denormalizeMaskPointForRotation = (
+    x: number,
+    y: number,
+    transform?: any,
+  ): { x: number; y: number } => {
+    if (!transform) return { x, y };
+
+    // Inverse of the normalization used when storing touch points:
+    // remove crop offset in mask-space, then re-apply rotation about the clip origin.
+    const { offsetX, offsetY } = getCropOffset(transform);
+    const baseX = x - offsetX;
+    const baseY = y - offsetY;
+    const originX = getFiniteNumber(transform.x);
+    const originY = getFiniteNumber(transform.y);
+
+    const rotation = getFiniteNumber(transform.rotation);
+    if (Math.abs(rotation) < 1e-6) {
+      return { x: baseX + originX, y: baseY + originY };
+    }
+    const angleRad = (rotation * Math.PI) / 180;
+    const dx = baseX;
+    const dy = baseY;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    const rotatedX = originX + cos * dx - sin * dy;
+    const rotatedY = originY + sin * dx + cos * dy;
+    return { x: rotatedX, y: rotatedY };
+  };
+
+  const normalizeContoursToMaskSpace = useCallback(
+    (contours: Array<Array<number>>): Array<Array<number>> => {
+      if (!clip?.transform || !Array.isArray(contours)) return contours || [];
+      return contours.map((contour) => {
+        const out: number[] = [];
+        for (let i = 0; i < contour.length; i += 2) {
+          const x = contour[i];
+          const y = contour[i + 1];
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            out.push(x, y);
+            continue;
+          }
+          const p = normalizeMaskPointForRotation(x, y, clip.transform);
+          out.push(p.x, p.y);
+        }
+        return out;
+      });
+    },
+    [clip?.transform],
+  );
+
+  const normalizeShapeBoundsToMaskSpace = useCallback(
+    (bounds: any): any => {
+      if (!bounds || !clip?.transform) return bounds;
+      const x = Number(bounds.x);
+      const y = Number(bounds.y);
+      const w = Number(bounds.width);
+      const h = Number(bounds.height);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) {
+        return bounds;
+      }
+
+      const pTL = normalizeMaskPointForRotation(x, y, clip.transform);
+      const pTR = normalizeMaskPointForRotation(x + w, y, clip.transform);
+      const pBL = normalizeMaskPointForRotation(x, y + h, clip.transform);
+      const width = pTR.x - pTL.x;
+      const height = pBL.y - pTL.y;
+
+      return {
+        ...bounds,
+        x: pTL.x,
+        y: pTL.y,
+        width,
+        height,
+      };
+    },
+    [clip?.transform],
+  );
 
   const localFrame = useMemo(() => {
     if (!clip || !isVideoClip) return 0;
@@ -242,6 +359,62 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
     let lastSavedContours: Array<Array<number>> | undefined;
 
     try {
+      // If we're tracking a touch mask, include the original touch prompt(s) so the backend
+      // can recreate the anchor mask if SAM2 state was cleared (e.g. /system/free-memory).
+      let seed: any = {};
+      if (mask.tool === "touch") {
+        const getActiveTouchKeyframeData = (): MaskData | undefined => {
+          const kf = mask.keyframes as any;
+          const entries: Array<[number, any]> =
+            kf instanceof Map
+              ? Array.from(kf.entries())
+              : Object.entries(kf).map(([k, v]) => [Number(k), v]);
+          if (entries.length === 0) return undefined;
+          entries.sort((a, b) => a[0] - b[0]);
+          let chosen = entries[0][1];
+          for (const [k, v] of entries) {
+            if (k <= localFrame) chosen = v;
+            else break;
+          }
+          return chosen as MaskData;
+        };
+
+        const activeData = getActiveTouchKeyframeData();
+        const touchPoints = activeData?.touchPoints || [];
+        if (!touchPoints || touchPoints.length === 0) {
+          throw new Error("No touch points available to seed mask tracking");
+        }
+
+        const canvasPoints = touchPoints.map((p) =>
+          denormalizeMaskPointForRotation(p.x, p.y, clip.transform),
+        );
+        const labels = touchPoints.map((p) => p.label as number);
+
+        // Normalize to media coordinates (x/y in pixels of the source media)
+        let normalizedPoints = canvasPoints;
+        let normalizedLabels = labels;
+        if (mediaInfoRef.current && width && height) {
+          const result = normalizePointsWithLabels(
+            canvasPoints,
+            labels,
+            width,
+            height,
+            mediaInfoRef.current,
+            true,
+            clip.transform,
+          );
+          normalizedPoints = result.points;
+          normalizedLabels = result.labels;
+        }
+
+        seed = {
+          tool: "touch",
+          points: normalizedPoints,
+          point_labels: normalizedLabels,
+          simplify_tolerance: 1.0,
+        };
+      }
+
       await trackMaskApi(
         {
           id: mask.id,
@@ -250,6 +423,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
           frame_start: task.frame_start,
           frame_end: task.frame_end,
           direction: task.direction,
+          ...seed,
         },
         {
           signal: abortController.signal,
@@ -269,6 +443,9 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
               mediaInfoRef.current,
               clip.transform,
             );
+            // Store tracked contours in mask-local space (not editor/canvas space),
+            // otherwise changing the editor aspect ratio will shift the mask.
+            const normalizedForStorage = normalizeContoursToMaskSpace(denormalized);
             let mediaStartFrame = mediaInfoRef.current.startFrame ?? 0;
             const local =
               Math.round((frame_number / clipFps) * fps) - mediaStartFrame;
@@ -293,7 +470,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
               return true;
             };
 
-            if (contoursEqual(lastSavedContours, denormalized)) {
+            if (contoursEqual(lastSavedContours, normalizedForStorage)) {
               return;
             }
 
@@ -308,15 +485,15 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                   : (keyframes as Record<number, MaskData>)[local];
               const nextData: MaskData = {
                 ...(current ?? {}),
-                contours: denormalized,
+                contours: normalizedForStorage,
               };
               if (keyframes instanceof Map) {
                 keyframes.set(local, nextData);
-                lastSavedContours = denormalized;
+                lastSavedContours = normalizedForStorage;
                 return keyframes;
               }
               (keyframes as Record<number, MaskData>)[local] = nextData;
-              lastSavedContours = denormalized;
+              lastSavedContours = normalizedForStorage;
               return keyframes;
             });
           },
@@ -504,12 +681,15 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
       Array.isArray(activeData.lassoPoints) &&
       activeData.lassoPoints.length >= 6
     ) {
+      // `lassoPoints` are stored in mask-local space (clip-relative, rotation-normalized)
+      // for stability across aspect ratio changes. Convert back to canvas/world coords
+      // before mapping to media pixel coordinates for the API request.
       const lassoPts = [] as Array<{ x: number; y: number }>;
       for (let i = 0; i < activeData.lassoPoints.length; i += 2) {
         const x = activeData.lassoPoints[i];
         const y = activeData.lassoPoints[i + 1];
         if (typeof x === "number" && typeof y === "number")
-          lassoPts.push({ x, y });
+          lassoPts.push(denormalizeMaskPointForRotation(x, y, clip.transform));
       }
       createReq.points =
         mediaInfoRef.current && width && height
@@ -580,6 +760,8 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                       clip.transform,
                     )
                   : shapeBounds;
+              // Store in mask-local space (clip-relative) to avoid aspect-ratio dependent drift
+              const normalizedBoundsForStorage = denormBounds;
               updateMaskKeyframes(clip.clipId, mask.id, (existing) => {
                 const keyframes =
                   existing instanceof Map
@@ -591,7 +773,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                     : (keyframes as Record<number, MaskData>)[local];
                 const nextData: MaskData = {
                   ...(current ?? {}),
-                  shapeBounds: denormBounds,
+                  shapeBounds: normalizedBoundsForStorage,
                 } as any;
                 if (keyframes instanceof Map) {
                   keyframes.set(local, nextData);
@@ -629,6 +811,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                 mediaInfoRef.current,
                 clip.transform,
               );
+              const normalizedForStorage =  denormalized;
               const local =
                 Math.round((frame_number / clipFps) * fps) -
                 (mediaInfoRef.current?.startFrame ?? 0);
@@ -653,6 +836,22 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                     },
                     null as number[] | null,
                   ) || [];
+                // Store lasso points in mask-local space (clip-relative) for stability across aspect ratio changes
+                const largestNormalized = (() => {
+                  if (!clip?.transform || !Array.isArray(largest)) return largest;
+                  const out: number[] = [];
+                  for (let i = 0; i < largest.length; i += 2) {
+                    const x = largest[i];
+                    const y = largest[i + 1];
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                      out.push(x, y);
+                      continue;
+                    }
+                    const p = normalizeMaskPointForRotation(x, y, clip.transform);
+                    out.push(p.x, p.y);
+                  }
+                  return out;
+                })();
                 const equalFlat = (a?: number[], b?: number[]) => {
                   if (!a && !b) return true;
                   if (!a || !b) return false;
@@ -661,7 +860,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                     if (Math.abs(a[i] - b[i]) > 1e-3) return false;
                   return true;
                 };
-                if (equalFlat(lastSavedLassoPoints, largest)) return;
+                if (equalFlat(lastSavedLassoPoints, largestNormalized)) return;
                 updateMaskKeyframes(clip.clipId, mask.id, (existing) => {
                   const keyframes =
                     existing instanceof Map
@@ -673,15 +872,15 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                       : (keyframes as Record<number, MaskData>)[local];
                   const nextData: MaskData = {
                     ...(current ?? {}),
-                    lassoPoints: largest,
+                    lassoPoints: largestNormalized,
                   } as any;
                   if (keyframes instanceof Map) {
                     keyframes.set(local, nextData);
-                    lastSavedLassoPoints = largest;
+                    lastSavedLassoPoints = largestNormalized;
                     return keyframes;
                   }
                   (keyframes as Record<number, MaskData>)[local] = nextData;
-                  lastSavedLassoPoints = largest;
+                  lastSavedLassoPoints = largestNormalized;
                   return keyframes;
                 });
               } else {
@@ -703,7 +902,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                   }
                   return true;
                 };
-                if (contoursEqual(lastSavedContours, denormalized)) return;
+                if (contoursEqual(lastSavedContours, normalizedForStorage)) return;
                 updateMaskKeyframes(clip.clipId, mask.id, (existing) => {
                   const keyframes =
                     existing instanceof Map
@@ -715,15 +914,15 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                       : (keyframes as Record<number, MaskData>)[local];
                   const nextData: MaskData = {
                     ...(current ?? {}),
-                    contours: denormalized,
+                    contours: normalizedForStorage,
                   };
                   if (keyframes instanceof Map) {
                     keyframes.set(local, nextData);
-                    lastSavedContours = denormalized;
+                    lastSavedContours = normalizedForStorage;
                     return keyframes;
                   }
                   (keyframes as Record<number, MaskData>)[local] = nextData;
-                  lastSavedContours = denormalized;
+                  lastSavedContours = normalizedForStorage;
                   return keyframes;
                 });
               }
@@ -829,6 +1028,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
           mediaInfoRef.current,
           clip.transform,
         );
+        const normalizedForStorage = normalizeContoursToMaskSpace(denormalized);
         const local =
           Math.round((frame_number / clipFps) * fps) - mediaStartFrame;
 
@@ -865,22 +1065,22 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
             | Array<Array<number>>
             | undefined;
           if (
-            contoursEqual(currentContours, denormalized) ||
-            contoursEqual(lastSavedContours, denormalized)
+            contoursEqual(currentContours, normalizedForStorage) ||
+            contoursEqual(lastSavedContours, normalizedForStorage)
           ) {
             return keyframes;
           }
           const nextData: MaskData = {
             ...(current ?? {}),
-            contours: denormalized,
+            contours: normalizedForStorage,
           };
           if (keyframes instanceof Map) {
             keyframes.set(local, nextData);
-            lastSavedContours = denormalized;
+            lastSavedContours = normalizedForStorage;
             return keyframes;
           }
           (keyframes as Record<number, MaskData>)[local] = nextData;
-          lastSavedContours = denormalized;
+          lastSavedContours = normalizedForStorage;
           return keyframes;
         });
       },

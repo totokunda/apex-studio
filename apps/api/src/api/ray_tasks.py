@@ -2539,7 +2539,7 @@ def _execute_preprocessor(
             pass
 
 
-@ray.remote(max_calls=1)
+@ray.remote
 def run_preprocessor(
     preprocessor_name: str,
     input_path: str,
@@ -3479,7 +3479,7 @@ def run_engine_from_manifest(
     )
 
 
-@ray.remote(max_calls=1)
+@ray.remote
 def run_frame_interpolation(
     input_path: str,
     target_fps: float,
