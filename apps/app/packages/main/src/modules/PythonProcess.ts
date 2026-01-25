@@ -15,6 +15,7 @@ import { spawn, ChildProcess, exec, execFile } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import net from "node:net";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -812,6 +813,11 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     // The moment start is requested, we consider the backend "desired".
     // This allows fast auto-restart if it crashes during startup.
     this.desiredRunning = true;
+
+    // Reset to the preferred/default port at the start of each start attempt.
+    // If that port is occupied and cannot be freed, we will automatically fall back
+    // to any available port (user indicated any port is acceptable).
+    this.state.port = this.config.port!;
    
 
     if (this.state.status === "running") {
@@ -872,6 +878,29 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       this.state.error = undefined;
       this.emit("status", this.state);
       console.log(`Python API started on ${this.state.host}:${this.state.port}`);
+
+      // If the app is using the default local backend URL, but we had to fall back to a
+      // dynamic port, sync the settings so the rest of the app talks to the correct backend.
+      try {
+        const settings = getSettingsModule();
+        const current = settings.getBackendUrl();
+        const desired = `http://${this.state.host}:${this.state.port}`;
+        const default127 = `http://127.0.0.1:${this.config.port}`;
+        const defaultLocalhost = `http://localhost:${this.config.port}`;
+        const defaultConfiguredHost = `http://${this.config.host}:${this.config.port}`;
+        const shouldSync =
+          current === default127 ||
+          current === defaultLocalhost ||
+          current === defaultConfiguredHost;
+        if (shouldSync && current !== desired) {
+          await settings.setBackendUrl(desired);
+          this.appendSupervisorLog(
+            `[PythonProcess] Synced backendUrl from ${current} -> ${desired} (dynamic port)`,
+          );
+        }
+      } catch {
+        // ignore
+      }
     } catch (error) {
       console.error("Python API startup failed", error);
       // If startup fails, keep desiredRunning=true so the watchdog can retry.
@@ -922,12 +951,24 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     sessionStream.on("error", () => {});
 
     writeLog(`\n\n=== Starting Python API at ${new Date().toISOString()} ===\n`);
-    // Ensure the target port is free before spawning. This prevents "address already in use"
-    // situations when a previous backend crashed or a stale process is still listening.
-    await this.freePortIfOccupied(this.config.port!, (msg) => {
+    // Prefer the configured port, but if we can't reliably free it, fall back to any free port.
+    // This makes startup robust even when another process refuses to release the port.
+    const logger = (msg: string) => {
       writeLog(`${msg}\n`);
       if (mirrorPythonLogsToStdout) process.stdout.write(`${msg}\n`);
-    });
+    };
+
+    const preferredPort = this.state.port;
+    await this.freePortIfOccupied(preferredPort, logger);
+    const preferredAvailable = await this.isPortBindable(preferredPort, this.state.host);
+    if (!preferredAvailable) {
+      const fallback = await this.pickFreePort(this.state.host);
+      logger(
+        `[PythonProcess] Preferred port ${preferredPort} is still unavailable; falling back to free port ${fallback}`,
+      );
+      this.state.port = fallback;
+      this.emit("status", this.state);
+    }
 
     let cmd: string;
     let args: string[];
@@ -1160,7 +1201,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     
     // Set API configuration
     env.APEX_HOST = this.config.host;
-    env.APEX_PORT = String(this.config.port);
+    env.APEX_PORT = String(this.state.port);
     // Ownership: allow the server to self-terminate if the Electron parent dies.
     env.APEX_PARENT_PID = String(process.pid);
     env.APEX_HIDE_POLLING_LOGS = "true";
@@ -1239,7 +1280,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
 
       const response = await fetch(
-        `http://${this.config.host}:${this.config.port}/health`,
+        `http://${this.state.host}:${this.state.port}/health`,
         { 
           method: "GET",
           signal: controller.signal,
@@ -1373,7 +1414,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       const controller = new AbortController();
       setTimeout(() => controller.abort(), 5000);
       
-      await fetch(`http://${this.config.host}:${this.config.port}/shutdown`, {
+      await fetch(`http://${this.state.host}:${this.state.port}/shutdown`, {
         method: "POST",
         signal: controller.signal,
       }).catch(() => {});
@@ -1582,7 +1623,62 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   getApiUrl(): string {
-    return `http://${this.config.host}:${this.config.port}`;
+    return `http://${this.state.host}:${this.state.port}`;
+  }
+
+  private async isPortBindable(port: number, host: string): Promise<boolean> {
+    if (!Number.isFinite(port) || port <= 0) return false;
+    const h = String(host || DEFAULT_API_HOST);
+    return await new Promise<boolean>((resolve) => {
+      const server = net.createServer();
+      // Prevent keeping the event loop alive just for this check.
+      try {
+        server.unref();
+      } catch {
+        // ignore
+      }
+      server.once("error", (err: unknown) => {
+        try {
+          server.close();
+        } catch {}
+        const code = (err as any)?.code;
+        if (code === "EADDRINUSE" || code === "EACCES") return resolve(false);
+        return resolve(false);
+      });
+      server.listen({ port, host: h }, () => {
+        server.close(() => resolve(true));
+      });
+    });
+  }
+
+  private async pickFreePort(host: string): Promise<number> {
+    const h = String(host || DEFAULT_API_HOST);
+    return await new Promise<number>((resolve, reject) => {
+      const server = net.createServer();
+      try {
+        server.unref();
+      } catch {
+        // ignore
+      }
+      server.once("error", (err) => {
+        try {
+          server.close();
+        } catch {}
+        reject(err);
+      });
+      server.listen({ port: 0, host: h }, () => {
+        const addr = server.address();
+        if (!addr || typeof addr === "string") {
+          try {
+            server.close();
+          } catch {}
+          reject(new Error("Failed to resolve ephemeral port from server.address()"));
+          return;
+        }
+        const p = addr.port;
+        server.close(() => resolve(p));
+      });
+    });
   }
 
   /**
