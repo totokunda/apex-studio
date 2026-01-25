@@ -38,7 +38,6 @@ function isApiUpdateRelevant(st: ApiUpdateState | null | undefined): boolean {
   return (st.toastSuppressedUntil ?? 0) <= Date.now();
 }
 
-
 const API_UPDATE_TOAST_ID = "api-update-toast";
 
 function safeSetLocalStorage(key: string, value: string) {
