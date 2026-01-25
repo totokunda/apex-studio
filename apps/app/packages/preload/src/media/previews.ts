@@ -373,6 +373,16 @@ function toFfmpegPath(p: string): string {
   // ffmpeg/ffprobe on Windows is generally happier with forward slashes,
   // and can choke on extended-length path prefixes (\\?\).
   if (process.platform === "win32") {
+    // Some inputs can look like "/C:/path" (or "//?/C:/path") on Windows.
+    // ffmpeg expects "C:/path" for drive-letter paths.
+    if (s.startsWith("//?/UNC/")) {
+      // //?/UNC/server/share/path -> //server/share/path
+      s = "//" + s.slice("//?/UNC/".length);
+    } else if (s.startsWith("//?/")) {
+      // //?/C:/path -> C:/path
+      s = s.slice("//?/".length);
+    }
+
     if (s.startsWith("\\\\?\\UNC\\")) {
       // \\?\UNC\server\share\path -> \\server\share\path
       s = "\\\\" + s.slice("\\\\?\\UNC\\".length);
@@ -380,6 +390,9 @@ function toFfmpegPath(p: string): string {
       // \\?\C:\path -> C:\path
       s = s.slice("\\\\?\\".length);
     }
+
+    // Strip leading slashes before a drive letter ("/C:/..." -> "C:/...").
+    s = s.replace(/^\/+([A-Za-z]:)(?=\/|$)/, "$1");
 
     if (s.includes("\\")) {
       const wasUnc = s.startsWith("\\\\");
