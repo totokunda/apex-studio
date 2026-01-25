@@ -131,7 +131,7 @@ const PreprocessorPage: React.FC<PreprocessorPageProps> = ({
           </div>
 
           {/* If not downloaded yet, show planned files and a Download action */}
-          {!data.is_downloaded && Array.isArray(data.files) && (
+          {!data.is_downloaded && Array.isArray(data.files) && data.files.length > 0 && (
             <PreprocessorDownloadSection
               preprocessorId={data.id}
               files={data.files}
@@ -487,11 +487,7 @@ const PreprocessorDownloadSection: React.FC<{
         </div>
       </div>
       <div className="space-y-2">
-        {files.length === 0 ? (
-          <div className="text-brand-light/60 text-[12px]">
-            No files listed for this preprocessor.
-          </div>
-        ) : (
+        {files.length > 0 && (
           files.map((f, idx) => {
             const name =
               f.name || (f.path || "").split(/[/\\]/).pop() || f.path;

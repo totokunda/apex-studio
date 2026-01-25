@@ -474,7 +474,7 @@ export function usePreprocessorJobClipSync<TJob extends JobLike>(params: {
         return;
       }
 
-      console.log("isComplete", isComplete);
+   
 
       if (!isComplete) return;
       if (finalizedByJobIdRef.current.has(jobId)) return;

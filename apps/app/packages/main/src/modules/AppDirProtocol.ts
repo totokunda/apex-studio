@@ -247,7 +247,30 @@ const getCoverPath = (filePath: string, userDataDir: string) => {
 };
 
 const isServerPath = (filePath: string) => {
-  return filePath.includes("engine_results") || filePath.includes("generations") || filePath.includes("processors") || filePath.includes("postprocessor_results") || filePath.includes("preprocessor_results")
+  // NOTE: `filePath` here is a URL pathname (decoded + normalized to POSIX separators).
+  // It may be an absolute filesystem path like `/C:/.../cache/engine_results/...` or a
+  // logical route like `/engine_results/<folderUuid>/<folder>/<file>`.
+  //
+  // Avoid substring matches (false positives like "my_engine_results_notes.png") by
+  // matching path *segments*.
+  const segs = String(filePath || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+
+  // Skip Windows drive segment ("C:") when checking the first logical segment.
+  const firstLogical = segs.length > 0 && /^[a-zA-Z]:$/.test(segs[0]!) ? segs[1] : segs[0];
+
+  // Canonical server markers can appear anywhere in an absolute path.
+  if (segs.includes("engine_results")) return true;
+  if (segs.includes("preprocessor_results")) return true;
+  if (segs.includes("postprocessor_results")) return true;
+
+  // Legacy/logical aliases only count when they are the first logical segment.
+  if (firstLogical === "generations") return true;
+  if (firstLogical === "processors") return true;
+
+  return false;
 };
 
 
@@ -562,32 +585,33 @@ class AppDirProtocol implements AppModule {
         filePath = getCoverPath(filePath, userDataDir);
       }
 
-      if (isServerPath(filePath)) {
-
-        const { folderUuid, folderName, fileName, localType, type  } = this.parseServerDetails(filePath, folderUuidFromUrl);
-
-        if (!await exists(filePath)) {
-          
-          if (folderUuid && folderName && fileName) {
-            filePath = path.join(userDataDir, "media", folderUuid, "server", localType, folderName, fileName);
+      const serverDetails = this.parseServerDetails(filePath, folderUuidFromUrl);
+      if (serverDetails) {
+        if (!(await exists(filePath))) {
+          if (
+            serverDetails.folderUuid &&
+            serverDetails.folderName &&
+            serverDetails.fileName
+          ) {
+            filePath = path.join(
+              userDataDir,
+              "media",
+              serverDetails.folderUuid,
+              "server",
+              serverDetails.localType,
+              serverDetails.folderName,
+              serverDetails.fileName,
+            );
           } else {
             return new Response(null, { status: 404 });
           }
         }
 
-        // Backfill the on-disk server cache from local files (ONLY for processors).
-        // We intentionally do NOT mirror engine_results/generations into userData "server" cache.
-        let savePath = this.getServerSavePath({
-          folderUuid,
-          folderName,
-          fileName,
-          localType,
-          type,
-        });
-
-        if (localType === "processors" && savePath && !(await exists(savePath))) {
+        // Backfill the on-disk server cache from local files (generations + processors).
+        const savePath = this.getServerSavePath(serverDetails);
+        if (savePath && !(await exists(savePath))) {
           try {
-            // copy the file to the save path (+ write verified meta marker)
+            // Copy the file to the save path (+ write verified meta marker).
             void this.saveLocalFileToServer(filePath, savePath).catch((e) => {
               console.error("Error saving local file to server", e);
             });
@@ -598,6 +622,7 @@ class AppDirProtocol implements AppModule {
       }
 
       const stat = await fsp.stat(filePath);
+      if (!stat.isFile()) return new Response(null, { status: 404 });
       const size = stat.size;
 
       // For cached server media, require a verified marker so we never serve
@@ -629,7 +654,6 @@ class AppDirProtocol implements AppModule {
 
       const ct = mime.lookup(filePath) || "application/octet-stream";
       const range = parseRange(request.headers.get("range"), size);
-
 
       if (!range) {
         const headers = new Headers({
@@ -781,34 +805,110 @@ class AppDirProtocol implements AppModule {
     }
   }
 
-  private parseServerDetails(filePath: string, folderUuid?: string | null): ServerDetails {
-    // check if engine_results in the filePath or processors in the filePath
-    const splitFilePath = filePath.split("/");
-    const fileName = splitFilePath[splitFilePath.length - 1] ?? null;
-    const folderName = splitFilePath[splitFilePath.length - 2] ?? null;
-    folderUuid = folderUuid ?? splitFilePath[splitFilePath.length - 3] ?? null; 
-    let type: "engine_results" | "postprocessor_results" | "preprocessor_results" = "engine_results";
-    let localType: "generations" | "processors" = "generations";
-    
-    // Check if filename matches pattern: {hash1}_{name}_{hash2}
-    // Example: a2545f8521ba08cbb0b086cd0e68ef9d_recolor_580709eccb358ce3
-    if (fileName) {
-      const hashNameHashPattern = /^[a-f0-9]{32}_[a-zA-Z0-9_]+_[a-f0-9]+$/i;
-      if (hashNameHashPattern.test(fileName)) {
-        type = "preprocessor_results";
-        localType = "processors";
-        return { folderUuid, folderName, fileName, type, localType };
+  private parseServerDetails(filePath: string, folderUuid?: string | null): ServerDetails | null {
+    if (!isServerPath(filePath)) return null;
+
+    const segs = String(filePath || "")
+      .replace(/\\/g, "/")
+      .split("/")
+      .filter(Boolean);
+
+    const startIdx = segs.length > 0 && /^[a-zA-Z]:$/.test(segs[0]!) ? 1 : 0;
+    const firstLogical = segs[startIdx] ?? null;
+
+    const getIdx = (needle: string): number => {
+      // Prefer the last occurrence in case "cache/engine_results/..." appears in longer paths.
+      for (let i = segs.length - 1; i >= 0; i--) {
+        if (segs[i] === needle) return i;
       }
+      return -1;
+    };
+
+    const fromTriplet = (idx: number): { folderUuid: string | null; folderName: string | null; fileName: string | null } => {
+      const fu = segs[idx + 1] ?? null;
+      const fn = segs[idx + 2] ?? null;
+      const file = segs[idx + 3] ?? null;
+      return { folderUuid: fu, folderName: fn, fileName: file };
+    };
+
+    const fromPair = (idx: number): { folderName: string | null; fileName: string | null } => {
+      const fn = segs[idx + 1] ?? null;
+      const file = segs[idx + 2] ?? null;
+      return { folderName: fn, fileName: file };
+    };
+
+    // 1) Canonical markers (can appear anywhere in absolute paths).
+    const engIdx = getIdx("engine_results");
+    if (engIdx >= 0) {
+      const { folderUuid: fu, folderName, fileName } = fromTriplet(engIdx);
+      const finalFolderUuid = fu ?? folderUuid ?? null;
+      if (!finalFolderUuid || !folderName || !fileName) return null;
+      return {
+        folderUuid: finalFolderUuid,
+        folderName,
+        fileName,
+        type: "engine_results",
+        localType: "generations",
+      };
     }
-    
-    if (filePath.includes("preprocessor_results")) {
-      type = "preprocessor_results";
-      localType = "processors";
-    } else if (filePath.includes("postprocessor_results")) {
-      type = "postprocessor_results";
-      localType = "processors";
-    } 
-    return { folderUuid, folderName, fileName, type, localType };
+
+    const preIdx = getIdx("preprocessor_results");
+    if (preIdx >= 0) {
+      const { folderName, fileName } = fromPair(preIdx);
+      if (!folderName || !fileName) return null;
+      return {
+        folderUuid: folderUuid ?? null,
+        folderName,
+        fileName,
+        type: "preprocessor_results",
+        localType: "processors",
+      };
+    }
+
+    const postIdx = getIdx("postprocessor_results");
+    if (postIdx >= 0) {
+      const { folderName, fileName } = fromPair(postIdx);
+      if (!folderName || !fileName) return null;
+      return {
+        folderUuid: folderUuid ?? null,
+        folderName,
+        fileName,
+        type: "postprocessor_results",
+        localType: "processors",
+      };
+    }
+
+    // 2) Legacy/logical aliases (only when they're the first logical segment).
+    if (firstLogical === "generations") {
+      const fu = segs[startIdx + 1] ?? null;
+      const folderName = segs[startIdx + 2] ?? null;
+      const fileName = segs[startIdx + 3] ?? null;
+      const finalFolderUuid = fu ?? folderUuid ?? null;
+      if (!finalFolderUuid || !folderName || !fileName) return null;
+      return {
+        folderUuid: finalFolderUuid,
+        folderName,
+        fileName,
+        type: "engine_results",
+        localType: "generations",
+      };
+    }
+    if (firstLogical === "processors") {
+      // We don't have enough information to distinguish pre vs post from this alias.
+      // Default to preprocessor_results (historically the more common case).
+      const folderName = segs[startIdx + 1] ?? null;
+      const fileName = segs[startIdx + 2] ?? null;
+      if (!folderName || !fileName) return null;
+      return {
+        folderUuid: folderUuid ?? null,
+        folderName,
+        fileName,
+        type: "preprocessor_results",
+        localType: "processors",
+      };
+    }
+
+    return null;
   }
 
   private async fetchRemoteFile(request: Request): Promise<Response> {
@@ -821,26 +921,41 @@ class AppDirProtocol implements AppModule {
       folderUuid = this.activeFolderUuid;
     }
     const serverDetails = this.parseServerDetails(filePath, folderUuid);
-    const response = await this.fetchRemoteFileIfExists(serverDetails, request.headers, request.method);
+    if (!serverDetails) {
+      return new Response(null, { status: 404 });
+    }
+    const response = await this.fetchRemoteFileIfExists(
+      serverDetails,
+      request.headers,
+      request.method,
+    );
 
     // Background caching:
     // - Never persist Range/206 responses as complete files.
     // - Avoid Response.clone()/tee to prevent undici stream state crashes when the renderer cancels mid-stream.
     // - Instead, kick off a separate local fetch (localhost) when we don't already have a verified cache entry.
-    if (isServerPath(filePath) && request.method === "GET") {
+    if (request.method === "GET") {
       const savePath = this.getServerSavePath(serverDetails);
-      const shouldFetchForCache =
-        savePath ? !(await this.hasVerifiedServerCache(savePath)) : true;
-      const isRangeReq = Boolean(request.headers.get("range"));
-      if (shouldFetchForCache && (isRangeReq || (response.ok && response.status === 200))) {
-        void (async () => {
-          try {
-            const full = await this.fetchRemoteFileIfExists(serverDetails, new Headers(), "GET");
-            this.queueSaveRemoteFileToLocalFile(full, serverDetails);
-          } catch {
-            // ignore
-          }
-        })();
+      if (savePath) {
+        const shouldFetchForCache = !(await this.hasVerifiedServerCache(savePath));
+        const isRangeReq = Boolean(request.headers.get("range"));
+        if (
+          shouldFetchForCache &&
+          (isRangeReq || (response.ok && response.status === 200))
+        ) {
+          void (async () => {
+            try {
+              const full = await this.fetchRemoteFileIfExists(
+                serverDetails,
+                new Headers(),
+                "GET",
+              );
+              this.queueSaveRemoteFileToLocalFile(full, serverDetails);
+            } catch {
+              // ignore
+            }
+          })();
+        }
       }
     }
 
@@ -921,21 +1036,30 @@ class AppDirProtocol implements AppModule {
       if (isCoverPath(filePath)) {
         filePath = getCoverPath(filePath, userDataDir);
       }
-      if (isServerPath(filePath)) {
+      const folderUuidFromUrl = url.searchParams.get("folderUuid") ?? this.activeFolderUuid;
+      const serverDetails = this.parseServerDetails(filePath, folderUuidFromUrl);
+      if (serverDetails) {
         // check if the file exists locally 
         if (!await exists(filePath)) {
-          const { folderUuid, folderName, fileName, localType, type } = this.parseServerDetails(filePath,  this.activeFolderUuid);
-          if (folderUuid && folderName && fileName) {
-            filePath = path.join(userDataDir, "media", folderUuid, "server", localType, folderName, fileName);
+          if (serverDetails.folderUuid && serverDetails.folderName && serverDetails.fileName) {
+            filePath = path.join(
+              userDataDir,
+              "media",
+              serverDetails.folderUuid,
+              "server",
+              serverDetails.localType,
+              serverDetails.folderName,
+              serverDetails.fileName,
+            );
           }
           if (!await exists(filePath)) {
             const response = await this.fetchRemoteFileIfExists(
-              { folderUuid, folderName, fileName, localType, type },
+              serverDetails,
               new Headers(),
               "GET",
             );
             if (response.ok) {
-              await this.saveRemoteFileToLocalFile(response, { folderUuid, folderName, fileName, localType, type });
+              await this.saveRemoteFileToLocalFile(response, serverDetails);
               // file path should now exist
             }
           }
