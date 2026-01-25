@@ -81,6 +81,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           # Avoid Node "JavaScript heap out of memory" (~2GB default limit).
           NODE_OPTIONS: --max-old-space-size=8192
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           # Used by our electron-builder config to set upload/API timeouts.
           ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
           # Keep mac publish stable by shipping small-only filter pack by default.

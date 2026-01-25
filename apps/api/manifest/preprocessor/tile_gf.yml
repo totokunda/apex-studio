@@ -43,3 +43,4 @@ parameters:
   type: float
 supports_image: true
 supports_video: true
+files: []

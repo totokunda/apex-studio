@@ -1,10 +1,11 @@
+import torch
 import math
 import numpy as np
 import matplotlib
 import cv2
 import os
 from typing import List, Tuple, Union, Optional
-
+import onnxruntime as ort
 from .body import BodyResult, Keypoint
 
 eps = 0.01
@@ -547,7 +548,7 @@ else:
 def get_ort_providers() -> List[str]:
     providers = []
     try:
-        import onnxruntime as ort
+        
 
         for provider in ONNX_PROVIDERS:
             if provider in ort.get_available_providers():
