@@ -312,15 +312,55 @@ const PreprocessorDownloadSection: React.FC<{
     finalize,
   ]);
 
-  const wsFilesByName = useMemo(() => {
-    const map: Record<string, DownloadEntry> = {};
-    const downloadFiles = unifiedDownloadWsUpdatesToFiles(jobUpdates) as any[];
-    downloadFiles.forEach((entry) => {
-      if (entry.filename) map[entry.filename] = entry;
-      if (entry.label && !map[entry.label]) map[entry.label] = entry;
-    });
-    return map;
+  const downloadFiles = useMemo(() => {
+    return unifiedDownloadWsUpdatesToFiles(jobUpdates) as DownloadEntry[];
   }, [jobUpdates]);
+
+  // Some backends report progress only as an "aggregate" bucket update (no per-file filename/label).
+  // In that case, fall back to this entry so progress bars still show and move.
+  const aggregateWsFile = useMemo(() => {
+    const byBucket =
+      downloadFiles.find(
+        (f) => String(f?.bucket || "").toLowerCase() === "preprocessor",
+      ) ?? null;
+    if (byBucket) return byBucket;
+    const byName =
+      downloadFiles.find((f) =>
+        ["preprocessor", "download"].includes(String(f?.filename || "").toLowerCase()),
+      ) ?? null;
+    return byName;
+  }, [downloadFiles]);
+
+  const normalizeWsKey = useCallback((v: unknown): string => {
+    if (typeof v !== "string") return "";
+    return v.trim().replace(/\\/g, "/").toLowerCase();
+  }, []);
+
+  const wsFilesByKey = useMemo(() => {
+    const map: Record<string, DownloadEntry> = {};
+    const put = (k: unknown, entry: DownloadEntry) => {
+      const key = normalizeWsKey(k);
+      if (!key) return;
+      if (!map[key]) map[key] = entry;
+    };
+
+    for (const entry of downloadFiles) {
+      put(entry.filename, entry);
+      put(entry.label, entry);
+
+      const f1 = typeof entry.filename === "string" ? entry.filename : "";
+      const f2 = typeof entry.label === "string" ? entry.label : "";
+      for (const raw of [f1, f2]) {
+        if (!raw) continue;
+        const base = raw.split(/[/\\]/).pop() || "";
+        const noExt = base ? base.replace(/\.[^/.]+$/, "") : "";
+        put(base, entry);
+        put(noExt, entry);
+      }
+    }
+
+    return map;
+  }, [downloadFiles, normalizeWsKey]);
 
   const findWsFile = useCallback(
     (file: { path: string; size_bytes: number; name?: string }) => {
@@ -331,13 +371,14 @@ const PreprocessorDownloadSection: React.FC<{
         Boolean,
       ) as string[];
       for (const key of candidates) {
-        if (key && wsFilesByName[key]) {
-          return wsFilesByName[key];
+        const normalized = normalizeWsKey(key);
+        if (normalized && wsFilesByKey[normalized]) {
+          return wsFilesByKey[normalized];
         }
       }
       return undefined;
     },
-    [wsFilesByName],
+    [normalizeWsKey, wsFilesByKey],
   );
 
   const getPercent = useCallback((entry?: DownloadEntry) => {
@@ -384,8 +425,6 @@ const PreprocessorDownloadSection: React.FC<{
     setStarting(false);
     setCancelling(false);
   };
-
-  const downloadFiles = unifiedDownloadWsUpdatesToFiles(jobUpdates) as any[];
 
   // Some environments may not reliably report the terminal Ray job in the polling list.
   // As a fallback, if all per-file updates look terminal, finalize and refresh.
@@ -457,7 +496,8 @@ const PreprocessorDownloadSection: React.FC<{
             const name =
               f.name || (f.path || "").split(/[/\\]/).pop() || f.path;
             const wsFile = findWsFile(f);
-            const pct = getPercent(wsFile);
+            const wsForUi = wsFile ?? aggregateWsFile ?? undefined;
+            const pct = getPercent(wsForUi);
             const fileSizeBytes = (wsFile?.totalBytes ?? f.size_bytes) || 0;
             return (
               <div
@@ -477,38 +517,33 @@ const PreprocessorDownloadSection: React.FC<{
                     {formatSize(fileSizeBytes)}
                   </div>
                 </div>
-                {wsFile && (
-                  <div className="mt-2 flex flex-col gap-y-1">
-                    <ProgressBar
-                      percent={pct}
-                      barClassName="bg-brand-light/50"
-                    />
-                    <div className="flex items-center justify-between text-[10px] text-brand-light/80">
-                      {typeof wsFile.downloadedBytes === "number" &&
-                      typeof wsFile.totalBytes === "number" &&
-                      wsFile.totalBytes > 0 ? (
-                        <span>
-                          {formatDownloadProgress(
-                            wsFile.downloadedBytes,
-                            wsFile.totalBytes,
-                          )}
-                        </span>
-                      ) : (
-                        <span />
-                      )}
-                      {wsFile.status === "completed" ||
-                      wsFile.status === "complete" ? (
-                        <span className="text-brand-light/90">Completed</span>
-                      ) : (
-                        <span className="text-[9px] text-brand-light/60">
-                          {wsFile.downloadSpeed
-                            ? formatSpeed(wsFile.downloadSpeed)
-                            : ""}
-                        </span>
-                      )}
-                    </div>
+                <div className="mt-2 flex flex-col gap-y-1">
+                  <ProgressBar percent={pct} barClassName="bg-brand-light/50" />
+                  <div className="flex items-center justify-between text-[10px] text-brand-light/80">
+                    {typeof wsForUi?.downloadedBytes === "number" &&
+                    typeof wsForUi?.totalBytes === "number" &&
+                    (wsForUi?.totalBytes ?? 0) > 0 ? (
+                      <span>
+                        {formatDownloadProgress(
+                          wsForUi.downloadedBytes,
+                          wsForUi.totalBytes,
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-[9px] text-brand-light/60">
+                        {isDownloading ? "Preparing…" : ""}
+                      </span>
+                    )}
+                    {String(wsForUi?.status || "").toLowerCase() === "completed" ||
+                    String(wsForUi?.status || "").toLowerCase() === "complete" ? (
+                      <span className="text-brand-light/90">Completed</span>
+                    ) : (
+                      <span className="text-[9px] text-brand-light/60">
+                        {wsForUi?.downloadSpeed ? formatSpeed(wsForUi.downloadSpeed) : ""}
+                      </span>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             );
           })

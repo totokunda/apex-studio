@@ -55,3 +55,4 @@ parameters:
   type: category
 supports_image: true
 supports_video: true
+files: []
