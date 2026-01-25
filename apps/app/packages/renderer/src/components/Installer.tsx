@@ -23,7 +23,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/common/ProgressBar";
 import { LuCheck, LuLoader, LuX } from "react-icons/lu";
-import { FixedSizeList as VirtualList, type ListChildComponentProps } from "react-window";
 import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 import { ScrollBar } from "@/components/ui/scroll-area";
 import {
@@ -51,18 +50,6 @@ type InstallPhaseState = {
   percent: number | null; // 0..100
   message: string | null;
 };
-
-const VirtualScrollViewport = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
-  <ScrollAreaPrimitive.Viewport
-    ref={ref}
-    className={["h-full w-full rounded-[inherit]", className].filter(Boolean).join(" ")}
-    {...props}
-  />
-));
-VirtualScrollViewport.displayName = "VirtualScrollViewport";
 
 const MASK_MODEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "sam2_tiny", label: "Sam2 Tiny" },
@@ -204,15 +191,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
   useEffect(() => {
     phaseStateRef.current = phaseState;
   }, [phaseState]);
-  const extractionFilesRef = useRef<string[]>([]);
-  const [extractionListVersion, setExtractionListVersion] = useState<number>(0);
-  const extractionPendingRef = useRef<string[]>([]);
-  const extractionFlushTimerRef = useRef<number | null>(null);
-  const extractionListContainerRef = useRef<HTMLDivElement | null>(null);
-  const [extractionListSize, setExtractionListSize] = useState<{
-    width: number;
-    height: number;
-  }>({ width: 0, height: 0 });
 
   // Attention backend verification emits one event per backend; keep a small rolling log.
   const attentionEventsRef = useRef<string[]>([]);
@@ -231,38 +209,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
   const lastDownloadPctRef = useRef<number | null>(null);
   const lastExtractUiUpdateAtRef = useRef<number>(0);
   const lastExtractPctRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    // The extraction panel mounts/unmounts based on the active phase, so we need to
-    // attach the observer whenever the container is present.
-    const el = extractionListContainerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const cr = entry.contentRect;
-      setExtractionListSize({
-        width: Math.max(0, Math.floor(cr.width)),
-        height: Math.max(0, Math.floor(cr.height)),
-      });
-    });
-    ro.observe(el);
-    // Initialize immediately too (some environments don't fire RO until a resize).
-    const rect = el.getBoundingClientRect();
-    setExtractionListSize({
-      width: Math.max(0, Math.floor(rect.width)),
-      height: Math.max(0, Math.floor(rect.height)),
-    });
-    return () => ro.disconnect();
-  }, [activePhase, uiMode, extractionListVersion]);
-
-  const flushExtractionEntries = () => {
-    const pending = extractionPendingRef.current;
-    if (pending.length === 0) return;
-    extractionPendingRef.current = [];
-    extractionFilesRef.current = extractionFilesRef.current.concat(pending);
-    setExtractionListVersion((v) => v + 1);
-  };
 
   const stopPythonApiIfRunning = async (opts?: { reason?: string }) => {
     const reason = String(opts?.reason || "").trim();
@@ -630,15 +576,8 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     setInstallStatus(null);
     setBackendStatus("idle");
     setBackendError(null);
-    extractionFilesRef.current = [];
-    setExtractionListVersion((v) => v + 1);
-    extractionPendingRef.current = [];
     attentionEventsRef.current = [];
     setAttentionListVersion((v) => v + 1);
-    if (extractionFlushTimerRef.current !== null) {
-      window.clearTimeout(extractionFlushTimerRef.current);
-      extractionFlushTimerRef.current = null;
-    }
 
     const dest = String(codeLocation || "").trim();
     if (!dest) {
@@ -737,27 +676,14 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
             patchPhase("extract_bundle", {
               // Do not clear percent when the event doesn't carry it.
               ...(pctIntRaw !== null ? { percent: pctIntRaw } : {}),
-              // Keep the progress/status text generic; filenames are shown only in the extraction log panel.
               message:
                 typeof ev.percent === "number" && ev.percent >= 1
                   ? "Extraction complete"
                   : "Extracting…",
             });
           }
-          if (ev.entryName) {
-            extractionPendingRef.current.push(String(ev.entryName));
-            if (extractionFlushTimerRef.current === null) {
-              // Batch rapid extraction updates to avoid UI freezes.
-              extractionFlushTimerRef.current = window.setTimeout(() => {
-                extractionFlushTimerRef.current = null;
-                flushExtractionEntries();
-              }, 2000);
-            }
-          }
           if (typeof ev.percent === "number" && ev.percent >= 1) {
             completePhase("extract_bundle", { message: "Extraction complete" });
-            // Flush any remaining extraction entries.
-            flushExtractionEntries();
           }
         } else if (ev.phase === "status") {
           const msg = String(ev.message || "");
@@ -1069,12 +995,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
         await setInstallerActive(false, "installer finished");
       } catch {}
       if (unsubscribeProgress) unsubscribeProgress();
-      // Flush any remaining extraction entries.
-      flushExtractionEntries();
-      if (extractionFlushTimerRef.current !== null) {
-        window.clearTimeout(extractionFlushTimerRef.current);
-        extractionFlushTimerRef.current = null;
-      }
     }
   };
 
@@ -1084,19 +1004,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       return <LuCheck className="h-4 w-4" />;
     if (st.status === "error") return <LuX className="h-4 w-4" />;
     return <span className="h-4 w-4 inline-block rounded-full border border-brand-light/25" />;
-  };
-
-  const ExtractRow = ({ index, style }: ListChildComponentProps) => {
-    const name = extractionFilesRef.current[index] ?? "";
-    return (
-      <div
-        style={style}
-        className="px-2 py-[2px] text-[10.5px] leading-relaxed text-brand-light/70 font-mono whitespace-nowrap overflow-hidden text-ellipsis"
-        title={name}
-      >
-        {name}
-      </div>
-    );
   };
 
   return (
@@ -1672,39 +1579,8 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                     {/* Phase-specific content */}
                     <div className="mt-5 flex-1 min-h-0">
                       {activePhase === "extract_bundle" ? (
-                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-3 h-full flex flex-col min-h-0">
-                          <div className="text-[11px] text-brand-light/70 mb-2">
-                            Extracted files (live)
-                          </div>
-                          <div className="text-[10px] text-brand-light/40 mb-2">
-                            {extractionFilesRef.current.length} files
-                          </div>
-                          <ScrollAreaPrimitive.Root
-                            ref={extractionListContainerRef}
-                            className="flex-1 min-h-0 rounded border border-brand-light/10 bg-black/30 overflow-hidden"
-                          >
-                            {extractionFilesRef.current.length === 0 ? (
-                              <div className="p-2 text-[10.5px] text-brand-light/50">
-                                Waiting for extraction to start…
-                              </div>
-                            ) : extractionListSize.height > 0 &&
-                              extractionListSize.width > 0 ? (
-                              <>
-                                <VirtualList
-                                  height={extractionListSize.height}
-                                  width={extractionListSize.width}
-                                  itemCount={extractionFilesRef.current.length}
-                                  itemSize={18}
-                                  outerElementType={VirtualScrollViewport as any}
-                                >
-                                  {ExtractRow}
-                                </VirtualList>
-                                <ScrollBar orientation="vertical" />
-                                <ScrollBar orientation="horizontal" />
-                                <ScrollAreaPrimitive.Corner />
-                              </>
-                            ) : null}
-                          </ScrollAreaPrimitive.Root>
+                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
+                          Extracting bundle…
                         </div>
                       ) : activePhase === "download_models" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
@@ -1737,7 +1613,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                         </div>
                       ) : activePhase === "update_configs" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
-                          Config setup is partially implemented (currently: ffmpeg install).
+                          Config setup is complete.
                         </div>
                       ) : (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
@@ -1752,18 +1628,18 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                       </div>
                     ) : null}
                     {uiMode === "done" && installStatus ? (
-                      <div className="mt-4 text-[11px] text-brand-light/70">
+                      <div className="mt-4 text-[11px] font-medium text-brand-light/80">
                         {installStatus}
                       </div>
                     ) : null}
 
                     {uiMode === "done" ? (
                       <div className="mt-5 flex items-center justify-between gap-3">
-                        <div className="text-[11px] text-brand-light/60">
+                        <div className="text-[11px] text-brand-light font-semibold">
                           {backendStatus === "starting"
-                            ? "Starting backend…"
+                            ? "Starting Backend…"
                             : backendStatus === "started"
-                              ? "Backend started"
+                              ? "Backend Started"
                               : backendStatus === "error"
                                 ? `Backend failed to start${backendError ? `: ${backendError}` : ""}`
                                 : null}

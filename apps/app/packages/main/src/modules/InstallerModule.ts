@@ -393,70 +393,74 @@ async function extractTarZstWithNode(opts: {
   onProgress?: (ev: InstallerProgressEvent) => void;
 }): Promise<void> {
   const extract = tar.extract();
-  const inflator = createZstdDecompress();
+  // Larger chunk sizes tend to improve throughput for large archives.
+  const inflator = createZstdDecompress({ chunkSize: 4 * 1024 * 1024 });
 
   await fsp.mkdir(opts.destinationDir, { recursive: true });
 
-  const pending: Promise<void>[] = [];
-  let entriesExtracted = 0;
+  // Reduce fs churn by memoizing directories we've already created.
+  const createdDirs = new Set<string>();
+  const ensureDir = async (dir: string) => {
+    const d = dir || opts.destinationDir;
+    if (!d) return;
+    if (createdDirs.has(d)) return;
+    createdDirs.add(d);
+    await fsp.mkdir(d, { recursive: true });
+  };
 
   extract.on("entry", (header: any, stream: any, next: any) => {
-    const done = (p: Promise<void>) => {
-      pending.push(
-        p.finally(() => {
-          stream.resume();
-          next();
-        }),
-      );
-    };
-
-    try {
+    (async () => {
       const name = String(header?.name || "");
       const type = String(header?.type || "file");
       const mode = typeof header?.mode === "number" ? header.mode : undefined;
       const absPath = safeJoinWithinRoot(opts.destinationDir, name);
-      entriesExtracted += 1;
-      opts.onProgress?.({
-        phase: "extract",
-        entryName: name,
-        entriesExtracted,
-        message: `Extracting ${name}`,
-      });
+
+      // IMPORTANT: to maximize throughput, avoid emitting per-entry progress events.
+      // The caller gets byte-based overall progress from the compressed input stream.
 
       if (type === "directory") {
-        done(
-          (async () => {
-            await fsp.mkdir(absPath, { recursive: true });
-          })(),
-        );
+        await ensureDir(absPath);
         return;
       }
 
       if (type === "file") {
-        done(
-          (async () => {
-            await fsp.mkdir(path.dirname(absPath), { recursive: true });
-            await pipeline(stream, fs.createWriteStream(absPath));
-            if (mode !== undefined && process.platform !== "win32") {
-              try {
-                await fsp.chmod(absPath, mode);
-              } catch {}
-            }
-          })(),
+        await ensureDir(path.dirname(absPath));
+        await pipeline(
+          stream,
+          fs.createWriteStream(absPath, { highWaterMark: 1024 * 1024 }),
         );
+        if (mode !== undefined && process.platform !== "win32") {
+          try {
+            await fsp.chmod(absPath, mode);
+          } catch {}
+        }
         return;
       }
 
       // Ignore symlinks and other special file types for safety.
-      done(Promise.resolve());
-    } catch (e) {
-      done(Promise.reject(e));
-    }
+      stream.resume();
+    })()
+      .then(() => {
+        try {
+          stream.resume();
+        } catch {}
+        next();
+      })
+      .catch((e) => {
+        try {
+          // Ensure the extractor rejects quickly.
+          extract.destroy(e);
+        } catch {}
+        try {
+          stream.resume();
+        } catch {}
+        next();
+      });
   });
 
   const stat = await fsp.stat(opts.archivePath);
   const totalBytes = stat.size;
-  const input = fs.createReadStream(opts.archivePath);
+  const input = fs.createReadStream(opts.archivePath, { highWaterMark: 2 * 1024 * 1024 });
   let processedBytes = 0;
   let lastEmitAt = 0;
   const emitBytes = () => {
@@ -485,9 +489,6 @@ async function extractTarZstWithNode(opts: {
     input.on("error", reject);
     input.pipe(inflator).pipe(extract);
   });
-
-  // Ensure all entry writes finished.
-  await Promise.all(pending);
   opts.onProgress?.({
     phase: "extract",
     processedBytes: totalBytes,
@@ -1009,12 +1010,15 @@ export class InstallerModule implements AppModule {
           });
 
           // Defensive cleanup: remove AppleDouble `._*` files that can slip into archives and break runtime.
-          try {
-            await removeAppleDoubleFilesRecursively({
-              rootDir: effectiveDestinationDir,
-              onStatus: (m) => sendProgress({ phase: "status", message: m }),
-            });
-          } catch {}
+          // Only relevant on macOS; skip on Windows/Linux for speed.
+          if (process.platform === "darwin") {
+            try {
+              await removeAppleDoubleFilesRecursively({
+                rootDir: effectiveDestinationDir,
+                onStatus: (m) => sendProgress({ phase: "status", message: m }),
+              });
+            } catch {}
+          }
 
           sendProgress({ phase: "status", message: "Validating extracted bundle…" });
           await validateExtractedBundleOrThrow({ installDir: effectiveDestinationDir, timeoutMs: 10_000 });

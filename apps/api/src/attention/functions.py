@@ -1,7 +1,7 @@
 import torch
 from loguru import logger
 import torch.nn.functional as F
-from typing import List, Optional
+from typing import Any, Callable, List, Optional
 import multiprocessing
 import json
 import sys
@@ -2099,6 +2099,157 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
         # Catch-all for any import/runtime errors in the worker
         queue.put(False)
 
+AttentionVerifyProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def verify_attention_backends_detailed(
+    force_refresh: bool = False,
+    progress_callback: AttentionVerifyProgressCallback | None = None,
+) -> dict[str, Any]:
+    """
+    Verify attention backends and (optionally) stream per-backend progress updates.
+
+    Returns a dict:
+      { "working": [...], "failed": [...], "from_cache": bool }
+    """
+    global _WORKING_ATTENTIONS
+
+    def emit(ev: dict[str, Any]) -> None:
+        try:
+            if progress_callback is not None:
+                progress_callback(ev)
+        except Exception:
+            # Never allow a consumer callback to break verification.
+            pass
+
+    # 0. If we already have in-memory results and we're not refreshing, use them.
+    if _WORKING_ATTENTIONS is not None and not force_refresh:
+        cache = _load_attention_cache() or {}
+        failed = cache.get("failed", [])
+        if not isinstance(failed, list) or not all(isinstance(x, str) for x in failed):
+            failed = []
+        emit({"phase": "cache", "status": "hit"})
+        for idx, name in enumerate(_WORKING_ATTENTIONS):
+            emit(
+                {
+                    "phase": "backend",
+                    "backend": name,
+                    "index": idx,
+                    "total": len(_WORKING_ATTENTIONS),
+                    "status": "ok",
+                    "from_cache": True,
+                }
+            )
+        return {"working": list(_WORKING_ATTENTIONS), "failed": list(failed), "from_cache": True}
+
+    # 1. Try loading from cache (unless forced refresh).
+    cache = _load_attention_cache()
+    if cache is not None and not force_refresh:
+        working = cache["working"]
+        failed = cache.get("failed", [])
+        if not isinstance(failed, list) or not all(isinstance(x, str) for x in failed):
+            failed = []
+        _WORKING_ATTENTIONS = working
+        _apply_verified_backends_to_registry(working=working, failed=failed)
+        logger.info(f"Loaded verified attention backends from cache: {_WORKING_ATTENTIONS}")
+        _maybe_remove_failed_backends_from_machine(failed)
+
+        emit({"phase": "cache", "status": "hit"})
+        all_names = list(working) + list(failed)
+        for idx, name in enumerate(all_names):
+            emit(
+                {
+                    "phase": "backend",
+                    "backend": name,
+                    "index": idx,
+                    "total": len(all_names),
+                    "status": "ok" if name in set(working) else "failed",
+                    "from_cache": True,
+                }
+            )
+        return {"working": list(working), "failed": list(failed), "from_cache": True}
+
+    emit({"phase": "cache", "status": "miss"})
+
+    logger.info("Verifying attention backends (running once)...")
+    working: list[str] = []
+    candidates = attention_register.all_available()
+    names = list(candidates.keys())
+
+    # We use 'spawn' to ensure a clean process state if supported/default,
+    # but strictly rely on the isolation process to catch crashes.
+    ctx = multiprocessing.get_context("spawn")
+
+    # On Windows with spawn context, each subprocess must re-initialize PyTorch + CUDA.
+    first_backend_timeout = 15  # seconds - covers CUDA initialization
+    subsequent_timeout = 10  # seconds - still generous for torch imports
+
+    total = len(names)
+    for idx, name in enumerate(names):
+        emit({"phase": "backend", "backend": name, "index": idx, "total": total, "status": "start"})
+        started = time.monotonic()
+
+        queue = ctx.Queue()
+        p = ctx.Process(target=_verify_backend_worker, args=(name, queue))
+        p.start()
+
+        timeout = first_backend_timeout if idx == 0 else subsequent_timeout
+        try:
+            result = queue.get(timeout=timeout)
+            p.join()
+            dur = max(0.0, time.monotonic() - started)
+            if result:
+                working.append(name)
+                emit(
+                    {
+                        "phase": "backend",
+                        "backend": name,
+                        "index": idx,
+                        "total": total,
+                        "status": "ok",
+                        "duration_s": dur,
+                    }
+                )
+            else:
+                emit(
+                    {
+                        "phase": "backend",
+                        "backend": name,
+                        "index": idx,
+                        "total": total,
+                        "status": "failed",
+                        "duration_s": dur,
+                    }
+                )
+        except Exception:
+            # Timeout or other queue error -> assume failed/crashed
+            logger.warning(f"Backend '{name}' verification timed out or crashed.")
+            if p.is_alive():
+                p.terminate()
+                p.join()
+            dur = max(0.0, time.monotonic() - started)
+            emit(
+                {
+                    "phase": "backend",
+                    "backend": name,
+                    "index": idx,
+                    "total": total,
+                    "status": "timeout",
+                    "duration_s": dur,
+                }
+            )
+
+    failed = [name for name in names if name not in set(working)]
+    _WORKING_ATTENTIONS = working
+
+    _apply_verified_backends_to_registry(working=working, failed=failed)
+    _save_attention_cache(working=_WORKING_ATTENTIONS, failed=failed)
+    logger.info(f"Verified and cached attention backends: {_WORKING_ATTENTIONS}")
+    _maybe_remove_failed_backends_from_machine(failed)
+
+    emit({"phase": "done", "working": list(working), "failed": list(failed)})
+    return {"working": list(working), "failed": list(failed), "from_cache": False}
+
 
 def verify_attention_backends(force_refresh: bool = False) -> List[str]:
     """
@@ -2107,71 +2258,5 @@ def verify_attention_backends(force_refresh: bool = False) -> List[str]:
     2. If not, run verification for each backend in a SEPARATE process.
     3. Save results to cache.
     """
-    global _WORKING_ATTENTIONS
-    if _WORKING_ATTENTIONS is not None and not force_refresh:
-        return _WORKING_ATTENTIONS
-
-    # 1. Try loading from cache
-    cache = _load_attention_cache()
-    if cache is not None and not force_refresh:
-        working = cache["working"]
-        failed = cache.get("failed", [])
-        _WORKING_ATTENTIONS = working
-        _apply_verified_backends_to_registry(working=working, failed=failed)
-        logger.info(
-            f"Loaded verified attention backends from cache: {_WORKING_ATTENTIONS}"
-        )
-        _maybe_remove_failed_backends_from_machine(failed)
-        return _WORKING_ATTENTIONS
-
-    logger.info("Verifying attention backends (running once)...")
-    working = []
-    candidates = attention_register.all_available()
-
-    # We use 'spawn' to ensure a clean process state if supported/default,
-    # but strictly rely on the isolation process to catch crashes.
-    ctx = multiprocessing.get_context("spawn")
-
-    # On Windows with spawn context, each subprocess must re-initialize PyTorch + CUDA.
-    # CUDA initialization alone can take 10-20+ seconds on Windows, so we use a generous
-    # timeout for the first backend (covers CUDA init overhead) and shorter for subsequent
-    # ones (CUDA driver caching may help, but still need buffer for torch imports).
-    first_backend_timeout = 15  # seconds - covers CUDA initialization
-    subsequent_timeout = 10  # seconds - still generous for torch imports
-
-    for idx, name in enumerate(candidates.keys()):
-        queue = ctx.Queue()
-        p = ctx.Process(target=_verify_backend_worker, args=(name, queue))
-        p.start()
-
-        # Wait for result with timeout - first backend gets extra time for CUDA init
-        timeout = first_backend_timeout if idx == 0 else subsequent_timeout
-        try:
-            result = queue.get(timeout=timeout)
-            p.join()
-            if result:
-                working.append(name)
-            else:
-                logger.debug(f"Backend '{name}' failed verification.")
-        except Exception:
-            # Timeout or other queue error -> assume failed/crashed
-            logger.warning(f"Backend '{name}' verification timed out or crashed.")
-            if p.is_alive():
-                p.terminate()
-                p.join()
-
-    failed = [name for name in candidates.keys() if name not in set(working)]
-
-    _WORKING_ATTENTIONS = working
-
-    # Disable failed backends for the current runtime (prevents accidental selection).
-    _apply_verified_backends_to_registry(working=working, failed=failed)
-
-    # 3. Save to cache
-    _save_attention_cache(working=_WORKING_ATTENTIONS, failed=failed)
-    logger.info(f"Verified and cached attention backends: {_WORKING_ATTENTIONS}")
-
-    # 4. Optional: uninstall failing backend packages from this environment.
-    _maybe_remove_failed_backends_from_machine(failed)
-
-    return _WORKING_ATTENTIONS
+    res = verify_attention_backends_detailed(force_refresh=force_refresh)
+    return list(res.get("working") or [])
