@@ -153,33 +153,6 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
     [clip?.transform],
   );
 
-  const normalizeShapeBoundsToMaskSpace = useCallback(
-    (bounds: any): any => {
-      if (!bounds || !clip?.transform) return bounds;
-      const x = Number(bounds.x);
-      const y = Number(bounds.y);
-      const w = Number(bounds.width);
-      const h = Number(bounds.height);
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) {
-        return bounds;
-      }
-
-      const pTL = normalizeMaskPointForRotation(x, y, clip.transform);
-      const pTR = normalizeMaskPointForRotation(x + w, y, clip.transform);
-      const pBL = normalizeMaskPointForRotation(x, y + h, clip.transform);
-      const width = pTR.x - pTL.x;
-      const height = pBL.y - pTL.y;
-
-      return {
-        ...bounds,
-        x: pTL.x,
-        y: pTL.y,
-        width,
-        height,
-      };
-    },
-    [clip?.transform],
-  );
 
   const localFrame = useMemo(() => {
     if (!clip || !isVideoClip) return 0;
