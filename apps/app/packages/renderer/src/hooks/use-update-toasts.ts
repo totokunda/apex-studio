@@ -38,8 +38,6 @@ function isApiUpdateRelevant(st: ApiUpdateState | null | undefined): boolean {
   return (st.toastSuppressedUntil ?? 0) <= Date.now();
 }
 
-// Keep toast errors compact; full details should live in logs or the settings page.
-const MAX_TOAST_ERR_LEN = 180;
 
 const API_UPDATE_TOAST_ID = "api-update-toast";
 
