@@ -291,10 +291,14 @@ const Launcher: React.FC = () => {
     return backendConnected || runtimeAvailable || backendStarting;
   }, [backendConnected, runtimeAvailable, backendStarting]);
 
+  // We only want to show the projects UI once the backend (Python API) is actually reachable.
+  // `runtimeAvailable` just means we *could* start it locally; it doesn't mean it's running.
+  const backendReady = backendConnected;
+
   const canLaunch = useMemo(() => {
     const hasProjects = projects.length > 0;
-    return hasBackend && hasProjects;
-  }, [hasBackend, projects.length]);
+    return backendReady && hasProjects;
+  }, [backendReady, projects.length]);
 
   const applyStatus = useCallback((st: any) => {
     const hasBackend = Boolean(st?.hasBackend);
@@ -431,6 +435,10 @@ const Launcher: React.FC = () => {
       setError("Create a project to continue.");
       return;
     }
+    if (!backendReady) {
+      setError("Waiting for the backend to be ready. Please try again in a moment.");
+      return;
+    }
     setIsLaunching(true);
     setError(null);
     const res = await launchMainWindow();
@@ -512,8 +520,10 @@ const Launcher: React.FC = () => {
   };
 
 
+  // Don't show the projects page until we can verify the backend is actually connected.
+  // If we *don't* have a backend/runtime at all, we'll fall through to the installer below.
   const showBlockingCheck =
-    !initialCheckDoneRef.current && (isChecking || backendStarting)
+    isChecking || backendStarting || (hasBackend && !backendReady)
 
   // Allow the installer to be shown even while the launcher is in its initial
   // "blocking check" screen. This lets users recover (install/reinstall) if the
