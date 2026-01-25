@@ -2,11 +2,9 @@
 Base preprocessor class with websocket support for progress updates
 """
 
-import uuid
 from abc import ABC, abstractmethod
 from typing import Optional, Callable, Any, Dict
 from pathlib import Path
-import json
 import numpy as np
 from src.mixins import LoaderMixin
 from src.types import (
@@ -21,15 +19,12 @@ from PIL import Image
 from tqdm import tqdm
 from src.utils.defaults import DEFAULT_CACHE_PATH, DEFAULT_PREPROCESSOR_SAVE_PATH
 import os
-import threading
 import torch
+from src.utils.yaml import load_yaml as load_yaml_file
+from src.mixins.download_mixin import DownloadMixin
 
-# Thread-safe lock for registry updates
-_registry_lock = threading.Lock()
-
-# Path to downloaded preprocessors tracking file
-DOWNLOADED_PREPROCESSORS_FILE = (
-    Path(DEFAULT_PREPROCESSOR_SAVE_PATH) / "downloaded_preprocessors.json"
+_PREPROCESSOR_MANIFEST_PATH = (
+    Path(__file__).resolve().parents[2] / "manifest" / "preprocessor"
 )
 
 
@@ -62,63 +57,75 @@ class BasePreprocessor(LoaderMixin, ABC):
 
     @classmethod
     def _mark_as_downloaded(cls, preprocessor_name: str):
-        """Mark a preprocessor as downloaded in the tracking file"""
-        with _registry_lock:
-            try:
-                DOWNLOADED_PREPROCESSORS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        """
+        Deprecated (no-op).
 
-                # Read existing data
-                if DOWNLOADED_PREPROCESSORS_FILE.exists():
-                    with open(DOWNLOADED_PREPROCESSORS_FILE, "r") as f:
-                        downloaded = json.load(f)
-                else:
-                    downloaded = {}
+        Download status is now derived from the preprocessor manifest's `files:` list:
+        a preprocessor is considered downloaded if all declared files exist under
+        `DEFAULT_PREPROCESSOR_SAVE_PATH` (and match `size_bytes` when provided).
 
-                # Update with current preprocessor
-                downloaded[preprocessor_name] = {
-                    "downloaded": True,
-                    "timestamp": str(uuid.uuid4()),  # Simple timestamp placeholder
-                }
-
-                # Write back
-                with open(DOWNLOADED_PREPROCESSORS_FILE, "w") as f:
-                    json.dump(downloaded, f, indent=2)
-
-            except Exception as e:
-                # Don't fail if we can't write to tracking file
-                pass
+        This method remains for backwards compatibility with older callers.
+        """
+        return None
 
     @classmethod
     def _is_downloaded(cls, preprocessor_name: str) -> bool:
-        """Check if a preprocessor is marked as downloaded"""
+        """
+        Check whether all files declared in the preprocessor manifest are present.
+
+        We intentionally do *not* consult any separate tracking file; the filesystem
+        is the source of truth.
+        """
         try:
-            if not DOWNLOADED_PREPROCESSORS_FILE.exists():
+            file_path_yml = _PREPROCESSOR_MANIFEST_PATH / f"{preprocessor_name}.yml"
+            file_path_yaml = _PREPROCESSOR_MANIFEST_PATH / f"{preprocessor_name}.yaml"
+            manifest_path = (
+                file_path_yml
+                if file_path_yml.exists()
+                else (file_path_yaml if file_path_yaml.exists() else None)
+            )
+            if manifest_path is None:
                 return False
 
-            with open(DOWNLOADED_PREPROCESSORS_FILE, "r") as f:
-                downloaded = json.load(f)
+            data = load_yaml_file(manifest_path)
+            if not isinstance(data, dict):
+                return False
 
-            return downloaded.get(preprocessor_name, {}).get("downloaded", False)
+            files = data.get("files", [])
+            if not files:
+                # No required files => always "downloaded"
+                return True
+
+            base = Path(DEFAULT_PREPROCESSOR_SAVE_PATH)
+            for entry in files:
+                if isinstance(entry, dict):
+                    rel_path = entry.get("path")
+                else:
+                    rel_path = entry
+                if not rel_path or not isinstance(rel_path, str):
+                    return False
+
+                abs_path = base / rel_path
+
+                # Use shared helper so "downloaded" matches the same rules as our downloader.
+                # Pass the fully resolved local path to avoid treating manifest paths as HF ids.
+                downloaded_path = DownloadMixin.is_downloaded(str(abs_path), str(base))
+                if downloaded_path is None:
+                    return False
+                
+            return True
         except Exception:
             return False
 
     @classmethod
     def _unmark_as_downloaded(cls, preprocessor_name: str):
-        """Unmark a preprocessor as downloaded in the tracking file."""
-        with _registry_lock:
-            try:
-                if not DOWNLOADED_PREPROCESSORS_FILE.exists():
-                    return
-                with open(DOWNLOADED_PREPROCESSORS_FILE, "r") as f:
-                    downloaded = json.load(f)
-                if preprocessor_name in downloaded:
-                    # Either remove or set flag to False
-                    downloaded[preprocessor_name]["downloaded"] = False
-                with open(DOWNLOADED_PREPROCESSORS_FILE, "w") as f:
-                    json.dump(downloaded, f, indent=2)
-            except Exception:
-                # Best-effort only
-                pass
+        """
+        Deprecated (no-op).
+
+        To make a preprocessor "not downloaded", remove its files on disk (typically
+        by deleting the paths listed in its manifest).
+        """
+        return None
 
     @classmethod
     @abstractmethod
