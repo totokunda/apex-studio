@@ -360,6 +360,13 @@ export class ApexApi implements AppModule {
           anchor_frame?: number;
           frame_end: number;
           direction?: "forward" | "backward" | "both";
+          // Optional seed inputs so the backend can (re)create the anchor mask before tracking.
+          tool?: "touch" | "lasso" | "shape";
+          points?: Array<{ x: number; y: number }>;
+          point_labels?: Array<number>;
+          box?: { x1: number; y1: number; x2: number; y2: number };
+          simplify_tolerance?: number;
+          shape_type?: string;
         },
       ) => {
         // Ensure backend is healthy before starting streaming mask tracking

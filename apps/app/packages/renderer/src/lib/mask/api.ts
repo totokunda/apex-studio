@@ -962,6 +962,14 @@ export async function trackMask(
     direction?: "forward" | "backward" | "both";
     model_type?: string;
     max_frames?: number;
+    // Optional seed inputs so the backend can (re)create the anchor mask before tracking.
+    // This is important when `/system/free-memory` has cleared SAM2 state.
+    tool?: "touch" | "lasso" | "shape";
+    points?: Array<{ x: number; y: number }>;
+    point_labels?: Array<number>;
+    box?: { x1: number; y1: number; x2: number; y2: number };
+    simplify_tolerance?: number;
+    shape_type?: string;
   },
   options?: {
     signal?: AbortSignal;

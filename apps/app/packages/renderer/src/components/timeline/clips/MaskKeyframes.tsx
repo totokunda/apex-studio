@@ -81,8 +81,6 @@ export const Diamond: React.FC<DiamondProps> = ({
           Math.max(1, (window.devicePixelRatio ?? 1) as number),
         ),
       });
-      // Hit graph can be derived from the cached image too.
-      (node as any).drawHitFromCache?.();
       node.getLayer()?.batchDraw();
     } catch {}
   }, [
@@ -137,7 +135,6 @@ export const Diamond: React.FC<DiamondProps> = ({
       tension={0.1}
       // Events are handled by the parent <Group>; disabling hit-testing on the shape
       // reduces work on the Konva hit canvas.
-      listening={false}
       // Slightly faster drawing for small shapes; visuals here don't need perfect strokes.
       perfectDrawEnabled={false}
     />
@@ -336,6 +333,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   const keyframeY = visualBaseY + timelineHeight / 2;
 
   const activeFrame = useMemo(() => {
+    
     if (!keyframes.length) return null;
     const localFocus = Math.max(0, Math.round(getLocalFrame(focusFrame, clip)));
 
@@ -354,10 +352,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     return candidate;
   }, [clip, focusFrame, keyframes]);
 
-  // Only one keyframe should be visually active at a time: prefer selected, else focus-derived
-  const displayActiveFrame = useMemo(() => {
-    return selectedFrame != null ? selectedFrame : activeFrame;
-  }, [selectedFrame, activeFrame]);
+
 
   const visibleKeyframes = useMemo(() => {
     if (keyframes.length <= 1) return keyframes;
@@ -373,7 +368,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     const keep = new Set<number>();
     keep.add(keyframes[0].frame);
     keep.add(keyframes[keyframes.length - 1].frame);
-    if (displayActiveFrame != null) keep.add(displayActiveFrame);
+    if (activeFrame != null) keep.add(activeFrame);
     if (selectedFrame != null) keep.add(selectedFrame);
 
     let lastKeptFrame = keyframes[0].frame;
@@ -391,7 +386,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     }
 
     return keyframes.filter(({ frame }) => keep.has(frame));
-  }, [displayActiveFrame, keyframes, pxPerFrame, selectedFrame]);
+  }, [activeFrame, keyframes, pxPerFrame, selectedFrame]);
 
   useEffect(() => {
     if (selectedFrame == null) return;
@@ -550,6 +545,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   }
 
   const handleKeyframeClick = (frame: number) => {
+    console.log("handleKeyframeClick", frame);
     setSelectedMaskId(mask.id);
     setSelectedFrame(frame);
     setFocusFrame(getGlobalFrame(frame, clip));
@@ -593,7 +589,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   return (
     <Group ref={containerRef} listening>
       {visibleKeyframes.map(({ frame }) => {
-        const isHighlighted = frame === displayActiveFrame;
+        const isHighlighted = frame === activeFrame;
 
         return (
           <KeyframeMarker
@@ -611,7 +607,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
               e.cancelBubble = true;
               handleKeyframeClick(frame);
             }}
-          />
+            />
         );
       })}
     </Group>

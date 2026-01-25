@@ -38,6 +38,13 @@ async function trackMask(request: {
   frame_end: number;
   direction?: "forward" | "backward" | "both";
   model_type?: string;
+  // Optional seed inputs so the backend can (re)create the anchor mask before tracking.
+  tool?: "touch" | "lasso" | "shape";
+  points?: Array<{ x: number; y: number }>;
+  point_labels?: Array<number>;
+  box?: { x1: number; y1: number; x2: number; y2: number };
+  simplify_tolerance?: number;
+  shape_type?: string;
 }): Promise<ReadableStream<MaskTrackStreamEvent>> {
   if (request.input_path.startsWith("file://")) {
     request.input_path = fileURLToPath(request.input_path);
@@ -85,6 +92,13 @@ async function startMaskTrack(request: {
   frame_end: number;
   direction?: "forward" | "backward" | "both";
   model_type?: string;
+  // Optional seed inputs so the backend can (re)create the anchor mask before tracking.
+  tool?: "touch" | "lasso" | "shape";
+  points?: Array<{ x: number; y: number }>;
+  point_labels?: Array<number>;
+  box?: { x1: number; y1: number; x2: number; y2: number };
+  simplify_tolerance?: number;
+  shape_type?: string;
 }): Promise<{ streamId: string }> {
   if (request.input_path.startsWith("file://")) {
     request.input_path = fileURLToPath(request.input_path);
