@@ -2296,6 +2296,7 @@ def _execute_preprocessor(
     end_frame: Optional[int] = None,
     **kwargs,
 ) -> Dict[str, Any]:
+    # Keep large objects explicitly tracked so we can drop refs in `finally`.
     preprocessor_info = get_preprocessor_info(preprocessor_name)
     cache = AuxillaryCache(
         input_path,
@@ -2305,6 +2306,12 @@ def _execute_preprocessor(
         kwargs,
         supports_alpha_channel=preprocessor_info.get("supports_alpha_channel", False),
     )
+    module = None
+    preprocessor_class = None
+    preprocessor = None
+    frames = None
+    result = None
+    result_path = None
 
     media_type = cache.type
     send_progress(0.05, "Checking cache")
@@ -2514,10 +2521,25 @@ def _execute_preprocessor(
         }
 
     finally:
-        empty_cache()
+        # Drop refs aggressively so long-lived Ray workers don't retain model weights,
+        # video frames, or other large tensors/arrays across jobs.
+        try:
+            preprocessor = None
+            frames = None
+            result = None
+            module = None
+            preprocessor_class = None
+            cache = None
+        except Exception:
+            pass
+        try:
+            _aggressive_ram_cleanup(clear_torch_cache=True)
+        except Exception:
+            # Best-effort only; never fail preprocessor completion on cleanup.
+            pass
 
 
-@ray.remote
+@ray.remote(max_calls=1)
 def run_preprocessor(
     preprocessor_name: str,
     input_path: str,
@@ -3457,7 +3479,7 @@ def run_engine_from_manifest(
     )
 
 
-@ray.remote
+@ray.remote(max_calls=1)
 def run_frame_interpolation(
     input_path: str,
     target_fps: float,
@@ -3488,6 +3510,8 @@ def run_frame_interpolation(
     from pathlib import Path
     from src.utils.defaults import DEFAULT_CACHE_PATH
 
+    pp = None
+    frames = None
     try:
         _require_tracked_job_or_fail(
             job_id, allowed_types={"postprocessor"}, ws_bridge=ws_bridge
@@ -3632,3 +3656,14 @@ def run_frame_interpolation(
         except Exception:
             pass
         return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
+    finally:
+        # Ensure no postprocessor weights/tensors persist in the Ray worker after completion.
+        try:
+            pp = None
+            frames = None
+        except Exception:
+            pass
+        try:
+            _aggressive_ram_cleanup(clear_torch_cache=True)
+        except Exception:
+            pass
