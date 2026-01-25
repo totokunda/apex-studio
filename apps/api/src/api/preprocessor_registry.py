@@ -146,28 +146,12 @@ def list_preprocessors(check_downloaded: bool = False) -> List[Dict[str, Any]]:
 
 def initialize_download_tracking():
     """
-    Initialize the download tracking file with preprocessors that don't require downloads.
-    This should be called on app startup.
+    Backwards-compatibility shim (no-op).
+
+    Download status is derived from the preprocessor manifest's `files:` section by
+    checking for the presence of those files on disk.
     """
-    from src.preprocess.base_preprocessor import BasePreprocessor
-
-    # Preprocessors that don't require downloads
-    NO_DOWNLOAD_REQUIRED = [
-        "binary",
-        "canny",
-        "color",
-        "pyracanny",
-        "recolor",
-        "scribble",
-        "scribble_xdog",
-        "shuffle",
-        "tile",
-        "tile_gf",
-        "tile_simple",
-    ]
-
-    for preprocessor_name in NO_DOWNLOAD_REQUIRED:
-        BasePreprocessor._mark_as_downloaded(preprocessor_name)
+    return None
 
 
 def check_preprocessor_downloaded(preprocessor_name: str) -> bool:
@@ -180,25 +164,7 @@ def check_preprocessor_downloaded(preprocessor_name: str) -> bool:
     Returns:
         True if downloaded/ready, False otherwise
     """
-    # Preprocessors that don't require downloads
-    NO_DOWNLOAD_REQUIRED = {
-        "binary",
-        "canny",
-        "color",
-        "pyracanny",
-        "recolor",
-        "scribble",
-        "scribble_xdog",
-        "shuffle",
-        "tile",
-        "tile_gf",
-        "tile_simple",
-    }
-
-    if preprocessor_name in NO_DOWNLOAD_REQUIRED:
-        return True
-
-    # Check the downloaded preprocessors tracking file
+    # Check the manifest-declared files on disk
     from src.preprocess.base_preprocessor import BasePreprocessor
 
     return BasePreprocessor._is_downloaded(preprocessor_name)
