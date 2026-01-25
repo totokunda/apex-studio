@@ -2483,7 +2483,10 @@ if __name__ == "__main__":
         print(f"Bundling Python API for platform: {self.platform_name}")
 
         # Create output directory
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # if path exists remove it
+        if self.output_dir.exists():
+            shutil.rmtree(self.output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=False)
 
         # Detect GPU support
         gpu_type = self.cuda_version or self.detect_gpu_support()
