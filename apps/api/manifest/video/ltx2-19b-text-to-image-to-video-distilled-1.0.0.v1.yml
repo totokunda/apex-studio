@@ -10,6 +10,7 @@ metadata:
   - ltx2
   - t2v
   - 19b
+  - distilled
   author: Lightricks
   license: Custom License
   demo_path: models/ltx2-19b-text-to-image-to-video-distilled.mp4

@@ -16,4 +16,4 @@ flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/release
 # Nunchaku
 # Install separately via `python scripts/deps/maybe_install_nunchaku.py --install` (defaults to --no-deps)
 
-onnxruntime-gpu==1.23.2
+onnxruntime-gpu==1.20.1

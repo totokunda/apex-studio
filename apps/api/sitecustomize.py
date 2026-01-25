@@ -12,7 +12,19 @@ import os
 import sys
 import importlib.abc
 import importlib.machinery
+import threading
 from typing import Any
+
+# Add CUDNN to PATH on Windows for DLL discovery (e.g. for ONNX Runtime / PyTorch)
+if sys.platform == "win32":
+    _cudnn_path = r"C:\Program Files\NVIDIA\CUDNN\v9.18\bin\12.9\x64"
+    if os.path.exists(_cudnn_path):
+        os.environ["PATH"] = _cudnn_path + os.pathsep + os.environ.get("PATH", "")
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(_cudnn_path)
+            except Exception:
+                pass
 
 # Mitigate CUDA allocator fragmentation across long-lived processes.
 # Keep user overrides intact.
@@ -133,6 +145,180 @@ def _patch_nunchaku_cuda_mempool_utils(nunchaku_c_mod: Any) -> None:
     _wrap_best_effort("trim_memory")
 
 
+def _looks_like_onnx_gpu_provider_failure(exc: BaseException) -> bool:
+    """
+    Best-effort filter so we only fallback to CPU for GPU/provider-related failures,
+    not for genuine model/input errors (which would also fail on CPU).
+    """
+
+    msg = str(exc).lower()
+    needles = (
+        # Common EP names / hints
+        "cudaexecutionprovider",
+        "directmlexecutionprovider",
+        "tensorrtexecutionprovider",
+        "rocmexecutionprovider",
+        "openvinoexecutionprovider",
+        "coremlexecutionprovider",
+        # CUDA / cuDNN / driver errors
+        "cuda",
+        "cudnn",
+        "cublas",
+        "cudart",
+        "nvcuda",
+        "driver",
+        "dll load failed",
+        "could not load",
+        "failed to load",
+        "failed to create",
+        "failed to initialize",
+        "initialization failed",
+        "no cuda",
+        "no gpu",
+        "gpu",
+        "device ordinal",
+        "invalid device",
+        "device not found",
+        "out of memory",
+        "insufficient memory",
+        "memory allocation",
+    )
+    return any(n in msg for n in needles)
+
+
+def _patch_onnxruntime_inference_session(ort_mod: Any) -> None:
+    """
+    Monkey-patch `onnxruntime.InferenceSession` so GPU EP failures (at init or run)
+    automatically retry once on CPU. This avoids touching every call site.
+    """
+
+    if os.getenv("APEX_ORT_FALLBACK_TO_CPU", "1").strip() in ("0", "false", "False"):
+        return
+
+    try:
+        RealInferenceSession = ort_mod.InferenceSession
+    except Exception:
+        return
+
+    # Avoid double-patching.
+    if getattr(RealInferenceSession, "__apex_patched__", False):
+        return
+
+    log = logging.getLogger("apex.sitecustomize.onnxruntime")
+    _lock = threading.Lock()
+
+    def _cpu_only_provider_list() -> list[str]:
+        return ["CPUExecutionProvider"]
+
+    def _requested_non_cpu_providers(providers: Any) -> bool:
+        try:
+            if providers is None:
+                return True  # default behavior could pick GPU EPs
+            return any(p != "CPUExecutionProvider" for p in providers)
+        except Exception:
+            return True
+
+    class InferenceSession:  # noqa: N801 - keep public API name
+        """
+        Wrapper around ONNX Runtime's compiled `InferenceSession` with CPU fallback.
+        """
+
+        __apex_patched__ = True
+
+        def __init__(  # type: ignore[no-untyped-def]
+            self,
+            path_or_bytes: Any,
+            sess_options: Any = None,
+            providers: Any = None,
+            provider_options: Any = None,
+            **kwargs: Any,
+        ) -> None:
+            self._apex_model_source = path_or_bytes
+            self._apex_sess_options = sess_options
+            self._apex_providers = providers
+            self._apex_provider_options = provider_options
+            self._apex_kwargs = kwargs
+
+            self._apex_using_cpu = False
+            self._apex_fallback_attempted = False
+            self._apex_session = self._apex_create_session(allow_fallback=True)
+
+        def _apex_create_session(self, allow_fallback: bool):  # type: ignore[no-untyped-def]
+            try:
+                return RealInferenceSession(
+                    self._apex_model_source,
+                    sess_options=self._apex_sess_options,
+                    providers=self._apex_providers,
+                    provider_options=self._apex_provider_options,
+                    **self._apex_kwargs,
+                )
+            except Exception as e:
+                if (
+                    allow_fallback
+                    and not self._apex_using_cpu
+                    and not self._apex_fallback_attempted
+                    and _requested_non_cpu_providers(self._apex_providers)
+                    and _looks_like_onnx_gpu_provider_failure(e)
+                ):
+                    self._apex_fallback_attempted = True
+                    self._apex_using_cpu = True
+                    log.warning(
+                        "onnxruntime InferenceSession init failed with GPU/EP error (%s); falling back to CPUExecutionProvider.",
+                        str(e).strip(),
+                    )
+                    return RealInferenceSession(
+                        self._apex_model_source,
+                        sess_options=self._apex_sess_options,
+                        providers=_cpu_only_provider_list(),
+                        **self._apex_kwargs,
+                    )
+                raise
+
+        def run(self, output_names, input_feed, run_options=None):  # type: ignore[no-untyped-def]
+            try:
+                if run_options is None:
+                    return self._apex_session.run(output_names, input_feed)
+                return self._apex_session.run(
+                    output_names, input_feed, run_options=run_options
+                )
+            except Exception as e:
+                # Retry exactly once on CPU if we were trying a non-CPU provider.
+                if (
+                    not self._apex_using_cpu
+                    and not self._apex_fallback_attempted
+                    and _looks_like_onnx_gpu_provider_failure(e)
+                ):
+                    with _lock:
+                        if not self._apex_using_cpu and not self._apex_fallback_attempted:
+                            self._apex_fallback_attempted = True
+                            self._apex_using_cpu = True
+                            log.warning(
+                                "onnxruntime session.run failed with GPU/EP error (%s); recreating session on CPU and retrying once.",
+                                str(e).strip(),
+                            )
+                            self._apex_session = RealInferenceSession(
+                                self._apex_model_source,
+                                sess_options=self._apex_sess_options,
+                                providers=_cpu_only_provider_list(),
+                                **self._apex_kwargs,
+                            )
+
+                    # Retry once (outside lock).
+                    if run_options is None:
+                        return self._apex_session.run(output_names, input_feed)
+                    return self._apex_session.run(
+                        output_names, input_feed, run_options=run_options
+                    )
+                raise
+
+        def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+            # Delegate all other attributes/methods to the real session.
+            return getattr(self._apex_session, name)
+
+    # Patch the primary public entrypoint.
+    ort_mod.InferenceSession = InferenceSession  # type: ignore[assignment]
+
+
 class _TorchPatchLoader(importlib.abc.Loader):
     def __init__(self, wrapped: importlib.abc.Loader):
         self._wrapped = wrapped
@@ -208,5 +394,44 @@ def _install_nunchaku_c_patch_hook() -> None:
     sys.meta_path.insert(0, _NunchakuCPatchFinder())
 
 
+class _OnnxRuntimePatchLoader(importlib.abc.Loader):
+    def __init__(self, wrapped: importlib.abc.Loader):
+        self._wrapped = wrapped
+
+    def create_module(self, spec):  # type: ignore[no-untyped-def]
+        if hasattr(self._wrapped, "create_module"):
+            return self._wrapped.create_module(spec)  # type: ignore[misc]
+        return None
+
+    def exec_module(self, module):  # type: ignore[no-untyped-def]
+        self._wrapped.exec_module(module)  # type: ignore[misc]
+        _patch_onnxruntime_inference_session(module)
+
+
+class _OnnxRuntimePatchFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname: str, path: Any, target: Any = None):  # type: ignore[no-untyped-def]
+        if fullname != "onnxruntime":
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+        if spec is None or spec.loader is None:
+            return spec
+        spec.loader = _OnnxRuntimePatchLoader(spec.loader)  # type: ignore[assignment]
+        return spec
+
+
+def _install_onnxruntime_patch_hook() -> None:
+    # Patch immediately if already imported.
+    ort_mod = sys.modules.get("onnxruntime")
+    if ort_mod is not None:
+        _patch_onnxruntime_inference_session(ort_mod)
+        return
+    # Otherwise install a one-shot import hook.
+    for f in sys.meta_path:
+        if isinstance(f, _OnnxRuntimePatchFinder):
+            return
+    sys.meta_path.insert(0, _OnnxRuntimePatchFinder())
+
+
 _install_torch_patch_hook()
 _install_nunchaku_c_patch_hook()
+_install_onnxruntime_patch_hook()
