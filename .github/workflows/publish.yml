@@ -74,6 +74,12 @@ jobs:
       - name: Install dependencies
         working-directory: apps/app
         run: npm ci
+      
+      - name: Import Apple signing certs
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
 
       - name: Publish
         working-directory: apps/app
@@ -81,14 +87,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           # Avoid Node "JavaScript heap out of memory" (~2GB default limit).
           NODE_OPTIONS: --max-old-space-size=8192
+          CSC_LINK: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          # electron-builder notarization (Apple ID + app-specific password)
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           # Used by our electron-builder config to set upload/API timeouts.
           ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
-          # Keep mac publish stable by shipping small-only filter pack by default.
-          APEX_BUNDLE_FILTERS_FULL: "0"
-          APEX_BUNDLE_FILTERS_EXAMPLES: "0"
+
         run: npm run publish
 
   publish-linux:
