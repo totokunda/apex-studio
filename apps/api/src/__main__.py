@@ -4,6 +4,9 @@ import re
 import json
 import urllib.request
 import urllib.parse
+import urllib.error
+import ssl
+import shutil
 import platform as _platform
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -1035,6 +1038,102 @@ def _encode_hf_path(path: str) -> str:
     parts = [p for p in (path or "").split("/") if p]
     return "/".join(urllib.parse.quote(p, safe="") for p in parts)
 
+_SSL_CONTEXT: ssl.SSLContext | None = None
+
+
+def _maybe_enable_truststore() -> None:
+    """
+    On Windows, prefer the system certificate store when possible.
+
+    This matches what tools like `curl` often use and avoids bundled-python CA issues
+    in some deployments.
+    """
+    if sys.platform != "win32":
+        return
+    if os.environ.get("APEX_DISABLE_TRUSTSTORE", "").strip().lower() in {"1", "true", "yes"}:
+        return
+    try:
+        import truststore  # type: ignore
+
+        truststore.inject_into_ssl()
+    except Exception:
+        # Optional dependency; ignore if unavailable.
+        return
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """
+    Return an SSL context for outbound HTTPS.
+
+    In some bundled/embedded Python environments on Windows, the default trust store
+    can be missing, causing CERTIFICATE_VERIFY_FAILED. Prefer certifi when available.
+    """
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is not None:
+        return _SSL_CONTEXT
+
+    _maybe_enable_truststore()
+    ctx = ssl.create_default_context()
+    try:
+        import certifi  # type: ignore
+
+        cafile = certifi.where()
+        if cafile and os.path.exists(cafile):
+            ctx = ssl.create_default_context(cafile=cafile)
+    except Exception:
+        # certifi is optional; fall back to system defaults
+        pass
+
+    # Allow explicit CA bundle override (useful for corporate proxies / custom roots).
+    cafile_override = os.environ.get("APEX_UPDATE_CA_BUNDLE", "").strip()
+    if cafile_override:
+        try:
+            p = str(Path(cafile_override).expanduser().resolve())
+            if os.path.exists(p):
+                ctx = ssl.create_default_context(cafile=p)
+        except Exception:
+            pass
+
+    if os.environ.get("APEX_SSL_NO_VERIFY", "").strip().lower() in {"1", "true", "yes"}:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+    _SSL_CONTEXT = ctx
+    return ctx
+
+
+def _friendly_update_network_error(e: Exception) -> str:
+    """
+    Convert noisy urllib/ssl exceptions into a compact, user-facing message.
+    """
+    try:
+        if isinstance(e, urllib.error.URLError) and getattr(e, "reason", None):
+            reason = e.reason  # type: ignore[attr-defined]
+            txt = str(reason)
+        else:
+            txt = str(e)
+    except Exception:
+        txt = "Unknown network error"
+
+    low = (txt or "").lower()
+    if (
+        "certificate_verify_failed" in low
+        or "certificateverificationerror" in low
+        or "unable to get local issuer certificate" in low
+        or "self signed certificate" in low
+        or "self-signed certificate" in low
+    ):
+        return (
+            "SSL certificate verification failed while contacting huggingface.co. "
+            "If you're behind a corporate proxy, install your root CA / configure system certificates "
+            "(Windows Update can refresh root CAs)."
+        )
+    if "timed out" in low:
+        return "Network timed out while checking for updates."
+    if "name or service not known" in low or "temporary failure in name resolution" in low:
+        return "DNS lookup failed while checking for updates."
+    return f"Network error while checking for updates: {txt}".strip()
+
 
 def _hf_json(url: str) -> Any:
     req = urllib.request.Request(
@@ -1044,16 +1143,58 @@ def _hf_json(url: str) -> Any:
             "User-Agent": "apex-engine",
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.urlopen(req, timeout=20, context=_get_ssl_context()) as r:
         raw = r.read()
     return json.loads(raw.decode("utf-8"))
 
 
 def _hf_list_tree(owner: str, repo: str, path: str | None = None) -> list[dict]:
-    base = f"https://huggingface.co/api/models/{owner}/{repo}/tree/main"
-    url = f"{base}/{_encode_hf_path(path)}" if path else base
-    data = _hf_json(url)
-    return data if isinstance(data, list) else []
+    # Prefer the official client. It uses robust HTTP behaviors and supports auth tokens.
+    # Fall back to the raw REST endpoint if huggingface_hub is unavailable.
+    try:
+        from huggingface_hub import HfApi, get_token  # type: ignore
+
+        _maybe_enable_truststore()
+        # If a custom CA bundle is configured, forward it to requests-based clients.
+        cafile_override = os.environ.get("APEX_UPDATE_CA_BUNDLE", "").strip()
+        if cafile_override and cafile_override not in {"-", "none"}:
+            os.environ.setdefault("REQUESTS_CA_BUNDLE", cafile_override)
+            os.environ.setdefault("CURL_CA_BUNDLE", cafile_override)
+
+        api = HfApi()
+        repo_id = f"{owner}/{repo}"
+        token = get_token()
+        items = api.list_repo_tree(
+            repo_id=repo_id,
+            repo_type="model",
+            revision="main",
+            path_in_repo=path or "",
+            recursive=False,
+            token=token,
+        )
+        out: list[dict] = []
+        for it in items:
+            p = str(getattr(it, "path", "") or "")
+            if not p:
+                continue
+            t = getattr(it, "type", None)
+            if t is not None:
+                tt = str(t).lower()
+                kind = "directory" if tt in {"directory", "dir", "folder", "tree"} else "file"
+            else:
+                cls = it.__class__.__name__.lower()
+                if "folder" in cls or "dir" in cls:
+                    kind = "directory"
+                else:
+                    # RepoFile typically has `size`; folders typically don't.
+                    kind = "file" if hasattr(it, "size") else "directory"
+            out.append({"type": kind, "path": p})
+        return out
+    except Exception:
+        base = f"https://huggingface.co/api/models/{owner}/{repo}/tree/main"
+        url = f"{base}/{_encode_hf_path(path)}" if path else base
+        data = _hf_json(url)
+        return data if isinstance(data, list) else []
 
 
 @dataclass(frozen=True)
@@ -1068,6 +1209,9 @@ class UpdateAsset:
     device: str
     python_tag: str
     download_url: str
+    repo_id: str
+    repo_path: str
+    revision: str
 
 
 def _is_prerelease_tag(tag: str) -> bool:
@@ -1210,9 +1354,22 @@ def _list_remote_python_code_assets(
                 continue
 
             dl = (
-                f"https://huggingface.co/{owner}/{repo}/resolve/main/"
-                f"{_encode_hf_path(full_path)}?download=true"
+                None
             )
+            try:
+                from huggingface_hub import hf_hub_url  # type: ignore
+
+                dl = hf_hub_url(
+                    repo_id=f"{owner}/{repo}",
+                    filename=full_path,
+                    repo_type="model",
+                    revision="main",
+                )
+            except Exception:
+                dl = (
+                    f"https://huggingface.co/{owner}/{repo}/resolve/main/"
+                    f"{_encode_hf_path(full_path)}?download=true"
+                )
             out.append(
                 UpdateAsset(
                     tag=tag,
@@ -1225,6 +1382,9 @@ def _list_remote_python_code_assets(
                     device=str(parsed["device"]),
                     python_tag=str(parsed["python_tag"]),
                     download_url=dl,
+                    repo_id=f"{owner}/{repo}",
+                    repo_path=full_path,
+                    revision="main",
                 )
             )
 
@@ -1302,7 +1462,7 @@ def _download_to(url: str, dest: Path, *, quiet: bool) -> None:
         return
 
     req = urllib.request.Request(url, headers={"User-Agent": "apex-engine"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urllib.request.urlopen(req, timeout=60, context=_get_ssl_context()) as r:
         total = None
         try:
             total = int(r.headers.get("Content-Length") or "0") or None
@@ -1331,6 +1491,46 @@ def _download_to(url: str, dest: Path, *, quiet: bool) -> None:
         os.replace(tmp, dest)
         if not quiet:
             print(f"Downloaded: {dest}")
+
+
+def _download_update_asset(asset: UpdateAsset, dest: Path, *, quiet: bool) -> None:
+    """
+    Download an update asset into `dest`.
+
+    Prefer `huggingface_hub.hf_hub_download` (resume, auth, robust HTTP), but fall back
+    to the precomputed `download_url` via urllib.
+    """
+    dest = Path(dest).resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 0:
+        return
+    try:
+        from huggingface_hub import hf_hub_download, get_token  # type: ignore
+
+        _maybe_enable_truststore()
+        cafile_override = os.environ.get("APEX_UPDATE_CA_BUNDLE", "").strip()
+        if cafile_override and cafile_override not in {"-", "none"}:
+            os.environ.setdefault("REQUESTS_CA_BUNDLE", cafile_override)
+            os.environ.setdefault("CURL_CA_BUNDLE", cafile_override)
+
+        token = get_token()
+        cached_path = hf_hub_download(
+            repo_id=asset.repo_id,
+            filename=asset.repo_path,
+            repo_type="model",
+            revision=asset.revision,
+            cache_dir=str(dest.parent),
+            token=token,
+            resume_download=True,
+        )
+        # Copy into our predictable cache filename.
+        shutil.copyfile(cached_path, dest)
+        if not quiet:
+            print(f"Downloaded: {dest}")
+        return
+    except Exception:
+        # Fallback: raw URL fetch (still uses our SSL context).
+        _download_to(asset.download_url, dest, quiet=quiet)
 
 
 def _apply_code_update(archive_path: Path, target_dir: Path, *, quiet: bool) -> None:
@@ -1413,9 +1613,28 @@ def check_updates(
     current_sem = _semver_triplet_prefix(current_version) or (0, 0, 0)
     current_is_prerelease = _is_prerelease_tag(current_version)
 
-    assets = _list_remote_python_code_assets(
-        owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
-    )
+    try:
+        assets = _list_remote_python_code_assets(
+            owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
+        )
+    except Exception as e:
+        msg = _friendly_update_network_error(e)
+        if format.strip().lower() == "json":
+            payload = {
+                "current": {
+                    "version": current_version,
+                    "device": current_gpu,
+                    "python_tag": _python_tag(),
+                    "platform": sys.platform,
+                    "arch": _platform.machine(),
+                },
+                "updates": [],
+                "error": {"message": msg},
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return
+        print(msg)
+        return
  
     if not any_device:
         preferred = [a for a in assets if a.device.lower() == current_gpu.lower()]
@@ -1564,9 +1783,15 @@ def update(
     current_sem = _semver_triplet_prefix(current_version) or (0, 0, 0)
     current_is_prerelease = _is_prerelease_tag(current_version)
 
-    assets = _list_remote_python_code_assets(
-        owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
-    )
+    try:
+        assets = _list_remote_python_code_assets(
+            owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
+        )
+    except Exception as e:
+        msg = _friendly_update_network_error(e)
+        if not quiet:
+            print(msg, file=sys.stderr)
+        raise typer.Exit(code=2)
     if not any_device:
         preferred = [a for a in assets if a.device.lower() == current_gpu.lower()]
         candidates = preferred or assets
@@ -1607,7 +1832,7 @@ def update(
     if not quiet:
         print(f"Updating {current_version} -> {chosen.asset_version}")
         print(f"Downloading: {chosen.asset_name}")
-    _download_to(chosen.download_url, archive_path, quiet=quiet)
+    _download_update_asset(chosen, archive_path, quiet=quiet)
     _apply_code_update(archive_path, target, quiet=quiet)
     _cleanup_cached_update_archive(archive_path, cache_root=cache_root, quiet=quiet)
     if not quiet:
