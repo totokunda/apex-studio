@@ -513,7 +513,7 @@ const PreprocessorDownloadSection: React.FC<{
                     {formatSize(fileSizeBytes)}
                   </div>
                 </div>
-                <div className="mt-2 flex flex-col gap-y-1">
+                {isDownloading && <div className="mt-2 flex flex-col gap-y-1">
                   <ProgressBar percent={pct} barClassName="bg-brand-light/50" />
                   <div className="flex items-center justify-between text-[10px] text-brand-light/80">
                     {typeof wsForUi?.downloadedBytes === "number" &&
@@ -539,7 +539,7 @@ const PreprocessorDownloadSection: React.FC<{
                       </span>
                     )}
                   </div>
-                </div>
+                </div>}
               </div>
             );
           })
