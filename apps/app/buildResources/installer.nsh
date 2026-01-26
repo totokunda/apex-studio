@@ -10,6 +10,21 @@
 !macroend
 
 !macro customInstall
+    ; If we ship the VC++ runtime DLLs app-locally alongside our bundled Python,
+    ; we do NOT need to install/upgrade the system-wide vc_redist (avoids UAC).
+    ;
+    ; Expected packaged layout (electron-builder extraResources):
+    ;   $INSTDIR\resources\python-api\apex-engine\apex-studio\python.exe
+    ;   $INSTDIR\resources\python-api\apex-engine\apex-studio\vcruntime140_1.dll
+    ;   $INSTDIR\resources\python-api\apex-engine\apex-studio\msvcp140.dll
+    StrCpy $9 "$INSTDIR\resources\python-api\apex-engine\apex-studio"
+    IfFileExists "$9\python.exe" 0 vc_redist_check_system
+    IfFileExists "$9\vcruntime140_1.dll" 0 vc_redist_check_system
+    IfFileExists "$9\msvcp140.dll" 0 vc_redist_check_system
+    DetailPrint "VC++ runtime: using app-local DLLs (skip vc_redist install)"
+    Goto vc_redist_done
+
+    vc_redist_check_system:
     ; Ensure MSVC runtime (PyTorch dependency on Windows).
     ; If missing, torch can fail to import with "c10.dll ... dependency" errors.
     ;
@@ -21,10 +36,20 @@
     ;   - but our bundled Python is x64, which needs the x64 VC runtime in the *real* System32.
     ;   So we must check the x64 runtime (registry + real System32 path via Sysnative on WOW64).
 
-    ; Detect VC++ 2015-2022 (14.x) x64 runtime via registry (authoritative).
-    ; NOTE: Avoid DLL presence checks here; some apps can drop DLLs without registering the runtime,
-    ; which makes the "DLL exists" approach produce false positives (skipping install when still broken).
+    ; Detect VC++ 2015-2022 (14.x) x64 runtime via registry, and also sanity-check that
+    ; the expected runtime DLLs exist in the *real* System32 (covers broken/partial installs).
+    ;
+    ; electron-builder often runs 32-bit NSIS on 64-bit Windows, so:
+    ; - $SYSDIR == SysWOW64
+    ; - real System32 must be accessed via $WINDIR\Sysnative
     StrCpy $1 0
+    StrCpy $5 "$SYSDIR"
+    ${If} ${IsWow64}
+        StrCpy $5 "$WINDIR\Sysnative"
+    ${EndIf}
+
+    ; $7 = registryInstalled (0/1)
+    StrCpy $7 0
     ${If} ${RunningX64}
         SetRegView 64
     ${EndIf}
@@ -32,12 +57,29 @@
     ReadRegDWORD $2 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
     ${IfNot} ${Errors}
         ${If} $2 == 1
-            StrCpy $1 1
+            StrCpy $7 1
         ${EndIf}
     ${EndIf}
     ; Restore default registry view for the rest of the installer (important for 32-bit NSIS on x64).
     ${If} ${IsWow64}
         SetRegView 32
+    ${EndIf}
+
+    ; $6 = dllMissing (0/1)
+    StrCpy $6 0
+    IfFileExists "$5\msvcp140.dll" 0 vc_dll_missing
+    IfFileExists "$5\vcruntime140_1.dll" 0 vc_dll_missing
+    Goto vc_dll_check_done
+    vc_dll_missing:
+        StrCpy $6 1
+    vc_dll_check_done:
+
+    DetailPrint "VC++ runtime check: regInstalled=$7 dllMissing=$6 system32=$5"
+
+    ; Consider runtime installed only if registry says installed AND DLLs are present.
+    ${If} $7 == 1
+    ${AndIf} $6 == 0
+        StrCpy $1 1
     ${EndIf}
 
     ; If installed already, do nothing (no prompt).
