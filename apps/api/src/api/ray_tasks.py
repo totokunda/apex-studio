@@ -420,9 +420,9 @@ def _optimize_mp4_for_editor_in_place(
     - APEX_VIDEO_EDITOR_NO_BFRAMES: disable B-frames for monotonic timestamps (default: true)
     """
     try:
-        import subprocess
+        import shlex
 
-        from src.utils.ffmpeg import get_ffmpeg_path
+        from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
 
         if not _env_flag("APEX_VIDEO_EDITOR_OPTIMIZE", default=True):
             return False
@@ -484,26 +484,16 @@ def _optimize_mp4_for_editor_in_place(
 
         temp_out_path = base.with_name(f"{base.stem}_editor{base.suffix}")
 
-        cmd: List[str] = [
-            get_ffmpeg_path(),
-            "-y",
-            "-i",
-            str(base),
-            # Video only: audio is muxed later in our pipeline.
-            "-an",
-            "-map",
-            "0:v:0",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-preset",
-            preset,
-            "-crf",
-            str(crf),
-            "-sc_threshold",
-            "0",
-        ]
+        # Hard timeout so this post-pass can never wedge a server/worker indefinitely.
+        try:
+            timeout_s = float(
+                os.environ.get("APEX_VIDEO_EDITOR_FFMPEG_TIMEOUT_SECONDS", "60") or "60"
+            )
+        except Exception:
+            timeout_s = 60.0
+        timeout_s = max(5.0, min(60.0 * 10.0, float(timeout_s)))
+
+        ffmpeg_path = get_ffmpeg_path()
 
         # GOP tuning for smoother seeking/scrubbing (requires re-encode).
         gop: Optional[int] = None
@@ -511,6 +501,57 @@ def _optimize_mp4_for_editor_in_place(
             gop = int(gop_frames_int)
         elif fps_int is not None:
             gop = int(max(1, round(float(fps_int) * float(gop_seconds))))
+
+        # Common flags for daemon-safe invocations:
+        # - `-nostdin` + `stdin=DEVNULL` prevents ffmpeg from interacting with process stdin.
+        # - `-hide_banner` keeps logs small; we also force loglevel error.
+        common: List[str] = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(base),
+            # Video only: audio is muxed later in our pipeline.
+            "-an",
+            "-map",
+            "0:v:0",
+        ]
+
+        # If we don't know FPS and no GOP override is requested, prefer a fast stream copy
+        # to just relocate the moov atom (`+faststart`) without re-encoding.
+        candidate_cmds: List[List[str]] = []
+        if fps_int is None and gop is None:
+            candidate_cmds.append(
+                common
+                + [
+                    "-c:v",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    str(temp_out_path),
+                ]
+            )
+
+        # Re-encode path (needed for CFR/GOP/B-frames tuning).
+        cmd: List[str] = (
+            common
+            + [
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                preset,
+                "-crf",
+                str(crf),
+                "-sc_threshold",
+                "0",
+            ]
+        )
+
         if gop is not None:
             cmd.extend(
                 [
@@ -536,12 +577,38 @@ def _optimize_mp4_for_editor_in_place(
             ]
         )
 
-        proc = subprocess.run(cmd, capture_output=True)
-        if proc.returncode != 0 or not temp_out_path.is_file():
-            return False
+        candidate_cmds.append(cmd)
 
-        temp_out_path.replace(base)
-        return True
+        last_err: Optional[str] = None
+        for attempt, cmd_i in enumerate(candidate_cmds, start=1):
+            try:
+                log_path = base.with_name(f"{base.stem}_editor_ffmpeg_{attempt}.log")
+                logger.info(
+                    "Optimizing MP4 for editor (%s/%s): %s (timeout=%.1fs)",
+                    attempt,
+                    len(candidate_cmds),
+                    shlex.join(cmd_i),
+                    timeout_s,
+                )
+                rc, lp, _ = run_ffmpeg(cmd_i, timeout_s=timeout_s, log_path=log_path)
+                if rc != 0 or not temp_out_path.is_file():
+                    last_err = f"returncode={rc}; log={lp}"
+                    continue
+
+                logger.info("MP4 editor optimization succeeded (attempt %s).", attempt)
+                temp_out_path.replace(base)
+                return True
+            except Exception as e:
+                last_err = str(e)
+                try:
+                    if temp_out_path.exists():
+                        temp_out_path.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except Exception:
+                    pass
+
+        if last_err:
+            logger.warning("MP4 editor optimization failed: %s", last_err)
+        return False
     except Exception:
         return False
 
@@ -2405,22 +2472,10 @@ def _execute_preprocessor(
         else:
             result = preprocessor(cache.image, job_id=job_id, **kwargs)
 
+        
+        logger.info(f"Saving result to {cache.result_path}")
         result_path = cache.save_result(result)
-
-        # Post-pass: generate a seek/editor-friendly MP4 for preprocessor outputs too.
-        # Best-effort only; leaves the original file intact on failure.
-        try:
-            if media_type == "video" and isinstance(result_path, str):
-                fps_hint = None
-                try:
-                    fps_hint = int(
-                        round(float((cache._video_info or {}).get("fps") or 0))
-                    )
-                except Exception:
-                    fps_hint = None
-                _optimize_mp4_for_editor_in_place(result_path, fps=fps_hint)
-        except Exception:
-            pass
+        logger.info(f"Result saved to {result_path}")
 
         send_progress(1.0, "Result saved")
 
@@ -2430,7 +2485,7 @@ def _execute_preprocessor(
             if isinstance(result_path, str) and result_path.lower().endswith(".mp4"):
                 try:
                     preproc_gop = int(
-                        os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "1") or "1"
+                        os.environ.get("APEX_VIDEO_EDITOR_PREPROCESSOR_GOP", "4") or "4"
                     )
                 except Exception:
                     preproc_gop = 4
@@ -2444,8 +2499,17 @@ def _execute_preprocessor(
                 except Exception:
                     fps_hint = None
 
+                logger.info(
+                    "Optimizing preprocessor MP4 for editor in place %s (fps=%s, gop=%s)",
+                    result_path,
+                    fps_hint,
+                    preproc_gop,
+                )
                 _optimize_mp4_for_editor_in_place(
                     result_path, fps=fps_hint, gop_frames=preproc_gop
+                )
+                logger.info(
+                    "Preprocessor MP4 editor optimization completed for %s", result_path
                 )
         except Exception:
             pass
@@ -2851,9 +2915,8 @@ def _run_engine_from_manifest_impl(
             Best-effort helper to mux one or more audio files into a video using ffmpeg.
             Returns the new video path on success, or None on failure.
             """
-            import subprocess
             import os
-            from src.utils.ffmpeg import get_ffmpeg_path
+            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
 
             try:
                 valid_audio_paths = [
@@ -2866,6 +2929,7 @@ def _run_engine_from_manifest_impl(
                 # We first mux into a temporary file, then overwrite the original
                 # video so that the final saved filename remains unchanged.
                 temp_out_path = base.with_name(f"{base.stem}_with_audio{base.suffix}")
+                log_path = job_dir / f"{base.stem}_mux_audio.log"
 
                 cmd: List[str] = [get_ffmpeg_path(), "-y", "-i", video_path]
                 for ap in valid_audio_paths:
@@ -2926,10 +2990,10 @@ def _run_engine_from_manifest_impl(
                         ]
                     )
 
-                proc = subprocess.run(cmd, capture_output=True)
-                if proc.returncode != 0 or not temp_out_path.is_file():
+                rc, lp, _ = run_ffmpeg(cmd, log_path=log_path)
+                if rc != 0 or not temp_out_path.is_file():
                     logger.warning(
-                        f"ffmpeg audio mux failed with code {proc.returncode}"
+                        f"ffmpeg audio mux failed (code={rc}) (log={lp})"
                     )
                     return None
                 try:
@@ -2952,9 +3016,8 @@ def _run_engine_from_manifest_impl(
             Best-effort helper to mux the first audio track from `source_video_path`
             into `video_path` using ffmpeg.
             """
-            import subprocess
             import os
-            from src.utils.ffmpeg import get_ffmpeg_path
+            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
 
             try:
                 if not (
@@ -2968,6 +3031,7 @@ def _run_engine_from_manifest_impl(
                 base = Path(video_path)
                 # Mux into a temporary file, then overwrite the original.
                 temp_out_path = base.with_name(f"{base.stem}_with_audio{base.suffix}")
+                log_path = job_dir / f"{base.stem}_mux_audio_from_source.log"
 
                 # Video from generated output (0), audio from source input (1).
                 # Encode audio to AAC for MP4 compatibility; copy video stream.
@@ -2997,8 +3061,8 @@ def _run_engine_from_manifest_impl(
                     "+faststart",
                     str(temp_out_path),
                 ]
-                proc = subprocess.run(cmd, capture_output=True)
-                if proc.returncode != 0 or not temp_out_path.is_file():
+                rc, lp, _ = run_ffmpeg(cmd, log_path=log_path)
+                if rc != 0 or not temp_out_path.is_file():
                     return None
                 try:
                     temp_out_path.replace(base)
@@ -3575,7 +3639,7 @@ def run_frame_interpolation(
         # Try to mux audio from input_path into the final output without changing rate/tempo
         # If no audio is present, fall back to the video-only file
         try:
-            from src.utils.ffmpeg import get_ffmpeg_path
+            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
 
             # Use ffmpeg with stream copy to preserve original audio rate/tempo
             # -map 0:v:0 takes video from the first input (our generated video)
@@ -3600,9 +3664,11 @@ def run_frame_interpolation(
                 "+faststart",
                 final_out_path,
             ]
-            proc = subprocess.run(ffmpeg_cmd, capture_output=True)
-            if proc.returncode != 0:
+            log_path = job_dir / "ffmpeg_mux_audio.log"
+            rc, lp, _ = run_ffmpeg(ffmpeg_cmd, log_path=log_path)
+            if rc != 0:
                 # If muxing failed (e.g., no audio stream), just use the video-only output
+                logger.warning(f"ffmpeg mux audio failed (code={rc}) (log={lp})")
                 shutil.move(video_only_path, final_out_path)
         except Exception as e:
             logger.error(f"Failed to mux audio: {e}")

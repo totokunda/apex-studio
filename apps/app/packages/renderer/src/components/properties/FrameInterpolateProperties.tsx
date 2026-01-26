@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useClipStore } from "@/lib/clip";
 import { VideoClipProps } from "@/lib/types";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
@@ -18,18 +18,16 @@ import {
 } from "@/components/ui/select";
 import {
   runPostprocessor,
-  getPostprocessorStatus,
-  cancelPostprocessor,
 } from "@/lib/postprocessor/api";
-import { usePostprocessorJob } from "@/lib/postprocessor/hooks";
 import { useControlsStore } from "@/lib/control";
-import { pathToFileURLString } from "@app/preload";
 import { getPreviewPath } from "@app/preload";
 import { exportClip } from "@app/export-renderer";
 import { v4 as uuidv4 } from "uuid";
 import { cn } from "@/lib/utils";
 import { TbCancel } from "react-icons/tb";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
+import { useQuery } from "@tanstack/react-query";
+import { cancelRayJob, fetchRayJob } from "@/lib/jobs/api";
 
 interface FrameInterpolatePropertiesProps {
   clipId: string;
@@ -49,12 +47,14 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
     return typeof fps === "number" && isFinite(fps) && fps > 0 ? fps : 24;
   }, [asset.path]);
 
-  const [jobId, setJobId] = useState<string | null>(null);
+  const jobId =
+    typeof (clip as any)?.frameInterpolateJobId === "string"
+      ? ((clip as any).frameInterpolateJobId as string)
+      : null;
   const getClipsForGroup = useClipStore((s) => s.getClipsForGroup);
   const getClipsByType = useClipStore((s) => s.getClipsByType);
   const getClipPositionScore = useClipStore((s) => s.getClipPositionScore);
   const timelines = useClipStore((s) => s.timelines);
-  const { progress, isComplete, isFailed, error } = usePostprocessorJob(jobId);
   const updateClip = useClipStore((s) => s.updateClip);
   const fps = useControlsStore((s) => s.fps);
   const [multiplier, setMultiplier] = useState<number>(2);
@@ -67,7 +67,6 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
     originalAssetId && clip.assetId !== originalAssetId,
   );
   const [scale, setScale] = useState<number>(1);
-  const addAsset = useClipStore((s) => s.addAsset);
   const [isPreparing, setIsPreparing] = useState<boolean>(false);
   const allowedScales = useMemo(() => [0.25, 0.5, 1.0, 2.0, 4.0], []);
   const snapScale = (value: number) => {
@@ -82,10 +81,56 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
     return nearest;
   };
 
+  const { data: rayJob } = useQuery({
+    queryKey: ["rayJob", jobId],
+    queryFn: async () => {
+      if (!jobId) return null;
+      return await fetchRayJob(jobId);
+    },
+    enabled: !!jobId,
+    placeholderData: (prev) => prev ?? null,
+    retry: true,
+    refetchOnWindowFocus: true,
+    refetchInterval: 1000,
+    refetchIntervalInBackground: true,
+  });
+
+  const jobStatus = String(rayJob?.latest?.status || rayJob?.status || "")
+    .toLowerCase()
+    .trim();
+  const jobProgressRaw =
+    (rayJob?.latest &&
+    typeof (rayJob.latest as any)?.progress === "number"
+      ? (rayJob.latest as any).progress
+      : null) ?? (typeof (rayJob as any)?.progress === "number" ? (rayJob as any).progress : null);
+  const progressPct = (() => {
+    const p = typeof jobProgressRaw === "number" ? jobProgressRaw : 0;
+    const pct = p <= 1 ? p * 100 : p;
+    return Math.max(0, Math.min(100, Math.floor(pct)));
+  })();
+  const isFailed = jobStatus === "error" || jobStatus === "failed";
+  const isComplete = jobStatus === "complete" || jobStatus === "completed";
+  const isCanceled = jobStatus === "cancelled" || jobStatus === "canceled";
+  const isRunning =
+    !!jobId &&
+    !isComplete &&
+    !isFailed &&
+    !isCanceled &&
+    (jobStatus === "running" ||
+      jobStatus === "processing" ||
+      jobStatus === "queued" ||
+      jobStatus === "pending" ||
+      jobStatus === "submitted" ||
+      jobStatus === "preview" ||
+      jobStatus === "");
+
   const handleRunPostProcessor = async () => {
     if (!asset.path || isPreparing) return;
     setIsPreparing(true);
     try {
+      const requestedJobId = uuidv4();
+      updateClip(clip.clipId, { frameInterpolateJobId: requestedJobId } as any);
+
       // Prefer original source if present (pre-interpolation), else current clip src
       const baseInputPath = originalAssetId ? (getAssetById(originalAssetId)?.path || asset.path) : asset.path;
       const mediaInfo =
@@ -174,50 +219,24 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
         input_path: inputPathForProcessing,
         target_fps: targetFps,
         scale,
+        job_id: requestedJobId,
       });
       if (res.success && res.data?.job_id) {
-        setJobId(res.data.job_id);
+        // Backend may echo or override; ensure clip points at the canonical id.
+        if (res.data.job_id !== requestedJobId) {
+          updateClip(clip.clipId, {
+            frameInterpolateJobId: res.data.job_id,
+          } as any);
+        }
+      } else {
+        updateClip(clip.clipId, { frameInterpolateJobId: undefined } as any);
       }
     } catch {
+      updateClip(clip.clipId, { frameInterpolateJobId: undefined } as any);
     } finally {
       setIsPreparing(false);
     }
   };
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!clip || !isComplete || !jobId) return;
-      try {
-        // Poll a few times in case result propagation lags behind completion
-        for (let attempt = 0; attempt < 10 && !cancelled; attempt++) {
-          const status = await getPostprocessorStatus(jobId);
-          const resultPath =
-            (status?.data as any)?.result?.result_path ||
-            (status?.data as any)?.result_path;
-          if (status.success && typeof resultPath === "string" && resultPath) {
-            const fileUrl = pathToFileURLString(resultPath);
-            // we need to fetch the media info to get the fps (warm cache)
-            await getMediaInfo(fileUrl, {
-              sourceDir: "apex-cache",
-            });
-            let newAsset = addAsset({ path: fileUrl });
-            if (asset.id !== newAsset.id) {
-              updateClip(clip.clipId, {
-                assetId: newAsset.id,
-                assetIdHistory: [...(clip.assetIdHistory || []), originalAssetId || asset.id],
-              });
-            }
-            break;
-          }
-          await new Promise((r) => setTimeout(r, attempt < 3 ? 300 : 800));
-        }
-      } catch {}
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isComplete, jobId, clip?.clipId]);
 
   return (
     <div className="flex flex-col gap-y-3 p-4 justify-start">
@@ -343,30 +362,35 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
               <div
                 className="h-full bg-brand-light transition-all duration-150"
                 style={{
-                  width: `${Math.max(0, Math.min(100, Math.floor(progress || 0)))}%`,
+                  width: `${progressPct}%`,
                 }}
               />
             </div>
             <div className="flex items-center justify-between text-brand-light/90 text-[10.5px] mt-1.5 font-medium">
               <span>
-                {error ? "Failed" : isComplete ? "Complete" : "Processing..."}
+                {isFailed ? "Failed" : isComplete ? "Complete" : "Processing..."}
               </span>
               <span>
-                {Math.max(0, Math.min(100, Math.floor(progress || 0)))}%
+                {progressPct}%
               </span>
             </div>
           </div>
         )}
 
-        {jobId && !isComplete && !isFailed ? (
+        {jobId && isRunning ? (
           <button
             className="w-full mt-2 py-2 px-6 text-[11px] flex items-center justify-center gap-x-1 transition-all duration-200 shadow font-medium rounded-[6px] bg-red-500/50 hover:bg-red-500/60 border border-red-500/30  text-brand-lighter hover:opacity-90"
             onClick={async () => {
               try {
-                await cancelPostprocessor(jobId);
+                await cancelRayJob(jobId);
               } catch {}
-              // Reset UI state immediately after attempting cancel
-              setJobId(null);
+              // Reset clip state immediately after attempting cancel
+              updateClip(clip.clipId, { frameInterpolateJobId: undefined } as any);
+              try {
+                window.dispatchEvent(
+                  new CustomEvent("jobs-menu-reload", { detail: { jobId } }),
+                );
+              } catch {}
             }}
           >
             <TbCancel className="w-3.5 h-3.5" />
@@ -383,7 +407,7 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
                 await getMediaInfo(originalAsset.path, { sourceDir: "apex-cache" });
               } catch {}
               updateClip(clip.clipId, { assetId: clip.assetIdHistory[clip.assetIdHistory.length - 1] } as any);
-              setJobId(null);
+              updateClip(clip.clipId, { frameInterpolateJobId: undefined } as any);
             }}
           >
             Revert to Original
@@ -391,7 +415,7 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
         ) : (
           <button
             className="w-full mt-2 py-2 border border-brand-light/10 px-6 rounded-[6px] font-medium text-[11px] flex items-center justify-center gap-x-1 transition-all duration-200 shadow bg-brand text-brand-lighter hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
-            disabled={!asset.path || hasInterpolated || isPreparing}
+            disabled={!asset.path || hasInterpolated || isPreparing || !!jobId}
             onClick={handleRunPostProcessor}
           >
             <LuPlay className="w-3.5 h-3.5" />
