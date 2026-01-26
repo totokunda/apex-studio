@@ -49,6 +49,86 @@ import struct
 _ENGINE_WARM_POOL: EngineWarmPool | None = None
 
 
+def _truncate_str(value: Any, *, limit: int = 12000) -> str:
+    try:
+        s = str(value) if value is not None else ""
+    except Exception:
+        s = ""
+    if limit <= 0:
+        return ""
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 12)] + "…(truncated)"
+
+
+def _ws_send_update(
+    ws_bridge: Any,
+    job_id: str,
+    progress: Optional[float],
+    message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Best-effort websocket publish from Ray workers.
+
+    Important:
+    - `RayWebSocketBridge.send_update` expects `status` to be provided via `metadata["status"]`.
+    - We must never raise from here; errors should not shadow the original failure.
+    """
+    try:
+        if ws_bridge is None:
+            return
+        # Keep payloads small (Ray bridge will sanitize too, but do a first pass here).
+        safe_msg = _truncate_str(message, limit=6000)
+        safe_meta: Dict[str, Any] = dict(metadata or {})
+        ray.get(ws_bridge.send_update.remote(job_id, progress, safe_msg, safe_meta))
+    except Exception:
+        return
+
+
+def _ws_send_error(
+    ws_bridge: Any,
+    job_id: str,
+    *,
+    user_message: str,
+    err: Any,
+    tb: Optional[str] = None,
+    stage: Optional[str] = None,
+    bucket: Optional[str] = None,
+    progress: float = 0.0,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Publish a standardized error payload suitable for UI toasts.
+
+    Renderer-side convention:
+    - `status: "error"` is derived from `metadata["status"]`
+    - human-facing summary should live in `message`
+    - machine/debug detail should live in `metadata.error` and `metadata.traceback`
+    """
+    try:
+        meta: Dict[str, Any] = {"status": "error"}
+        if stage:
+            meta["stage"] = str(stage)
+        if bucket:
+            meta["bucket"] = str(bucket)
+        try:
+            meta["error_type"] = type(err).__name__
+        except Exception:
+            pass
+        meta["error"] = _truncate_str(err, limit=8000)
+        if tb:
+            meta["traceback"] = _truncate_str(tb, limit=20000)
+        if extra:
+            try:
+                meta.update(dict(extra))
+            except Exception:
+                pass
+        _ws_send_update(ws_bridge, job_id, progress, user_message, meta)
+    except Exception:
+        return
+
+
 def _get_engine_warm_pool() -> EngineWarmPool:
     global _ENGINE_WARM_POOL
     if _ENGINE_WARM_POOL is None:
@@ -78,13 +158,13 @@ def _require_tracked_job_or_fail(
         # Best-effort: emit a websocket update so the UI can surface the failure.
         try:
             if ws_bridge is not None:
-                ray.get(
-                    ws_bridge.send_update.remote(
-                        job_id,
-                        0.0,
-                        "Untracked job rejected",
-                        {"status": "error", "error": str(e)},
-                    )
+                _ws_send_error(
+                    ws_bridge,
+                    job_id,
+                    user_message="Untracked job rejected",
+                    err=e,
+                    tb=traceback.format_exc(),
+                    stage="guard",
                 )
         except Exception:
             pass
@@ -108,7 +188,7 @@ def _job_marked_cancelled(job_id: str) -> bool:
 @ray.remote
 class EngineRunner:
     """
-    GPU-pinned, long-lived actor that executes engine runs/warmups.
+    GPU-pinned, long-lived actor that executes engine runs.
 
     Why this exists:
     - `EngineWarmPool` is per-process. With plain Ray tasks, Ray may create multiple
@@ -117,17 +197,6 @@ class EngineRunner:
     - By routing engine work through a single actor per GPU, we guarantee there is
       only one warm pool per GPU (and thus only one warm engine per key).
     """
-
-    def warmup_engine_from_manifest(
-        self,
-        manifest_path: str,
-        selected_components: Optional[Dict[str, Any]] = None,
-        *,
-        mode: str = "engine",
-    ) -> Dict[str, Any]:
-        return _warmup_engine_from_manifest_impl(
-            manifest_path, selected_components, mode=mode
-        )
 
     def run_engine_from_manifest(
         self,
@@ -961,181 +1030,6 @@ def _warm_weights_disabled() -> bool:
     return False
 
 
-def _warmup_engine_from_manifest_impl(
-    manifest_path: str,
-    selected_components: Optional[Dict[str, Any]] = None,
-    *,
-    mode: str = "engine",
-) -> Dict[str, Any]:
-    _apply_memory_env_from_store()
-
-    selected_components = selected_components or {}
-    mode = (mode or "engine").strip().lower()
-    if mode not in {"disk", "engine", "both"}:
-        mode = "engine"
-
-    engine = None
-    engine_pool_key = None
-    pooled = False
-    pool = _get_engine_warm_pool()
-
-    try:
-        from src.utils.yaml import load_yaml as load_manifest_yaml
-        from src.manifest.loader import validate_and_normalize
-        from src.engine.registry import UniversalEngine
-
-        raw = load_manifest_yaml(manifest_path)
-        config = validate_and_normalize(raw)
-
-        engine_type = config.get("engine") or (config.get("spec") or {}).get("engine")
-        model_type = config.get("type") or (config.get("spec") or {}).get("model_type")
-        if isinstance(model_type, list):
-            model_type = model_type[0] if model_type else None
-
-        attention_type = None
-        try:
-            attention_type = (
-                (selected_components or {}).get("attention", {}).get("name", None)
-            )
-        except Exception:
-            attention_type = None
-
-        def _bool_env(name: str, default: bool = True) -> bool:
-            try:
-                v = os.environ.get(name)
-                if v is None:
-                    return default
-                return str(v).strip().lower() not in ("0", "false", "no", "off")
-            except Exception:
-                return default
-
-        auto_mm = _bool_env("AUTO_MEMORY_MANAGEMENT", False)
-        disable_auto_mm = _env_flag("APEX_DISABLE_AUTO_MEMORY_MANAGEMENT", default=False)
-
-        engine_kwargs = config.get("engine_kwargs", {}) or {}
-        input_kwargs = {
-            "engine_type": engine_type,
-            "yaml_path": manifest_path,
-            "model_type": model_type,
-            "selected_components": selected_components,
-            "auto_memory_management": auto_mm,
-            **engine_kwargs,
-        }
-        if attention_type:
-            input_kwargs["attention_type"] = attention_type
-
-        # Disk warmup: create an engine instance on CPU to trigger download() + disk page-cache prewarm.
-        # (BaseEngine.download does a bounded, best-effort mmap page-touch over weight files.)
-        disk_ok = False
-        if mode in {"disk", "both"}:
-            try:
-                cpu_kwargs = dict(input_kwargs)
-                cpu_kwargs["device"] = torch.device("cpu")
-                _ = UniversalEngine(**cpu_kwargs)
-                disk_ok = True
-            except Exception as e:
-                logger.warning(f"Disk warmup failed for {manifest_path}: {e}")
-                disk_ok = False
-
-        if mode in {"engine", "both"}:
-            engine_pool_key = _engine_pool_key(
-                manifest_path=manifest_path,
-                engine_type=engine_type,
-                model_type=model_type,
-                selected_components=selected_components or {},
-                engine_kwargs=engine_kwargs,
-                attention_type=attention_type,
-                auto_memory_management=auto_mm,
-                disable_auto_memory_management=disable_auto_mm,
-            )
-
-            def _factory():
-                return UniversalEngine(**input_kwargs)
-
-            allow_pool = not _warm_weights_disabled()
-            engine, pooled = pool.acquire(
-                engine_pool_key, _factory, allow_pool=allow_pool
-            )
-
-            # Optional: load weights/components to avoid first-run stalls.
-            # This can be expensive; keep it opt-in.
-            if _env_flag("APEX_WARMUP_LOAD_COMPONENTS", default=False):
-                warm_components_raw = os.environ.get(
-                    "APEX_WARMUP_COMPONENTS", "scheduler,text_encoder,vae,transformer"
-                )
-                warm_components_raw = str(warm_components_raw or "").strip().lower()
-                warm_components: List[str]
-                if warm_components_raw in {"*", "all"}:
-                    warm_components = []
-                    try:
-                        comps_cfg = (engine.engine.config or {}).get("components", [])  # type: ignore[union-attr]
-                        if isinstance(comps_cfg, list):
-                            for c in comps_cfg:
-                                if isinstance(c, dict):
-                                    if c.get("name"):
-                                        warm_components.append(str(c.get("name")))
-                                    if c.get("type"):
-                                        warm_components.append(str(c.get("type")))
-                    except Exception:
-                        warm_components = []
-                else:
-                    warm_components = [
-                        s.strip() for s in warm_components_raw.split(",") if s.strip()
-                    ]
-
-                if warm_components:
-                    try:
-                        eng_impl = getattr(engine, "engine", None)
-                        comps_cfg = (
-                            getattr(eng_impl, "config", {}).get("components", [])
-                            if eng_impl is not None
-                            else []
-                        )
-                        if eng_impl is not None and isinstance(comps_cfg, list):
-                            eng_impl.load_components(comps_cfg, warm_components)
-                    except Exception as e:
-                        logger.warning(
-                            f"Engine component warmup failed for key={engine_pool_key}: {e}"
-                        )
-
-            # Release back into pool for future runs.
-            if pooled and engine_pool_key:
-                pool.release(engine_pool_key)
-
-        return {
-            "status": "complete",
-            "mode": mode,
-            "disk_ok": disk_ok if mode in {"disk", "both"} else None,
-            "engine_pooled": bool(pooled),
-            "engine_pool_key": engine_pool_key,
-            "pool": pool.stats(),
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
-    finally:
-        # If we didn't pool the instance, aggressively offload so warmup doesn't hoard VRAM/RAM.
-        try:
-            if engine is not None and (not pooled or _warm_weights_disabled()):
-                try:
-                    engine.offload_engine()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-
-@ray.remote
-def warmup_engine_from_manifest(
-    manifest_path: str,
-    selected_components: Optional[Dict[str, Any]] = None,
-    *,
-    mode: str = "engine",
-) -> Dict[str, Any]:
-    return _warmup_engine_from_manifest_impl(
-        manifest_path, selected_components, mode=mode
-    )
-
-
 def _cleanup_lora_artifacts_if_remote(lora_item: Any) -> None:
     """
     Best-effort cleanup of downloaded LoRA artifacts when verification fails.
@@ -1687,14 +1581,14 @@ def download_unified(
         message: str,
         metadata: Optional[Dict[str, Any]] = None,
     ):
+        _ws_send_update(ws_bridge, job_id, progress, message, metadata)
         try:
-            ray.get(ws_bridge.send_update.remote(job_id, progress, message, metadata))
             if progress is not None:
                 logger.debug(f"[{job_id}] Progress: {progress*100:.1f}% - {message}")
             else:
                 logger.debug(f"[{job_id}] {message}")
-        except Exception as e:
-            logger.error(f"Failed to send progress update to websocket: {e}")
+        except Exception:
+            pass
 
     try:
         _require_tracked_job_or_fail(
@@ -2272,7 +2166,15 @@ def download_unified(
         tb = traceback.format_exc()
         logger.error(tb)
         try:
-            send_progress(0.0, str(e), {"status": "error", "error": str(e)})
+            _ws_send_error(
+                ws_bridge,
+                job_id,
+                user_message=str(e) or "Download failed",
+                err=e,
+                tb=tb,
+                stage="download",
+                bucket=str(item_type or "").strip().lower() or None,
+            )
         except Exception:
             pass
         return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
@@ -2300,10 +2202,7 @@ def download_components(
         message: str,
         metadata: Optional[Dict[str, Any]] = None,
     ):
-        try:
-            ray.get(ws_bridge.send_update.remote(job_id, progress, message, metadata))
-        except Exception:
-            pass
+        _ws_send_update(ws_bridge, job_id, progress, message, metadata)
 
     try:
         paths = list(paths or [])
@@ -2374,7 +2273,15 @@ def download_components(
         tb = traceback.format_exc()
         logger.error(tb)
         try:
-            send_progress(0.0, str(e), {"status": "error", "error": str(e)})
+            _ws_send_error(
+                ws_bridge,
+                job_id,
+                user_message=str(e) or "Download failed",
+                err=e,
+                tb=tb,
+                stage="download",
+                bucket="component",
+            )
         except Exception:
             pass
         return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
@@ -2389,6 +2296,7 @@ def _execute_preprocessor(
     end_frame: Optional[int] = None,
     **kwargs,
 ) -> Dict[str, Any]:
+    # Keep large objects explicitly tracked so we can drop refs in `finally`.
     preprocessor_info = get_preprocessor_info(preprocessor_name)
     cache = AuxillaryCache(
         input_path,
@@ -2398,6 +2306,12 @@ def _execute_preprocessor(
         kwargs,
         supports_alpha_channel=preprocessor_info.get("supports_alpha_channel", False),
     )
+    module = None
+    preprocessor_class = None
+    preprocessor = None
+    frames = None
+    result = None
+    result_path = None
 
     media_type = cache.type
     send_progress(0.05, "Checking cache")
@@ -2582,7 +2496,19 @@ def _execute_preprocessor(
         error_traceback = traceback.format_exc()
         logger.error(f"[{job_id}] Processing failed: {error_traceback}")
         try:
-            send_progress(0.0, error_msg, {"status": "error", "error": error_msg})
+            send_progress(
+                0.0,
+                error_msg,
+                {
+                    "status": "error",
+                    "stage": "preprocessor",
+                    "preprocessor_name": preprocessor_name,
+                    "input_path": input_path,
+                    "error": error_msg,
+                    "error_type": type(e).__name__,
+                    "traceback": error_traceback,
+                },
+            )
         except Exception as ws_error:
             logger.error(
                 f"[{job_id}] Processing failed AND websocket notification failed: {error_msg}, WS Error: {ws_error}"
@@ -2595,7 +2521,22 @@ def _execute_preprocessor(
         }
 
     finally:
-        empty_cache()
+        # Drop refs aggressively so long-lived Ray workers don't retain model weights,
+        # video frames, or other large tensors/arrays across jobs.
+        try:
+            preprocessor = None
+            frames = None
+            result = None
+            module = None
+            preprocessor_class = None
+            cache = None
+        except Exception:
+            pass
+        try:
+            _aggressive_ram_cleanup(clear_torch_cache=True)
+        except Exception:
+            # Best-effort only; never fail preprocessor completion on cleanup.
+            pass
 
 
 @ray.remote
@@ -2614,11 +2555,11 @@ def run_preprocessor(
 
     def send_progress(progress: float, message: str, metadata: Optional[Dict] = None):
         """Local send_progress that uses the passed ws_bridge"""
+        _ws_send_update(ws_bridge, job_id, progress, message, metadata)
         try:
-            ray.get(ws_bridge.send_update.remote(job_id, progress, message, metadata))
             logger.debug(f"[{job_id}] Progress: {progress*100:.1f}% - {message}")
-        except Exception as e:
-            logger.error(f"Failed to send progress update to websocket: {e}")
+        except Exception:
+            pass
 
     _require_tracked_job_or_fail(job_id, allowed_types={"preprocessor"}, ws_bridge=ws_bridge)
 
@@ -2648,14 +2589,14 @@ def _run_engine_from_manifest_impl(
     def send_progress(
         progress: float | None, message: str, metadata: Optional[Dict] = None
     ):
+        _ws_send_update(ws_bridge, job_id, progress, message, metadata)
         try:
-            ray.get(ws_bridge.send_update.remote(job_id, progress, message, metadata))
             if progress is not None:
                 logger.info(f"[{job_id}] Progress: {progress*100:.1f}% - {message}")
             else:
                 logger.info(f"[{job_id}] Progress: {message}")
-        except Exception as e:
-            logger.error(f"Failed to send progress update: {e}")
+        except Exception:
+            pass
 
     # Track large objects so we can explicitly drop references in a finally block
     engine = None
@@ -3457,7 +3398,17 @@ def _run_engine_from_manifest_impl(
         tb = traceback.format_exc()
         logger.error(tb, "traceback")
         try:
-            send_progress(0.0, str(e), {"status": "error", "error": str(e)})
+            send_progress(
+                0.0,
+                str(e) or "Engine run failed",
+                {
+                    "status": "error",
+                    "stage": "engine",
+                    "error": str(e) or "Engine run failed",
+                    "error_type": type(e).__name__,
+                    "traceback": tb,
+                },
+            )
         except Exception:
             pass
         return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
@@ -3554,14 +3505,13 @@ def run_frame_interpolation(
     def send_update(
         progress: float | None, message: str, metadata: Optional[Dict[str, Any]] = None
     ):
-        try:
-            ray.get(ws_bridge.send_update.remote(job_id, progress, message, metadata))
-        except Exception:
-            pass
+        _ws_send_update(ws_bridge, job_id, progress, message, metadata)
 
     from pathlib import Path
     from src.utils.defaults import DEFAULT_CACHE_PATH
 
+    pp = None
+    frames = None
     try:
         _require_tracked_job_or_fail(
             job_id, allowed_types={"postprocessor"}, ws_bridge=ws_bridge
@@ -3692,7 +3642,28 @@ def run_frame_interpolation(
         tb = traceback.format_exc()
         logger.error(tb)
         try:
-            send_update(0.0, str(e), {"status": "error", "error": str(e)})
+            send_update(
+                0.0,
+                str(e) or "Postprocessor failed",
+                {
+                    "status": "error",
+                    "stage": "postprocessor",
+                    "error": str(e) or "Postprocessor failed",
+                    "error_type": type(e).__name__,
+                    "traceback": tb,
+                },
+            )
         except Exception:
             pass
         return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
+    finally:
+        # Ensure no postprocessor weights/tensors persist in the Ray worker after completion.
+        try:
+            pp = None
+            frames = None
+        except Exception:
+            pass
+        try:
+            _aggressive_ram_cleanup(clear_torch_cache=True)
+        except Exception:
+            pass

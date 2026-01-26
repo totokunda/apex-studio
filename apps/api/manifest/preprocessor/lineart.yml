@@ -43,3 +43,8 @@ parameters:
   type: category
 supports_image: true
 supports_video: true
+files:
+- path: lllyasviel/Annotators/sk_model.pth
+  size_bytes: 17173511
+- path: lllyasviel/Annotators/sk_model2.pth
+  size_bytes: 17173511

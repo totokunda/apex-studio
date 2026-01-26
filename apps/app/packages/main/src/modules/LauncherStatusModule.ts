@@ -175,6 +175,7 @@ class LauncherStatusModule implements AppModule {
       !pythonHealthy &&
       runtimeVerified.ok &&
       !this.#autoStartAttempted &&
+      !py.isInstallerActive() &&
       isLoopbackUrl(backendUrlRaw)
     ) {
       this.#autoStartAttempted = true;

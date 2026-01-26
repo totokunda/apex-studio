@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 import cv2
 import os
@@ -9,7 +10,6 @@ from .dw_onnx.cv_ox_pose import inference_pose as inference_onnx_pose
 from .dw_torchscript.jit_det import inference_detector as inference_jit_yolox
 from .dw_torchscript.jit_pose import inference_pose as inference_jit_pose
 from typing import List, Optional
-from .types import PoseResult, BodyResult, Keypoint
 from .util import (
     guess_onnx_input_shape_dtype,
     get_ort_providers,
@@ -17,7 +17,7 @@ from .util import (
     is_model_torchscript,
 )
 from timeit import default_timer
-import torch
+import onnxruntime as ort
 
 
 def drawBetweenKeypoints(pose_img, keypoints, indexes, color, scaleFactor):
@@ -189,8 +189,6 @@ class AnimalPoseImage:
             pass
         elif self.det_model_type == "ort":
             try:
-                import onnxruntime as ort
-
                 self.det = ort.InferenceSession(det_model_path, providers=ort_providers)
             except:
                 print(
@@ -209,7 +207,6 @@ class AnimalPoseImage:
                     "TopK operators may not work on your OpenCV, try use onnxruntime with CPUExecutionProvider"
                 )
                 try:
-                    import onnxruntime as ort
 
                     self.det = ort.InferenceSession(
                         det_model_path, providers=["CPUExecutionProvider"]
@@ -226,8 +223,6 @@ class AnimalPoseImage:
             pass
         elif self.pose_model_type == "ort":
             try:
-                import onnxruntime as ort
-
                 self.pose = ort.InferenceSession(
                     pose_model_path, providers=ort_providers
                 )

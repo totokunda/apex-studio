@@ -6,9 +6,7 @@ fi
 
 "$PY312" scripts/bundle_python.py \
     --platform win32 \
-    --cuda cuda128 \
+    --gpu cuda \
     --output ./dist \
-    --python "$PY312" \
-    --tar-zst \
     --tar-zst-level 12 \
     --bundle-version 0.1.0

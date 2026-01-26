@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -67,6 +68,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Persist ENABLE_IMAGE_RENDER_STEP=true in config.",
     )
+    
     parser.add_argument(
         "--enable_video_render_steps",
         action="store_true",
@@ -104,6 +106,11 @@ class MultiFileProgress:
     """
 
     files: Dict[str, Dict[str, Optional[int]]] = field(default_factory=dict)
+    last_frac: float = 0.0
+
+    def reset(self) -> None:
+        self.files = {}
+        self.last_frac = 0.0
 
     def update(
         self, current: int, total: Optional[int], label: Optional[str]
@@ -121,19 +128,39 @@ class MultiFileProgress:
 
         self.files[name] = {"current": cur_i, "total": tot_i}
 
-        total_downloaded = 0
-        total_size = 0
+        # Prefer accurate totals when available.
+        downloaded_known = 0
+        total_known = 0
+        downloaded_any = 0
         for v in self.files.values():
             c = v.get("current") or 0
             t = v.get("total")
             if isinstance(c, int):
-                total_downloaded += c
-            if isinstance(t, int) and t > 0:
-                total_size += t
+                downloaded_any += max(0, c)
+            if isinstance(c, int) and isinstance(t, int) and t > 0:
+                downloaded_known += max(0, min(c, t))
+                total_known += t
 
-        frac: Optional[float] = None
-        if total_size > 0:
-            frac = max(0.0, min(1.0, total_downloaded / total_size))
+        frac: Optional[float]
+        if total_known > 0:
+            frac = max(0.0, min(1.0, downloaded_known / total_known))
+        else:
+            # Fallback when we don't know file sizes (some downloaders omit totals):
+            # provide a smooth, monotonic approximation based on bytes seen so far.
+            if downloaded_any <= 0:
+                frac = 0.0
+            else:
+                # 0..~0.95 over the first few hundred MiB, then the caller will mark complete at the end.
+                scale = 100 * 1024 * 1024  # 100MiB
+                frac = 1.0 - float(pow(2.718281828, -float(downloaded_any) / float(scale)))
+                frac = min(0.99, max(0.0, frac))
+
+        # Enforce monotonicity to avoid jitter when multiple files start/finish.
+        try:
+            frac = max(self.last_frac, float(frac))
+        except Exception:
+            frac = self.last_frac
+        self.last_frac = float(frac)
 
         metadata = {
             "filename": name,
@@ -167,7 +194,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     config_store_path = get_config_store_path()
     job_id = (args.job_id or "").strip() or str(uuid.uuid4())
 
-    # Determine which tasks will run for overall progress mapping
+    # Determine which tasks will run for overall progress mapping.
+    # Keep this in the same order we execute below so UIs can render phases sequentially.
     tasks: list[str] = []
     if args.mask_model_type:
         tasks.append("mask")
@@ -326,7 +354,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         # NOTE: We intentionally avoid `smoke_tests.*` here. Smoke tests are not bundled
         # into production releases, while `src.attention.functions` is.
         try:
-            from src.attention.functions import attention_register, verify_attention_backends
+            from src.attention.functions import (
+                attention_register,
+                verify_attention_backends_detailed,
+            )
         except Exception as e:
             completed["attention"] = 1.0
             send_update(
@@ -366,23 +397,68 @@ def main(argv: Optional[list[str]] = None) -> int:
         emit(
             "attention",
             0.1,
-            "Running backend verification (this may take a moment)…",
+            "Running backend verification…",
             {"phase": "check", "total": total},
         )
 
         ok: list[str] = []
         failed: list[dict[str, Any]] = []
+
+        def _on_backend_event(ev: dict[str, Any]) -> None:
+            try:
+                if ev.get("phase") != "backend":
+                    return
+                backend = str(ev.get("backend") or "")
+                if not backend:
+                    return
+                idx = int(ev.get("index") or 0)
+                tot = int(ev.get("total") or total or 1)
+                status = str(ev.get("status") or "")
+
+                # Map per-backend progress into a smooth 0..1 range for the attention phase.
+                # Reserve 0.10..0.98 for per-backend steps.
+                base = 0.10
+                span = 0.88
+                # Start of a backend check bumps slightly; completion bumps more.
+                step = 0.0
+                if status == "start":
+                    step = 0.15
+                elif status in ("ok", "failed", "timeout"):
+                    step = 0.95
+                p = base + span * (min(max(idx + step, 0.0), float(tot)) / float(max(1, tot)))
+                p = max(0.0, min(0.99, float(p)))
+
+                msg = (
+                    f"Checking {backend}…"
+                    if status == "start"
+                    else f"{backend}: {status}"
+                )
+                emit(
+                    "attention",
+                    p,
+                    msg,
+                    {
+                        "phase": "backend",
+                        "backend": backend,
+                        "backend_status": status,
+                        "index": idx,
+                        "total": tot,
+                    },
+                )
+            except Exception:
+                return
+
         try:
-            ok = sorted([str(x) for x in (verify_attention_backends(force_refresh=True) or [])])
+            res = verify_attention_backends_detailed(
+                force_refresh=True, progress_callback=_on_backend_event
+            )
+            ok = sorted([str(x) for x in (res.get("working") or [])])
+            failed_names = [str(x) for x in (res.get("failed") or [])]
+            failed = [{"backend": n, "reason": "failed verification"} for n in failed_names]
         except Exception as e:
             # Best-effort: do not fail installer; report and continue.
             ok = []
             failed = [{"backend": "*", "reason": f"verification failed: {e}"}]
-
-        ok_set = set(ok)
-        for key in available:
-            if key not in ok_set:
-                failed.append({"backend": key, "reason": "failed verification"})
 
         completed["attention"] = 1.0
         summary = (
@@ -418,10 +494,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         if "mask" not in trackers:
             return
         frac, md = trackers["mask"].update(current, total, label)
+        filename = md.get("filename") or ""
+
+        # Remove UUID (standard v4 pattern) or long hex hashes (SHA256) if present
+        filename = re.sub(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64}",
+            "",
+            filename,
+            flags=re.I,
+        )
+        # Clean up any leftover underscores/hyphens from the removal
+        filename = re.sub(r"[-_]{2,}", "-", filename).strip("-_ ")
+
+        if filename:
+            md["filename"] = filename
+
         emit(
             "mask",
             frac,
-            f"Downloading mask model… {md.get('filename')}",
+            f"Downloading mask model… {filename}",
             md,
         )
 
@@ -431,10 +522,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         if "rife" not in trackers:
             return
         frac, md = trackers["rife"].update(current, total, label)
+        filename = md.get("filename") or ""
+
+        # Remove UUID (standard v4 pattern) or long hex hashes (SHA256) if present
+        filename = re.sub(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64}",
+            "",
+            filename,
+            flags=re.I,
+        )
+        # Clean up any leftover underscores/hyphens from the removal
+        filename = re.sub(r"[-_]{2,}", "-", filename).strip("-_ ")
+
+        if filename:
+            md["filename"] = filename
+
         emit(
             "rife",
             frac,
-            f"Downloading RIFE… {md.get('filename')}",
+            f"Downloading RIFE… {filename}",
             md,
         )
 
@@ -444,6 +550,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         model_type = ModelType(model_type)
         model_weight = MODEL_WEIGHTS[model_type]
+        try:
+            trackers["mask"].reset()
+        except Exception:
+            trackers["mask"] = MultiFileProgress()
+        completed["mask"] = 0.0
         send_update(
             task="mask",
             progress=0.0 if tasks else None,
@@ -471,6 +582,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         # Use lightweight downloader to avoid importing torch/model code during setup.
         from src.postprocess.rife import download_rife_assets
 
+        try:
+            trackers["rife"].reset()
+        except Exception:
+            trackers["rife"] = MultiFileProgress()
+        completed["rife"] = 0.0
         send_update(
             task="rife",
             progress=0.0 if tasks else None,
@@ -492,11 +608,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return None
 
     try:
-        if args.install_rife:
-            download_rife()
-
         if args.mask_model_type:
             download_mask_model(args.mask_model_type)
+
+        if args.install_rife:
+            download_rife()
 
         if not args.skip_attention_verification:
             verify_attention_backends_with_progress()

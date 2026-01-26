@@ -390,7 +390,19 @@ def _run_uv_pip_sync(*, python: Path, lockfile: Path, quiet: bool) -> None:
             "`uv` not found on PATH; required for lockfile sync. Install uv or add it to PATH."
         )
 
-    cmd = [uv, "pip", "sync", "-p", str(python), "--strict"]
+    cmd = [
+        uv,
+        "pip",
+        "sync",
+        # We intentionally install from multiple trusted indices (PyPI + PyTorch wheel indices).
+        # `unsafe-best-match` restores pip-like resolution across them and avoids failures when a
+        # package exists on multiple indices but with different version sets.
+        "--index-strategy",
+        "unsafe-best-match",
+        "-p",
+        str(python),
+        "--strict",
+    ]
     if quiet:
         cmd.append("--no-progress")
         cmd.append("-q")

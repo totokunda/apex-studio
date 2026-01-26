@@ -24,6 +24,7 @@ import {
   onApiUpdateEvent,
   suppressApiUpdateToast,
 } from "@app/preload";
+import { formatErrMessage } from "@/lib/formatErrMessage";
 
 const REMIND_EVERY_MS = 24 * 60 * 60 * 1000;
 const SUPPRESS_API_TOAST_MS = 12 * 60 * 60 * 1000;
@@ -35,11 +36,6 @@ function isAppUpdateRelevant(st: AppUpdateState | null | undefined): boolean {
 function isApiUpdateRelevant(st: ApiUpdateState | null | undefined): boolean {
   if (st?.status !== "available") return false;
   return (st.toastSuppressedUntil ?? 0) <= Date.now();
-}
-
-function formatErrMessage(msg: unknown): string {
-  const s = typeof msg === "string" ? msg : msg instanceof Error ? msg.message : "";
-  return s.trim() || "Something went wrong.";
 }
 
 const API_UPDATE_TOAST_ID = "api-update-toast";

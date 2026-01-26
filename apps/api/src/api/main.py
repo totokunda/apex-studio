@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from .ws import router as ws_router
 from .manifest import router as manifest_router
 from .config import router as config_router
@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from typing import Optional
 import os
+import signal
 import threading
 import time
 from .stability import install_stability_middleware
@@ -28,9 +29,11 @@ from src.utils.defaults import (
     get_preprocessor_results_path,
     get_postprocessor_results_path,
 )
+import errno
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
+_shutdown_requested = threading.Event()
 
 
 def _start_parent_watchdog() -> None:
@@ -52,12 +55,39 @@ def _start_parent_watchdog() -> None:
         return
 
     def _exists(pid: int) -> bool:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            ERROR_ACCESS_DENIED = 5
+
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+            if not handle:
+                err = ctypes.get_last_error()
+                if err == ERROR_ACCESS_DENIED:
+                    return True  # process likely exists, just can't query it
+                return False
+            try:
+                exit_code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return True  # be conservative; don't self-terminate on query failure
+                return exit_code.value == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+
+        # POSIX
         try:
-            # signal 0: existence check (works on Unix; on Windows it raises if missing)
             os.kill(pid, 0)
             return True
-        except Exception:
+        except ProcessLookupError:
             return False
+        except PermissionError:
+            return True
+        except OSError as e:
+            return getattr(e, "errno", None) == errno.EPERM
 
     def _loop() -> None:
         # small delay so parent fully initializes
@@ -181,3 +211,31 @@ def ready():
     if _ray_ready:
         return {"status": "ready"}
     return {"status": "starting", "error": _ray_start_error}
+
+
+def _exit_process_soon() -> None:
+    """
+    Trigger process exit after returning the HTTP response.
+    We use SIGTERM so uvicorn can run lifespan shutdown hooks.
+    """
+    time.sleep(0.25)
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except Exception:
+        os._exit(0)
+
+
+@app.post("/shutdown")
+def shutdown(background_tasks: BackgroundTasks):
+    """
+    Best-effort shutdown: stop Ray, then terminate the API process gracefully.
+    """
+    if not _shutdown_requested.is_set():
+        _shutdown_requested.set()
+        try:
+            shutdown_ray()
+        except Exception:
+            # Best-effort; SIGTERM will still trigger shutdown handlers.
+            pass
+        background_tasks.add_task(_exit_process_soon)
+    return {"status": "shutting_down"}

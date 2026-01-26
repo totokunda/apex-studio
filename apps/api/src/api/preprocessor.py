@@ -302,6 +302,8 @@ def trigger_run(request: RunRequest):
                 "preprocessor_name": request.preprocessor_name,
                 "input_path": request.input_path,
             },
+            # Force non-persistent Ray workers for preprocessors: we do not want any
+            # warm/persistent model state after the job completes.
             submit=lambda: run_preprocessor.options(**resources).remote(
                 request.preprocessor_name,
                 request.input_path,

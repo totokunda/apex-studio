@@ -57,3 +57,4 @@ parameters:
 supports_alpha_channel: true
 supports_image: true
 supports_video: true
+files: []

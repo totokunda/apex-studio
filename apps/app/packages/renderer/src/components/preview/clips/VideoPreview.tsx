@@ -779,10 +779,12 @@ const VideoPreview: React.FC<
       // Update the "current" aspect-fit size for drawWrappedCanvas immediately so the
       // very first frame of the new asset can't render into a stale-sized canvas.
       displaySizeRef.current = getAspectFitSize(info, rectWidth, rectHeight);
+      
       // Have cached info; force immediate redraw
       lastRenderedFrameRef.current = -1;
     }
   }, [selectedAssetId, rectWidth, rectHeight, setMediaInfoAndBump]);
+
 
   // Compute aspect-fit display size and offsets within the preview rect
   const { displayWidth, displayHeight, offsetX, offsetY } = useMemo(() => {
@@ -909,6 +911,8 @@ const VideoPreview: React.FC<
       maskFrame?: number,
       opts?: { recordFrame?: boolean },
     ) => {
+
+      
       let canvas = canvasRef.current;
       if (!canvas) return;
 
@@ -1065,7 +1069,7 @@ const VideoPreview: React.FC<
       }
       imageRef.current?.getLayer()?.batchDraw?.();
     },
-    [ensureProcessingCanvas],
+    [ensureProcessingCanvas, displayWidth, displayHeight, ],
   );
 
   const decoderMaskFrameRef = useRef(0);

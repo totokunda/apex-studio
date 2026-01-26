@@ -3,9 +3,11 @@
  * Apex Studio Full Build Script
  * 
  * This script orchestrates the complete build process:
- * 1. Builds the Python API bundle
- * 2. Builds the Electron app with workspace packages
- * 3. Packages everything together with electron-builder
+ * 1. Builds the Electron app with workspace packages
+ * 2. Packages everything together with electron-builder
+ *
+ * Note: Python API bundling is handled by the server-side bundler under `apps/api/scripts/bundle_python.py`
+ * and/or separate workflows; this script assumes the Python bundle is already available (or intentionally omitted).
  * 
  * Usage:
  *   node scripts/build-app.js [options]
@@ -13,14 +15,11 @@
  * Options:
  *   --platform [darwin|linux|win32|all]  Target platform (default: current)
  *   --arch [x64|arm64|universal]         Target architecture (default: current)
- *   --cuda [auto|cpu|mps|rocm|cuda118|cuda121|cuda124|cuda126|cuda128]  GPU support (default: auto)
- *   --python <python3.12>               Python executable to run bundler + create venv (default: auto-detect)
- *   --require-python312                 Fail if bundler isn't running under Python 3.12.x
- *   --skip-rust                          Skip building/installing Rust wheels during bundling
- *   --skip-python                        Skip Python bundling (use existing)
  *   --skip-sign                          Skip code signing
  *   --publish                            Publish release after build
  *   --draft                              Create draft release
+ *   --publish-timeout-ms <number>        Publish/upload request timeout in ms (default: 900000)
+ *   --publish-debug                      Enable extra publish diagnostics (electron-builder debug logs)
  */
 
 import { spawn, execSync } from "node:child_process";
@@ -29,6 +28,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import https from "node:https";
 import { pipeline } from "node:stream/promises";
+import { ensureVCRedist } from "./ensure-vc-redist.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -44,16 +44,25 @@ function parseArgs() {
     skipSign: false,
     publish: false,
     draft: false,
+    publishTimeoutMs: null,
+    publishDebug: false,
+  };
+
+  const requireValue = (flag, value) => {
+    if (!value || String(value).startsWith("--")) {
+      throw new Error(`Missing value for ${flag}`);
+    }
+    return value;
   };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     switch (arg) {
       case "--platform":
-        config.platform = args[++i];
+        config.platform = requireValue("--platform", args[++i]);
         break;
       case "--arch":
-        config.arch = args[++i];
+        config.arch = requireValue("--arch", args[++i]);
         break;
       case "--skip-sign":
         config.skipSign = true;
@@ -64,10 +73,24 @@ function parseArgs() {
       case "--draft":
         config.draft = true;
         break;
+      case "--publish-timeout-ms": {
+        const raw = requireValue("--publish-timeout-ms", args[++i]);
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) {
+          throw new Error(`Invalid --publish-timeout-ms value: ${JSON.stringify(raw)}`);
+        }
+        config.publishTimeoutMs = Math.floor(n);
+        break;
+      }
+      case "--publish-debug":
+        config.publishDebug = true;
+        break;
       case "--help":
       case "-h":
         printHelp();
         process.exit(0);
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
     }
   }
 
@@ -87,16 +110,20 @@ Options:
   --skip-sign                          Skip code signing
   --publish                            Publish release after build
   --draft                              Create draft release
+  --publish-timeout-ms <number>        Publish/upload request timeout in ms (default: 900000)
+  --publish-debug                      Enable extra publish diagnostics (electron-builder debug logs)
   --help, -h                           Show this help message
 
 Environment Variables:
   APPLE_ID              Apple ID for notarization
-  APPLE_APP_PASSWORD    App-specific password for notarization
+  APPLE_APP_SPECIFIC_PASSWORD    App-specific password for notarization
   APPLE_TEAM_ID         Apple Developer Team ID
   APPLE_IDENTITY        Code signing identity (certificate name)
   WINDOWS_CERT_FILE     Path to Windows code signing certificate (.pfx)
   WINDOWS_CERT_PASSWORD Password for the certificate
-  GITHUB_TOKEN          GitHub token for publishing releases
+  GH_TOKEN / GITHUB_TOKEN / GITHUB_RELEASE_TOKEN   GitHub token for publishing releases
+  ELECTRON_PUBLISH_TIMEOUT_MS                      Upload/API request timeout in ms (default: 900000)
+  DEBUG                                           Set to "electron-builder" to see publish HTTP logs
 
 Examples:
   # Build for current platform
@@ -105,11 +132,14 @@ Examples:
   # Build for macOS with Apple Silicon
   node scripts/build-app.js --platform darwin --arch arm64
 
-  # Build for Windows with CPU-only Python
-  node scripts/build-app.js --platform win32 --cuda cpu
-
   # Build and publish release
   node scripts/build-app.js --publish
+
+  # Publish with a longer timeout (20 minutes)
+  node scripts/build-app.js --publish --publish-timeout-ms 1200000
+
+  # Publish with verbose electron-builder logs
+  node scripts/build-app.js --publish --publish-debug
 `);
 }
 
@@ -250,6 +280,20 @@ async function buildElectronPackages() {
   }
 }
 
+async function ensureWindowsPrereqs(config) {
+  const wantsWindows =
+    config.platform === "win32" || config.platform === "all" || process.platform === "win32";
+  if (!wantsWindows) return;
+
+  // Ensure NSIS can embed the MSVC runtime installer for users (PyTorch dependency).
+  try {
+    await ensureVCRedist();
+  } catch (e) {
+    // If this fails, Windows installers may still build, but users can hit the torch c10.dll error.
+    log(`Warning: failed to fetch vc_redist.x64.exe: ${e?.message || e}`, "warning");
+  }
+}
+
 // Step 3: Package with electron-builder
 async function packageApp(config) {
   log("Packaging application with electron-builder...", "step");
@@ -294,6 +338,14 @@ async function packageApp(config) {
     const env = {
       ...process.env
     };
+    // Allow overriding publish timeout from CLI; electron-builder config reads this env var.
+    if (config.publishTimeoutMs != null) {
+      env.ELECTRON_PUBLISH_TIMEOUT_MS = String(config.publishTimeoutMs);
+    }
+    if (config.publishDebug) {
+      // builder-util-runtime uses debug("electron-builder") for HTTP request/response logs.
+      env.DEBUG = env.DEBUG ? `${env.DEBUG},electron-builder` : "electron-builder";
+    }
     await runCommand("npx", args, { cwd: APP_ROOT, env });
     log("Application packaged successfully", "success");
     return true;
@@ -341,6 +393,9 @@ async function main() {
 
     // Build Electron packages
     await buildElectronPackages();
+
+    // Ensure platform prerequisites are bundled (Windows: VC++ redistributable)
+    await ensureWindowsPrereqs(config);
 
     // Package the app
     await packageApp(config);

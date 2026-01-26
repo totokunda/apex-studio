@@ -360,6 +360,13 @@ export class ApexApi implements AppModule {
           anchor_frame?: number;
           frame_end: number;
           direction?: "forward" | "backward" | "both";
+          // Optional seed inputs so the backend can (re)create the anchor mask before tracking.
+          tool?: "touch" | "lasso" | "shape";
+          points?: Array<{ x: number; y: number }>;
+          point_labels?: Array<number>;
+          box?: { x1: number; y1: number; x2: number; y2: number };
+          simplify_tolerance?: number;
+          shape_type?: string;
         },
       ) => {
         // Ensure backend is healthy before starting streaming mask tracking
@@ -826,28 +833,6 @@ export class ApexApi implements AppModule {
           status: string;
           message?: string;
         }>("POST", "/engine/run", payload);
-      },
-    );
-
-    // Best-effort warmup for a manifest (disk/engine/both)
-    ipcMain.handle(
-      "engine:warmup",
-      async (
-        _event,
-        request: {
-          manifest_id?: string;
-          yaml_path?: string;
-          selected_components?: Record<string, any>;
-          mode?: string;
-          job_id?: string;
-        },
-      ) => {
-        const payload = await this.#prepareEngineWarmupRequest(request);
-        return this.makeRequest<{
-          job_id: string;
-          status: string;
-          message?: string;
-        }>("POST", "/engine/warmup", payload);
       },
     );
 
@@ -1915,32 +1900,6 @@ export class ApexApi implements AppModule {
       transformed[k] = await this.#transformValueForUpload(v);
     }
     return { ...request, inputs: transformed };
-  }
-
-  async #prepareEngineWarmupRequest(request: {
-    manifest_id?: string;
-    yaml_path?: string;
-    selected_components?: Record<string, any>;
-    mode?: string;
-    job_id?: string;
-  }): Promise<{
-    manifest_id?: string;
-    yaml_path?: string;
-    selected_components?: Record<string, any>;
-    mode?: string;
-    job_id?: string;
-  }> {
-    // Ensure our remote/local detection is up-to-date before deciding whether to
-    // auto-upload local paths. (Cached probe; non-fatal if hostname endpoint is missing.)
-    try {
-      await this.#probeBackendLocality();
-    } catch {}
-    if (!this.#isRemoteBackend()) return request;
-    const transformed: Record<string, any> = {};
-    for (const [k, v] of Object.entries(request.selected_components || {})) {
-      transformed[k] = await this.#transformValueForUpload(v);
-    }
-    return { ...request, selected_components: transformed };
   }
 
   async #transformValueForUpload(value: any): Promise<any> {

@@ -12,6 +12,7 @@ import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
 import * as tar from "tar-stream";
 import net from "node:net";
+import { pythonProcess } from "./PythonProcess.js";
 
 type ConfigResponse<T> = { success: true; data: T } | { success: false; error: string };
 
@@ -83,8 +84,8 @@ function exeName(cmd: "ffmpeg" | "ffprobe") {
 
 function resolveApiBundleRoot(apiInstallDir: string): string {
   /**
-   * We want the directory that contains the bundled venv at:
-   *   <bundleRoot>/apex-studio/(bin|Scripts)/python
+   * We want the directory that contains the bundled portable Python at:
+   *   <bundleRoot>/apex-studio/(python.exe|bin/python|bin/python3)
    *
    * Bundle layouts we support (apiInstallDir is user-chosen install dir / extraction dir):
    * - <apiInstallDir>/python-api/apex-engine/apex-studio/...
@@ -123,11 +124,17 @@ function resolveApiBundleRoot(apiInstallDir: string): string {
 function resolveExtractedPythonExe(bundleRoot: string): string | null {
   // Mirror the structure used in packaged builds:
   //   <bundleRoot>/apex-studio/bin/python (mac/linux)
-  //   <bundleRoot>/apex-studio/Scripts/python.exe (win)
+  //   <bundleRoot>/apex-studio/bin/python3 (mac/linux)
+  //   <bundleRoot>/apex-studio/python.exe (win)
+  //   <bundleRoot>/apex-studio/Scripts/python.exe (legacy bundles)
   const base = path.join(bundleRoot, "apex-studio");
   const candidates =
     process.platform === "win32"
-      ? [path.join(base, "Scripts", "python.exe")]
+      ? [
+          path.join(base, "python.exe"),
+          path.join(base, "Scripts", "python.exe"),
+          path.join(base, "install", "python.exe"),
+        ]
       : [path.join(base, "bin", "python"), path.join(base, "bin", "python3")];
   for (const p of candidates) {
     try {
@@ -135,6 +142,51 @@ function resolveExtractedPythonExe(bundleRoot: string): string | null {
     } catch {}
   }
   return null;
+}
+
+function readPyVenvCfgHome(venvRoot: string): string | null {
+  /**
+   * Windows venv launchers can emit errors like:
+   *   "No Python at 'C:\\Users\\...\\Python312\\python.exe'"
+   *
+   * That path is not chosen by our Electron installer; it's typically the `home = ...`
+   * value inside `<venvRoot>/pyvenv.cfg`, which is stamped at venv creation time.
+   */
+  const cfgPath = path.join(venvRoot, "pyvenv.cfg");
+  try {
+    if (!fs.existsSync(cfgPath)) return null;
+    const txt = fs.readFileSync(cfgPath, "utf8");
+    for (const raw of txt.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const m = /^home\s*=\s*(.+)\s*$/i.exec(line);
+      if (!m) continue;
+      const home = m[1]?.trim();
+      return home ? home : null;
+    }
+  } catch {}
+  return null;
+}
+
+function resolveRuntimeRootFromPythonExe(pythonExe: string): string {
+  /**
+   * Derive the runtime root directory containing `Lib/` (Windows) or `lib/` + `bin/` (mac/linux).
+   *
+   * Supports both:
+   * - portable runtime layout: <root>/python.exe (win) or <root>/bin/python (posix)
+   * - legacy venv layout: <root>/Scripts/python.exe (win) or <root>/bin/python (posix)
+   */
+  const p = String(pythonExe || "").trim();
+  if (!p) return "";
+  const dir = path.dirname(p);
+  const base = path.basename(dir).toLowerCase();
+  if (process.platform === "win32") {
+    // .../apex-studio/python.exe -> apex-studio
+    // .../apex-studio/Scripts/python.exe -> apex-studio
+    return base === "scripts" ? path.dirname(dir) : dir;
+  }
+  // .../apex-studio/bin/python -> apex-studio
+  return base === "bin" ? path.dirname(dir) : dir;
 }
 
 function resolveDevApiRoot(): string | null {
@@ -309,6 +361,27 @@ async function validateExtractedBundleOrThrow(opts: {
       settled = true;
       if (code === 0) return resolve();
       const out = `${stdout}\n${stderr}`.trim();
+      // Improve diagnostics for a common Windows failure mode: venv launcher can't find its "home" Python.
+      // This is usually caused by shipping a non-relocatable venv that still points at the build machine's Python.
+      if (process.platform === "win32" && (code === 103 || /No Python at/i.test(out))) {
+        const runtimeRoot = resolveRuntimeRootFromPythonExe(pythonExe);
+        const home = runtimeRoot ? readPyVenvCfgHome(runtimeRoot) : null;
+        const msgLines = [
+          `Bundle validation failed (exit ${code}).`,
+          out ? `Output:\n${out}` : "Output: (empty)",
+          "",
+          "This looks like a Windows venv launcher error (non-portable venv).",
+          `We executed the bundled interpreter at: ${pythonExe}`,
+          home
+            ? `But <bundle>/apex-studio/pyvenv.cfg has home = ${home} (so the launcher expects a base Python at that location).`
+            : "But we could not read <bundle>/apex-studio/pyvenv.cfg to determine the venv 'home' path.",
+          "",
+          "Fix: rebuild the API bundle with a truly portable Python distribution for Windows (not a standard venv tied to a machine path),",
+          "or install Python at the referenced 'home' path (not recommended for distribution).",
+          "Bundling is implemented in: apps/api/scripts/bundling/bundle_python.py",
+        ];
+        return reject(new Error(msgLines.join("\n")));
+      }
       reject(new Error(`Bundle validation failed (exit ${code}). Output:\n${out}`));
     });
   });
@@ -320,70 +393,74 @@ async function extractTarZstWithNode(opts: {
   onProgress?: (ev: InstallerProgressEvent) => void;
 }): Promise<void> {
   const extract = tar.extract();
-  const inflator = createZstdDecompress();
+  // Larger chunk sizes tend to improve throughput for large archives.
+  const inflator = createZstdDecompress({ chunkSize: 4 * 1024 * 1024 });
 
   await fsp.mkdir(opts.destinationDir, { recursive: true });
 
-  const pending: Promise<void>[] = [];
-  let entriesExtracted = 0;
+  // Reduce fs churn by memoizing directories we've already created.
+  const createdDirs = new Set<string>();
+  const ensureDir = async (dir: string) => {
+    const d = dir || opts.destinationDir;
+    if (!d) return;
+    if (createdDirs.has(d)) return;
+    createdDirs.add(d);
+    await fsp.mkdir(d, { recursive: true });
+  };
 
   extract.on("entry", (header: any, stream: any, next: any) => {
-    const done = (p: Promise<void>) => {
-      pending.push(
-        p.finally(() => {
-          stream.resume();
-          next();
-        }),
-      );
-    };
-
-    try {
+    (async () => {
       const name = String(header?.name || "");
       const type = String(header?.type || "file");
       const mode = typeof header?.mode === "number" ? header.mode : undefined;
       const absPath = safeJoinWithinRoot(opts.destinationDir, name);
-      entriesExtracted += 1;
-      opts.onProgress?.({
-        phase: "extract",
-        entryName: name,
-        entriesExtracted,
-        message: `Extracting ${name}`,
-      });
+
+      // IMPORTANT: to maximize throughput, avoid emitting per-entry progress events.
+      // The caller gets byte-based overall progress from the compressed input stream.
 
       if (type === "directory") {
-        done(
-          (async () => {
-            await fsp.mkdir(absPath, { recursive: true });
-          })(),
-        );
+        await ensureDir(absPath);
         return;
       }
 
       if (type === "file") {
-        done(
-          (async () => {
-            await fsp.mkdir(path.dirname(absPath), { recursive: true });
-            await pipeline(stream, fs.createWriteStream(absPath));
-            if (mode !== undefined && process.platform !== "win32") {
-              try {
-                await fsp.chmod(absPath, mode);
-              } catch {}
-            }
-          })(),
+        await ensureDir(path.dirname(absPath));
+        await pipeline(
+          stream,
+          fs.createWriteStream(absPath, { highWaterMark: 1024 * 1024 }),
         );
+        if (mode !== undefined && process.platform !== "win32") {
+          try {
+            await fsp.chmod(absPath, mode);
+          } catch {}
+        }
         return;
       }
 
       // Ignore symlinks and other special file types for safety.
-      done(Promise.resolve());
-    } catch (e) {
-      done(Promise.reject(e));
-    }
+      stream.resume();
+    })()
+      .then(() => {
+        try {
+          stream.resume();
+        } catch {}
+        next();
+      })
+      .catch((e) => {
+        try {
+          // Ensure the extractor rejects quickly.
+          extract.destroy(e);
+        } catch {}
+        try {
+          stream.resume();
+        } catch {}
+        next();
+      });
   });
 
   const stat = await fsp.stat(opts.archivePath);
   const totalBytes = stat.size;
-  const input = fs.createReadStream(opts.archivePath);
+  const input = fs.createReadStream(opts.archivePath, { highWaterMark: 2 * 1024 * 1024 });
   let processedBytes = 0;
   let lastEmitAt = 0;
   const emitBytes = () => {
@@ -412,9 +489,6 @@ async function extractTarZstWithNode(opts: {
     input.on("error", reject);
     input.pipe(inflator).pipe(extract);
   });
-
-  // Ensure all entry writes finished.
-  await Promise.all(pending);
   opts.onProgress?.({
     phase: "extract",
     processedBytes: totalBytes,
@@ -428,71 +502,189 @@ async function downloadToTempFile(opts: {
   url: string;
   assetName?: string;
   onProgress?: (ev: InstallerProgressEvent) => void;
+  /**
+   * Number of retries after the first attempt. (Total attempts = retries + 1)
+   * Defaults to 4 (5 total attempts).
+   */
+  retries?: number;
+  /**
+   * Base retry delay in milliseconds (exponential backoff is applied).
+   * Defaults to 750ms.
+   */
+  retryDelayMs?: number;
 }): Promise<string> {
-  const res = await fetch(opts.url);
-  if (!res.ok) {
-    throw new Error(`Download failed: ${res.status} ${res.statusText}`);
-  }
-  if (!res.body) throw new Error("Download failed: empty body");
-
-  const totalBytesHeader = res.headers.get("content-length");
-  const totalBytes = totalBytesHeader ? Number(totalBytesHeader) : undefined;
-
   const safeName = (opts.assetName || "bundle.tar.zst").replace(/[^\w.\-]+/g, "_");
   const outPath = path.join(os.tmpdir(), `apex-server-bundle-${randomUUID()}-${safeName}`);
   await fsp.mkdir(path.dirname(outPath), { recursive: true });
-  const ws = fs.createWriteStream(outPath);
-  const body = Readable.fromWeb(res.body as any);
-  let downloadedBytes = 0;
-  let lastEmitAt = 0;
-  const emit = () => {
-    const now = Date.now();
-    if (now - lastEmitAt < 120) return;
-    lastEmitAt = now;
-    const percent =
-      typeof totalBytes === "number" && totalBytes > 0
-        ? Math.max(0, Math.min(1, downloadedBytes / totalBytes))
-        : undefined;
-    opts.onProgress?.({
-      phase: "download",
-      downloadedBytes,
-      totalBytes,
-      percent,
-      message:
-        percent !== undefined
-          ? `Downloading… ${Math.round(percent * 100)}%`
-          : "Downloading…",
-    });
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, Math.floor(ms))));
+
+  const retries = typeof opts.retries === "number" ? Math.max(0, Math.floor(opts.retries)) : 4;
+  const maxAttempts = retries + 1;
+  const baseDelayMs =
+    typeof opts.retryDelayMs === "number" ? Math.max(0, Math.floor(opts.retryDelayMs)) : 750;
+
+  const isRetryableStatus = (status: number) => {
+    // Retry for transient server/network edge cases.
+    if (status === 408) return true; // Request Timeout
+    if (status === 409) return true; // Conflict (can happen with CDN edge races)
+    if (status === 425) return true; // Too Early
+    if (status === 429) return true; // Too Many Requests
+    if (status >= 500 && status <= 599) return true; // Server errors
+    return false;
   };
-  body.on("data", (chunk: string | Buffer) => {
-    downloadedBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
-    emit();
-  });
-  opts.onProgress?.({
-    phase: "download",
-    downloadedBytes: 0,
-    totalBytes,
-    percent: 0,
-    message: "Starting download…",
-  });
-  try {
-    await pipeline(body, ws);
-  } catch (e) {
-    // If the pipeline errors mid-stream, ensure we don't leave a partial temp file behind.
+
+  const computeDelayMs = (attempt: number, retryAfterMs?: number) => {
+    // attempt is 1-based; apply backoff starting at attempt 2.
+    const exp = Math.max(0, attempt - 2);
+    const backoff = baseDelayMs * Math.pow(2, Math.min(6, exp));
+    // jitter in [0.85, 1.15]
+    const jitter = 0.85 + Math.random() * 0.3;
+    const computed = Math.floor(backoff * jitter);
+    if (typeof retryAfterMs === "number" && retryAfterMs > 0) return Math.max(retryAfterMs, computed);
+    return computed;
+  };
+
+  const parseRetryAfterMs = (res: any): number | undefined => {
     try {
-      ws.destroy();
+      const ra = res?.headers?.get?.("retry-after");
+      if (!ra) return undefined;
+      const s = String(ra).trim();
+      if (!s) return undefined;
+      // Can be seconds or an HTTP-date.
+      const asSeconds = Number(s);
+      if (Number.isFinite(asSeconds) && asSeconds >= 0) return Math.floor(asSeconds * 1000);
+      const asDate = Date.parse(s);
+      if (!Number.isNaN(asDate)) return Math.max(0, asDate - Date.now());
     } catch {}
+    return undefined;
+  };
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // Always restart from scratch each attempt to avoid silently accepting corrupt partial downloads.
     await safeRemovePath(outPath);
-    throw e;
+
+    let res: any | null = null;
+    let ws: fs.WriteStream | null = null;
+    let downloadedBytes = 0;
+    let totalBytes: number | undefined;
+    let lastEmitAt = 0;
+    const emit = () => {
+      const now = Date.now();
+      if (now - lastEmitAt < 120) return;
+      lastEmitAt = now;
+      const percent =
+        typeof totalBytes === "number" && totalBytes > 0
+          ? Math.max(0, Math.min(1, downloadedBytes / totalBytes))
+          : undefined;
+      opts.onProgress?.({
+        phase: "download",
+        downloadedBytes,
+        totalBytes,
+        percent,
+        message:
+          percent !== undefined
+            ? `Downloading… ${Math.round(percent * 100)}%`
+            : "Downloading…",
+      });
+    };
+
+    try {
+      if (attempt === 1) {
+        opts.onProgress?.({
+          phase: "download",
+          downloadedBytes: 0,
+          totalBytes: undefined,
+          percent: 0,
+          message: "Starting download…",
+        });
+      } else {
+        opts.onProgress?.({
+          phase: "status",
+          message: `Download failed; retrying (attempt ${attempt}/${maxAttempts})…`,
+        });
+        opts.onProgress?.({
+          phase: "download",
+          downloadedBytes: 0,
+          totalBytes: undefined,
+          percent: 0,
+          message: `Restarting download… (attempt ${attempt}/${maxAttempts})`,
+        });
+      }
+
+      res = await fetch(opts.url);
+      if (!res?.ok) {
+        const status = Number(res?.status || 0);
+        const statusText = res?.statusText ? String(res.statusText) : "";
+        const err = new Error(`Download failed: ${status || "unknown"} ${statusText}`.trim());
+        (err as any).status = status;
+        throw err;
+      }
+      if (!res.body) throw new Error("Download failed: empty body");
+
+      const totalBytesHeader = res.headers.get("content-length");
+      totalBytes = totalBytesHeader ? Number(totalBytesHeader) : undefined;
+
+      ws = fs.createWriteStream(outPath, { flags: "w" });
+      const body = Readable.fromWeb(res.body as any);
+      body.on("data", (chunk: string | Buffer) => {
+        downloadedBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+        emit();
+      });
+
+      // Emit an immediate update once we know content-length (if present).
+      opts.onProgress?.({
+        phase: "download",
+        downloadedBytes: 0,
+        totalBytes,
+        percent: 0,
+        message: "Downloading…",
+      });
+
+      await pipeline(body, ws);
+
+      opts.onProgress?.({
+        phase: "download",
+        downloadedBytes: typeof totalBytes === "number" ? totalBytes : downloadedBytes,
+        totalBytes,
+        percent: 1,
+        message: "Download complete",
+      });
+      return outPath;
+    } catch (e) {
+      lastError = e;
+
+      // Ensure we don't leave a partial temp file behind.
+      try {
+        ws?.destroy();
+      } catch {}
+      await safeRemovePath(outPath);
+
+      const status = (e as any)?.status;
+      const retryable = typeof status === "number" ? isRetryableStatus(status) : true;
+      if (!retryable || attempt >= maxAttempts) throw e;
+
+      const retryAfterMs = parseRetryAfterMs(res);
+      const delayMs = computeDelayMs(attempt, retryAfterMs);
+      const msg = e instanceof Error ? e.message : String(e);
+      opts.onProgress?.({
+        phase: "status",
+        message: `Download error: ${msg}. Retrying in ${Math.max(1, Math.round(delayMs / 100) / 10)}s…`,
+      });
+      await sleep(delayMs);
+      continue;
+    } finally {
+      // Best-effort: stop any in-flight body stream if we're retrying.
+      try {
+        await res?.body?.cancel?.();
+      } catch {}
+    }
   }
-  opts.onProgress?.({
-    phase: "download",
-    downloadedBytes: typeof totalBytes === "number" ? totalBytes : downloadedBytes,
-    totalBytes,
-    percent: 1,
-    message: "Download complete",
-  });
-  return outPath;
+
+  // Should be unreachable due to returns/throws above, but keep TS happy.
+  throw lastError instanceof Error ? lastError : new Error("Download failed");
 }
 
 async function removeAppleDoubleFilesRecursively(opts: {
@@ -632,10 +824,7 @@ async function removeAppleDoublePyFiles(opts: {
   const pythonExe = opts.pythonExe;
   const onStatus = opts.onStatus;
 
-  const venvRoot =
-    process.platform === "win32"
-      ? path.dirname(path.dirname(pythonExe)) // .../apex-studio/Scripts/python.exe -> .../apex-studio
-      : path.dirname(path.dirname(pythonExe)); // .../apex-studio/bin/python -> .../apex-studio
+  const venvRoot = resolveRuntimeRootFromPythonExe(pythonExe);
 
   const sitePackageCandidates: string[] = [];
   if (process.platform === "win32") {
@@ -714,20 +903,55 @@ export class InstallerModule implements AppModule {
     if (ipcMain.listenerCount("installer:extract-server-bundle") > 0) return;
 
     ipcMain.handle(
+      "installer:set-active",
+      async (_evt, payload: { active?: boolean; reason?: string }) => {
+        try {
+          const active = Boolean(payload?.active);
+          const reason = payload?.reason ? String(payload.reason) : undefined;
+          await pythonProcess().setInstallerActive(active, reason);
+          return { success: true, data: { active } };
+        } catch (e) {
+          return {
+            success: false,
+            error:
+              e instanceof Error ? e.message : "Failed to set installer active state",
+          };
+        }
+      },
+    );
+
+    ipcMain.handle(
       "installer:extract-server-bundle",
       async (_evt, req: ExtractBundleRequest): Promise<ConfigResponse<{ extractedTo: string }>> => {
         const tempPathsToCleanup: string[] = [];
         let stagingDirToCleanup: string | null = null;
+        let destinationAbsForFailureCleanup: string | null = null;
+        let shouldCleanupDestinationAbsOnFailure = false;
         try {
           const jobId = String(req?.jobId || randomUUID());
           const sendProgress = (ev: InstallerProgressEvent) => {
             _evt.sender.send(`installer:progress:${jobId}`, ev);
           };
 
+          // Defensive: ensure the backend is stopped before we touch any on-disk runtime/code.
+          // The renderer also requests this, but enforcing in main avoids races and protects
+          // against alternate callers.
+          try {
+            sendProgress({ phase: "status", message: "Stopping backend (installer)…" });
+            const py = pythonProcess();
+            // Keep installer active so auto-start/restart and manual start requests are suppressed.
+            await py.setInstallerActive(true, "installer:extract-server-bundle");
+            // Ensure we actually stop even if installerActive was already true (setInstallerActive is idempotent).
+            await py.stop();
+            // Best-effort: give Windows a moment to release file handles after termination.
+            await new Promise<void>((resolve) => setTimeout(resolve, 250));
+          } catch {}
+
           const destinationDir = String(req?.destinationDir || "").trim();
           if (!destinationDir) throw new Error("destinationDir is required");
           assertSafeInstallDir(destinationDir);
           const destinationAbs = path.resolve(destinationDir);
+          destinationAbsForFailureCleanup = destinationAbs;
 
           const src = req?.source;
           if (!src || (src.kind !== "local" && src.kind !== "remote")) {
@@ -736,6 +960,13 @@ export class InstallerModule implements AppModule {
 
           // If destination already contains an install, use a staging directory so we can
           // validate the new bundle before swapping it into place.
+          const destExistedBefore = (() => {
+            try {
+              return fs.existsSync(destinationAbs);
+            } catch {
+              return false;
+            }
+          })();
           const hasExistingInstall = await isNonEmptyDir(destinationAbs);
           const effectiveDestinationDir = hasExistingInstall
             ? path.join(path.dirname(destinationAbs), `.apex-install-staging-${randomUUID()}`)
@@ -746,6 +977,19 @@ export class InstallerModule implements AppModule {
               phase: "status",
               message: "Existing install detected; extracting into staging directory for safe reinstall…",
             });
+          }
+          // Cleanup policy (requested):
+          // If this is a fresh install into the default "apex-server" folder and anything fails
+          // during download/extraction/validation, delete the folder so we don't leave a partially
+          // working install behind.
+          //
+          // For reinstalls, we extract into staging and only swap after validation; staging cleanup
+          // is already handled in finally.
+          try {
+            const base = path.basename(destinationAbs).toLowerCase();
+            shouldCleanupDestinationAbsOnFailure = !hasExistingInstall && (base === "apex-server" || !destExistedBefore);
+          } catch {
+            shouldCleanupDestinationAbsOnFailure = !hasExistingInstall && !destExistedBefore;
           }
           await fsp.mkdir(effectiveDestinationDir, { recursive: true });
 
@@ -780,12 +1024,15 @@ export class InstallerModule implements AppModule {
           });
 
           // Defensive cleanup: remove AppleDouble `._*` files that can slip into archives and break runtime.
-          try {
-            await removeAppleDoubleFilesRecursively({
-              rootDir: effectiveDestinationDir,
-              onStatus: (m) => sendProgress({ phase: "status", message: m }),
-            });
-          } catch {}
+          // Only relevant on macOS; skip on Windows/Linux for speed.
+          if (process.platform === "darwin") {
+            try {
+              await removeAppleDoubleFilesRecursively({
+                rootDir: effectiveDestinationDir,
+                onStatus: (m) => sendProgress({ phase: "status", message: m }),
+              });
+            } catch {}
+          }
 
           sendProgress({ phase: "status", message: "Validating extracted bundle…" });
           await validateExtractedBundleOrThrow({ installDir: effectiveDestinationDir, timeoutMs: 10_000 });
@@ -794,6 +1041,12 @@ export class InstallerModule implements AppModule {
           // - Only now do we remove the previous install and move the staged dir into place.
           if (hasExistingInstall) {
             sendProgress({ phase: "status", message: "Replacing existing install…" });
+            // Extra safety: stop again right before the swap in case something re-spawned.
+            try {
+              const py = pythonProcess();
+              await py.stop();
+              await new Promise<void>((resolve) => setTimeout(resolve, 250));
+            } catch {}
             try {
               await fsp.rm(destinationAbs, { recursive: true, force: true });
             } catch {}
@@ -805,6 +1058,13 @@ export class InstallerModule implements AppModule {
           sendProgress({ phase: "status", message: "Bundle extracted" });
           return { success: true, data: { extractedTo: destinationAbs } };
         } catch (e) {
+          // If this was a fresh install into apex-server (or into a directory we created),
+          // delete the destination to avoid leaving a partial installation around.
+          if (shouldCleanupDestinationAbsOnFailure && destinationAbsForFailureCleanup) {
+            try {
+              await safeRemovePath(destinationAbsForFailureCleanup);
+            } catch {}
+          }
           return { success: false, error: e instanceof Error ? e.message : "Failed to extract bundle" };
         } finally {
           if (stagingDirToCleanup) {
@@ -859,6 +1119,16 @@ export class InstallerModule implements AppModule {
           } catch {}
         };
         try {
+          // Defensive: setup writes into the runtime and can download/patch packages.
+          // Ensure the backend is stopped and cannot restart while setup runs.
+          try {
+            sendStatus("Stopping backend (installer)…");
+            const py = pythonProcess();
+            await py.setInstallerActive(true, "installer:run-setup");
+            await py.stop();
+            await new Promise<void>((resolve) => setTimeout(resolve, 250));
+          } catch {}
+
           const apexHomeDir = String(req?.apexHomeDir || "").trim();
           const apiInstallDir = String(req?.apiInstallDir || "").trim();
           if (!apexHomeDir) throw new Error("apexHomeDir is required");

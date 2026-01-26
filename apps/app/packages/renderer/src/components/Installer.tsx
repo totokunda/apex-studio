@@ -9,6 +9,7 @@ import {
   pickMediaPaths,
   resolvePath,
   runSetupScript,
+  setInstallerActive,
   setApiPathSetting,
   setMaskModelSetting,
   setRenderImageStepsSetting,
@@ -22,7 +23,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/common/ProgressBar";
 import { LuCheck, LuLoader, LuX } from "react-icons/lu";
-import { FixedSizeList as VirtualList, type ListChildComponentProps } from "react-window";
 import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 import { ScrollBar } from "@/components/ui/scroll-area";
 import {
@@ -50,18 +50,6 @@ type InstallPhaseState = {
   percent: number | null; // 0..100
   message: string | null;
 };
-
-const VirtualScrollViewport = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
-  <ScrollAreaPrimitive.Viewport
-    ref={ref}
-    className={["h-full w-full rounded-[inherit]", className].filter(Boolean).join(" ")}
-    {...props}
-  />
-));
-VirtualScrollViewport.displayName = "VirtualScrollViewport";
 
 const MASK_MODEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "sam2_tiny", label: "Sam2 Tiny" },
@@ -164,6 +152,13 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
   const [installJobId, setInstallJobId] = useState<string | null>(null);
 
   const [uiMode, setUiMode] = useState<InstallerUIMode>("setup");
+  // When the installer is rendered automatically (e.g. because !hasBackend), the parent may
+  // switch away as soon as the backend becomes available. Once an install starts we force
+  // the installer to stay mounted until the user explicitly presses "Launch".
+  const requestCloseInstaller = () => {
+    if (installing || uiMode === "installing") return;
+    setShowInstaller(false);
+  };
   const [backendStatus, setBackendStatus] = useState<
     "idle" | "starting" | "started" | "error"
   >("idle");
@@ -185,6 +180,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
   useEffect(() => {
     activePhaseRef.current = activePhase;
   }, [activePhase]);
+  const phaseStateRef = useRef<Record<InstallPhaseId, InstallPhaseState> | null>(null);
   const [phaseState, setPhaseState] = useState<Record<InstallPhaseId, InstallPhaseState>>(() => ({
     download_bundle: { status: "pending", percent: null, message: null },
     extract_bundle: { status: "pending", percent: null, message: null },
@@ -192,15 +188,9 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     verify_attention: { status: "pending", percent: null, message: null },
     update_configs: { status: "pending", percent: null, message: null },
   }));
-  const extractionFilesRef = useRef<string[]>([]);
-  const [extractionListVersion, setExtractionListVersion] = useState<number>(0);
-  const extractionPendingRef = useRef<string[]>([]);
-  const extractionFlushTimerRef = useRef<number | null>(null);
-  const extractionListContainerRef = useRef<HTMLDivElement | null>(null);
-  const [extractionListSize, setExtractionListSize] = useState<{
-    width: number;
-    height: number;
-  }>({ width: 0, height: 0 });
+  useEffect(() => {
+    phaseStateRef.current = phaseState;
+  }, [phaseState]);
 
   // Attention backend verification emits one event per backend; keep a small rolling log.
   const attentionEventsRef = useRef<string[]>([]);
@@ -219,38 +209,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
   const lastDownloadPctRef = useRef<number | null>(null);
   const lastExtractUiUpdateAtRef = useRef<number>(0);
   const lastExtractPctRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    // The extraction panel mounts/unmounts based on the active phase, so we need to
-    // attach the observer whenever the container is present.
-    const el = extractionListContainerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const cr = entry.contentRect;
-      setExtractionListSize({
-        width: Math.max(0, Math.floor(cr.width)),
-        height: Math.max(0, Math.floor(cr.height)),
-      });
-    });
-    ro.observe(el);
-    // Initialize immediately too (some environments don't fire RO until a resize).
-    const rect = el.getBoundingClientRect();
-    setExtractionListSize({
-      width: Math.max(0, Math.floor(rect.width)),
-      height: Math.max(0, Math.floor(rect.height)),
-    });
-    return () => ro.disconnect();
-  }, [activePhase, uiMode, extractionListVersion]);
-
-  const flushExtractionEntries = () => {
-    const pending = extractionPendingRef.current;
-    if (pending.length === 0) return;
-    extractionPendingRef.current = [];
-    extractionFilesRef.current = extractionFilesRef.current.concat(pending);
-    setExtractionListVersion((v) => v + 1);
-  };
 
   const stopPythonApiIfRunning = async (opts?: { reason?: string }) => {
     const reason = String(opts?.reason || "").trim();
@@ -300,6 +258,62 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     patch: Partial<InstallPhaseState>,
   ) => {
     setPhaseState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  };
+
+  const phaseOrder: InstallPhaseId[] = useMemo(
+    () => [
+      "download_bundle",
+      "extract_bundle",
+      "download_models",
+      "verify_attention",
+      "update_configs",
+    ],
+    [],
+  );
+  const phaseIndex = (id: InstallPhaseId) => phaseOrder.indexOf(id);
+
+  const activatePhaseExclusive = (
+    id: InstallPhaseId,
+    patch?: Partial<InstallPhaseState>,
+  ) => {
+    const idx = phaseIndex(id);
+    setPhaseState((prev) => {
+      const next = { ...prev };
+      for (const pid of phaseOrder) {
+        const st = next[pid];
+        if (pid === id) {
+          // Do not override terminal states.
+          if (st.status !== "completed" && st.status !== "skipped" && st.status !== "error") {
+            next[pid] = { ...st, status: "active", ...(patch || {}) };
+          } else if (patch) {
+            next[pid] = { ...st, ...patch };
+          }
+          continue;
+        }
+        if (st.status !== "active") continue;
+        // Ensure only one active phase. When advancing forward, mark prior phase completed.
+        if (phaseIndex(pid) < idx) {
+          next[pid] = {
+            ...st,
+            status: "completed",
+            percent: st.percent ?? 100,
+          };
+        } else {
+          // Defensive: future phase should not be active yet.
+          next[pid] = { ...st, status: "pending" };
+        }
+      }
+      return next;
+    });
+    if (activePhaseRef.current !== id) setActivePhase(id);
+  };
+
+  const completePhase = (id: InstallPhaseId, patch?: Partial<InstallPhaseState>) => {
+    patchPhase(id, {
+      status: "completed",
+      percent: 100,
+      ...(patch || {}),
+    });
   };
 
   const activeIndex = useMemo(
@@ -367,6 +381,25 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     };
   };
 
+  const normalizePlatform = (p: string) => {
+    const s = String(p || "").trim().toLowerCase();
+    if (!s) return s;
+    if (s === "windows") return "win32";
+    if (s === "macos") return "darwin";
+    return s;
+  };
+
+  const normalizeArch = (a: string) => {
+    const raw = String(a || "").trim().toLowerCase();
+    if (!raw) return raw;
+    // Normalize separators/aliases commonly seen across Node and release artifacts.
+    const s = raw.replace(/[^a-z0-9]+/g, "_");
+    if (s === "x64" || s === "amd64" || s === "x86_64") return "x86_64";
+    if (s === "arm64" || s === "aarch64") return "arm64";
+    if (s === "ia32" || s === "x86" || s === "i386") return "x86";
+    return s;
+  };
+
   const validateLocalBundlePath = (p: string) => {
     const trimmed = String(p || "").trim();
     if (!trimmed) {
@@ -386,13 +419,15 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       return;
     }
     if (serverBundlesHost) {
-      if (parsed.platform !== serverBundlesHost.platform) {
+      if (
+        normalizePlatform(parsed.platform) !== normalizePlatform(serverBundlesHost.platform)
+      ) {
         setLocalBundleError(
           `Platform mismatch: file is "${parsed.platform}" but this machine is "${serverBundlesHost.platform}"`,
         );
         return;
       }
-      if (parsed.arch !== serverBundlesHost.arch) {
+      if (normalizeArch(parsed.arch) !== normalizeArch(serverBundlesHost.arch)) {
         setLocalBundleError(
           `Architecture mismatch: file is "${parsed.arch}" but this machine is "${serverBundlesHost.arch}"`,
         );
@@ -456,11 +491,53 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
           prerelease: it.prerelease,
         }));
 
-        setAvailableServerBundles(normalized);
+        // Default bundle ordering: prefer CUDA first (then ROCm/MPS), then CPU.
+        // This makes "recommended" defaults match GPU-first expectations on capable machines.
+        const devicePriority = (d: string) => {
+          const s = String(d || "").trim().toLowerCase();
+          if (s === "cuda" || s.startsWith("cuda")) return 0;
+          if (s === "rocm" || s.startsWith("rocm")) return 1;
+          if (s === "mps" || s === "metal") return 2;
+          if (s === "cpu") return 3;
+          return 9;
+        };
+        const parseSemver = (v: string) => {
+          // Accept "v0.1.0" or "0.1.0" (ignore any suffix)
+          const s = String(v || "").trim().replace(/^v/i, "");
+          const m = /^(\d+)\.(\d+)\.(\d+)/.exec(s);
+          if (!m) return null;
+          return [Number(m[1]), Number(m[2]), Number(m[3])] as const;
+        };
+        const cmpSemverDesc = (a: string, b: string) => {
+          const av = parseSemver(a);
+          const bv = parseSemver(b);
+          if (!av && !bv) return 0;
+          if (!av) return 1;
+          if (!bv) return -1;
+          if (av[0] !== bv[0]) return bv[0] - av[0];
+          if (av[1] !== bv[1]) return bv[1] - av[1];
+          return bv[2] - av[2];
+        };
+
+        const sorted = normalized
+          .map((b, idx) => ({ ...b, __idx: idx }))
+          .sort((a, b) => {
+            const dp = devicePriority(a.device) - devicePriority(b.device);
+            if (dp !== 0) return dp;
+            // Prefer non-prerelease when otherwise equal.
+            const preA = a.prerelease ? 1 : 0;
+            const preB = b.prerelease ? 1 : 0;
+            if (preA !== preB) return preA - preB;
+            const sv = cmpSemverDesc(a.tagVersion, b.tagVersion);
+            if (sv !== 0) return sv;
+            // Stable fallback: preserve source order
+            return a.__idx - b.__idx;
+          })
+          .map(({ __idx, ...b }) => b);
+
+        setAvailableServerBundles(sorted);
         setSelectedServerBundleKey(
-          normalized.length > 0
-            ? `${normalized[0]!.tag}::${normalized[0]!.assetName}`
-            : null,
+          sorted.length > 0 ? `${sorted[0]!.tag}::${sorted[0]!.assetName}` : null,
         );
         setShowSelectedBundleDetails(false);
         setServerBundlesLoading(false);
@@ -499,15 +576,8 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
     setInstallStatus(null);
     setBackendStatus("idle");
     setBackendError(null);
-    extractionFilesRef.current = [];
-    setExtractionListVersion((v) => v + 1);
-    extractionPendingRef.current = [];
     attentionEventsRef.current = [];
     setAttentionListVersion((v) => v + 1);
-    if (extractionFlushTimerRef.current !== null) {
-      window.clearTimeout(extractionFlushTimerRef.current);
-      extractionFlushTimerRef.current = null;
-    }
 
     const dest = String(codeLocation || "").trim();
     if (!dest) {
@@ -520,6 +590,18 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       setInstallError("Please select a server bundle version or choose a local .tar.zst file.");
       return;
     }
+
+    // Tell main process to suppress any backend auto-starts while the installer is running.
+    try {
+      await setInstallerActive(true, "install");
+    } catch {}
+
+    // Make the installer "sticky" in the parent so it cannot be unmounted mid-install when
+    // launcher status flips from !hasBackend -> hasBackend.
+    setShowInstaller(true);
+
+    // Disable setup navigation immediately (there's a small window before uiMode flips).
+    setInstalling(true);
 
     // Lock the installer UI into phase mode; configuration can no longer be changed.
     setUiMode("installing");
@@ -549,6 +631,9 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       unsubscribeProgress = onInstallerProgress(jobId, (ev: any) => {
         if (!ev) return;
         if (ev.phase === "download") {
+          // Enforce sequential UI: ignore late download events once we've moved past download.
+          const dlSt = phaseStateRef.current?.download_bundle?.status;
+          if (dlSt === "completed" || dlSt === "skipped") return;
           const now = Date.now();
           const pctIntRaw =
             typeof ev.percent === "number"
@@ -562,32 +647,26 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
           lastDownloadUiUpdateAtRef.current = now;
           if (pctIntRaw !== null) lastDownloadPctRef.current = pctIntRaw;
 
-          if (activePhaseRef.current !== "download_bundle") {
-            setActivePhase("download_bundle");
-          }
-          patchPhase("download_bundle", {
-            status: "active",
+          activatePhaseExclusive("download_bundle", {
             // Do not clear percent when the event doesn't carry it.
             ...(pctIntRaw !== null ? { percent: pctIntRaw } : {}),
             message: ev.message || "Downloading…",
           });
           if (typeof ev.percent === "number" && ev.percent >= 1) {
-            patchPhase("download_bundle", { status: "completed", percent: 100 });
-            patchPhase("extract_bundle", { status: "active" });
-            if (activePhaseRef.current !== "extract_bundle") {
-              setActivePhase("extract_bundle");
-            }
+            completePhase("download_bundle");
+            activatePhaseExclusive("extract_bundle", { message: "Starting extraction…" });
           }
         } else if (ev.phase === "extract") {
+          // Enforce sequential UI: ignore late extract events once extraction is done.
+          const exSt = phaseStateRef.current?.extract_bundle?.status;
+          if (exSt === "completed" || exSt === "skipped") return;
           const now = Date.now();
           const pctIntRaw =
             typeof ev.percent === "number"
               ? Math.round(Math.max(0, Math.min(1, ev.percent)) * 100)
               : null;
 
-          if (activePhaseRef.current !== "extract_bundle") {
-            setActivePhase("extract_bundle");
-          }
+          activatePhaseExclusive("extract_bundle");
           const shouldUpdate =
             (pctIntRaw !== null && pctIntRaw !== lastExtractPctRef.current) ||
             now - lastExtractUiUpdateAtRef.current > 1200;
@@ -595,30 +674,16 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
             lastExtractUiUpdateAtRef.current = now;
             if (pctIntRaw !== null) lastExtractPctRef.current = pctIntRaw;
             patchPhase("extract_bundle", {
-              status: "active",
               // Do not clear percent when the event doesn't carry it.
               ...(pctIntRaw !== null ? { percent: pctIntRaw } : {}),
-              // Keep the progress/status text generic; filenames are shown only in the extraction log panel.
               message:
                 typeof ev.percent === "number" && ev.percent >= 1
                   ? "Extraction complete"
                   : "Extracting…",
             });
           }
-          if (ev.entryName) {
-            extractionPendingRef.current.push(String(ev.entryName));
-            if (extractionFlushTimerRef.current === null) {
-              // Batch rapid extraction updates to avoid UI freezes.
-              extractionFlushTimerRef.current = window.setTimeout(() => {
-                extractionFlushTimerRef.current = null;
-                flushExtractionEntries();
-              }, 2000);
-            }
-          }
           if (typeof ev.percent === "number" && ev.percent >= 1) {
-            patchPhase("extract_bundle", { status: "completed", percent: 100 });
-            // Flush any remaining extraction entries.
-            flushExtractionEntries();
+            completePhase("extract_bundle", { message: "Extraction complete" });
           }
         } else if (ev.phase === "status") {
           const msg = String(ev.message || "");
@@ -636,10 +701,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
               percent: 100,
               message: msg,
             });
-            patchPhase("extract_bundle", { status: "active" });
-            if (activePhaseRef.current !== "extract_bundle") {
-              setActivePhase("extract_bundle");
-            }
+            activatePhaseExclusive("extract_bundle", { message: "Starting extraction…" });
             return;
           }
           // Otherwise attach to the currently active phase.
@@ -648,7 +710,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       });
     }
 
-    setInstalling(true);
     try {
       // IMPORTANT: stop any running Python backend before modifying/installing the runtime/code.
       // Otherwise extraction/setup can fail or the app may keep using an old runtime.
@@ -673,6 +734,14 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       if (!extractRes.success) {
         throw new Error(extractRes.error || "Failed to extract server bundle");
       }
+      // Extraction is complete at this point; ensure phases are consistent even if
+      // progress events were missed or throttled.
+      if (!hasLocal) {
+        completePhase("download_bundle");
+      } else {
+        patchPhase("download_bundle", { status: "skipped", percent: 100 });
+      }
+      completePhase("extract_bundle");
 
       // Persist basic settings used by the launcher / app defaults.
       // - apiPath is used by Launcher as a "we have something installed on disk" fallback.
@@ -693,9 +762,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       // Run setup.py for BOTH:
       // - Download Models (mask + optional RIFE)
       // - Update Configs (render step toggles)
-      setActivePhase("download_models");
-      patchPhase("download_models", {
-        status: "active",
+      activatePhaseExclusive("download_models", {
         percent: 0,
         message: "Starting setup…",
       });
@@ -763,29 +830,29 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
             const pct = pctTask ?? pctOverall;
 
             if (task === "mask" || task === "rife") {
-              if (activePhaseRef.current !== "download_models") {
-                setActivePhase("download_models");
-              }
-              patchPhase("download_models", {
+              activatePhaseExclusive("download_models", {
                 status: status === "error" ? "error" : "active",
                 ...(pct !== null ? { percent: pct } : {}),
                 message: message || "Downloading models…",
               });
             } else if (task === "attention") {
-              if (activePhaseRef.current !== "verify_attention") {
-                setActivePhase("verify_attention");
+              // Attention runs after model downloads; advance phases sequentially.
+              if (phaseStateRef.current?.download_models?.status === "active") {
+                completePhase("download_models", { percent: 100 });
               }
-              patchPhase("verify_attention", {
+              activatePhaseExclusive("verify_attention", {
                 status: status === "error" ? "error" : "active",
                 ...(pct !== null ? { percent: pct } : {}),
                 message: message || "Verifying attention backends…",
               });
               appendAttentionEvent(message || "Verifying attention backends…");
             } else if (task === "config") {
-              if (activePhaseRef.current !== "update_configs") {
-                setActivePhase("update_configs");
+              // Config runs after attention verification; keep things sequential.
+              if (phaseStateRef.current?.verify_attention?.status === "active") {
+                completePhase("verify_attention", { percent: 100 });
               }
-              patchPhase("update_configs", {
+              activatePhaseExclusive("update_configs", {
+                // Keep update_configs active; we'll only mark it completed after ffmpeg install.
                 status: status === "error" ? "error" : "active",
                 ...(pct !== null ? { percent: pct } : {}),
                 message: message || "Updating config…",
@@ -851,21 +918,29 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
 
       await awaitSetupCompletion(jobId!);
 
-      patchPhase("download_models", {
-        status: "completed",
-        percent: 100,
-        message: "Models installed",
-      });
-      patchPhase("verify_attention", {
-        status: "completed",
-        percent: 100,
-        message: "Attention verified",
-      });
+      // Ensure phases are sequentially finalized even if some tasks were skipped.
+      if (phaseStateRef.current?.download_models?.status === "active") {
+        completePhase("download_models", { message: "Models installed" });
+      } else {
+        patchPhase("download_models", {
+          ...(phaseStateRef.current?.download_models?.status === "pending"
+            ? { status: "skipped", percent: 100 }
+            : {}),
+          message: phaseStateRef.current?.download_models?.message || "Models installed",
+        });
+      }
+      if (phaseStateRef.current?.verify_attention?.status === "active") {
+        completePhase("verify_attention", { message: "Attention verified" });
+      } else if (phaseStateRef.current?.verify_attention?.status === "pending") {
+        patchPhase("verify_attention", {
+          status: "skipped",
+          percent: 100,
+          message: "Attention verification skipped",
+        });
+      }
 
       // Update Configs (ffmpeg install + any config flags already applied by setup.py)
-      setActivePhase("update_configs");
-      patchPhase("update_configs", {
-        status: "active",
+      activatePhaseExclusive("update_configs", {
         message: "Installing ffmpeg…",
       });
 
@@ -874,9 +949,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
         throw new Error(ffRes.error || "Failed to install ffmpeg");
       }
 
-      patchPhase("update_configs", {
-        status: "completed",
-        percent: 100,
+      completePhase("update_configs", {
         message: `Completed (ffmpeg: ${ffRes.data?.method})`,
       });
       setUiMode("done");
@@ -884,6 +957,9 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       // After installation completes, start the Python API from the newly installed location.
       setInstallStatus("Installed. Starting backend…");
       setBackendStatus("starting");
+      try {
+        await setInstallerActive(false, "install complete");
+      } catch {}
       const pyRes = await startPythonApi();
       if (!pyRes?.success || !pyRes.data) {
         const msg = pyRes?.error || "Failed to start backend";
@@ -915,13 +991,10 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       resetToReadyToInstall({ keepError: true });
     } finally {
       setInstalling(false);
+      try {
+        await setInstallerActive(false, "installer finished");
+      } catch {}
       if (unsubscribeProgress) unsubscribeProgress();
-      // Flush any remaining extraction entries.
-      flushExtractionEntries();
-      if (extractionFlushTimerRef.current !== null) {
-        window.clearTimeout(extractionFlushTimerRef.current);
-        extractionFlushTimerRef.current = null;
-      }
     }
   };
 
@@ -931,19 +1004,6 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
       return <LuCheck className="h-4 w-4" />;
     if (st.status === "error") return <LuX className="h-4 w-4" />;
     return <span className="h-4 w-4 inline-block rounded-full border border-brand-light/25" />;
-  };
-
-  const ExtractRow = ({ index, style }: ListChildComponentProps) => {
-    const name = extractionFilesRef.current[index] ?? "";
-    return (
-      <div
-        style={style}
-        className="px-2 py-[2px] text-[10.5px] leading-relaxed text-brand-light/70 font-mono whitespace-nowrap overflow-hidden text-ellipsis"
-        title={name}
-      >
-        {name}
-      </div>
-    );
   };
 
   return (
@@ -1398,8 +1458,8 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                     type="button"
                     variant="outline"
                     className="rounded-[6px]  bg-brand-background-light border border-brand-light/5 hover:bg-brand/70 hover:text-brand-light/90 px-6 py-2 dark text-brand-light/90 text-[11.5px]"
-                    disabled={!canGoBack && !hasBackend}
-                    onClick={canGoBack ? goBack : () => setShowInstaller(false)}
+                    disabled={installing || (!canGoBack && !hasBackend)}
+                    onClick={canGoBack ? goBack : requestCloseInstaller}
                   >
                     {canGoBack ? "Back" : hasBackend ? "Cancel" : "Back"}
                   </Button>
@@ -1519,39 +1579,8 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                     {/* Phase-specific content */}
                     <div className="mt-5 flex-1 min-h-0">
                       {activePhase === "extract_bundle" ? (
-                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-3 h-full flex flex-col min-h-0">
-                          <div className="text-[11px] text-brand-light/70 mb-2">
-                            Extracted files (live)
-                          </div>
-                          <div className="text-[10px] text-brand-light/40 mb-2">
-                            {extractionFilesRef.current.length} files
-                          </div>
-                          <ScrollAreaPrimitive.Root
-                            ref={extractionListContainerRef}
-                            className="flex-1 min-h-0 rounded border border-brand-light/10 bg-black/30 overflow-hidden"
-                          >
-                            {extractionFilesRef.current.length === 0 ? (
-                              <div className="p-2 text-[10.5px] text-brand-light/50">
-                                Waiting for extraction to start…
-                              </div>
-                            ) : extractionListSize.height > 0 &&
-                              extractionListSize.width > 0 ? (
-                              <>
-                                <VirtualList
-                                  height={extractionListSize.height}
-                                  width={extractionListSize.width}
-                                  itemCount={extractionFilesRef.current.length}
-                                  itemSize={18}
-                                  outerElementType={VirtualScrollViewport as any}
-                                >
-                                  {ExtractRow}
-                                </VirtualList>
-                                <ScrollBar orientation="vertical" />
-                                <ScrollBar orientation="horizontal" />
-                                <ScrollAreaPrimitive.Corner />
-                              </>
-                            ) : null}
-                          </ScrollAreaPrimitive.Root>
+                        <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
+                          Extracting bundle…
                         </div>
                       ) : activePhase === "download_models" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
@@ -1584,7 +1613,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                         </div>
                       ) : activePhase === "update_configs" ? (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
-                          Config setup is partially implemented (currently: ffmpeg install).
+                          Config setup is complete.
                         </div>
                       ) : (
                         <div className="rounded-md border border-brand-light/5 bg-brand-background/60 backdrop-blur-md p-4 text-[11px] text-brand-light/70">
@@ -1599,18 +1628,18 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                       </div>
                     ) : null}
                     {uiMode === "done" && installStatus ? (
-                      <div className="mt-4 text-[11px] text-brand-light/70">
+                      <div className="mt-4 text-[11px] font-medium text-brand-light/80">
                         {installStatus}
                       </div>
                     ) : null}
 
                     {uiMode === "done" ? (
                       <div className="mt-5 flex items-center justify-between gap-3">
-                        <div className="text-[11px] text-brand-light/60">
+                        <div className="text-[11px] text-brand-light font-semibold">
                           {backendStatus === "starting"
-                            ? "Starting backend…"
+                            ? "Starting Backend…"
                             : backendStatus === "started"
-                              ? "Backend started"
+                              ? "Backend Started"
                               : backendStatus === "error"
                                 ? `Backend failed to start${backendError ? `: ${backendError}` : ""}`
                                 : null}

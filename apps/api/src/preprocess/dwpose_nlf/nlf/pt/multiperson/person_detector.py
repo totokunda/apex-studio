@@ -16,6 +16,7 @@ class PersonDetector(nn.Module):
         if model_path.lower().endswith(".onnx"):
             # ONNX Runtime backend
             try:
+
                 import onnxruntime as ort  # type: ignore
             except ModuleNotFoundError as e:
                 raise ModuleNotFoundError(

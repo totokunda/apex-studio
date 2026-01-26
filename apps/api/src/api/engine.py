@@ -12,7 +12,6 @@ This exposes endpoints to:
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import os
 import uuid
 import ray
 from fastapi import APIRouter, HTTPException
@@ -39,17 +38,6 @@ class RunEngineRequest(BaseModel):
     selected_components: Optional[Dict[str, Any]] = None
     job_id: Optional[str] = None
     folder_uuid: Optional[str] = None
-
-
-class WarmupEngineRequest(BaseModel):
-    # Identify the manifest to warm. One of these must be provided.
-    manifest_id: Optional[str] = None
-    yaml_path: Optional[str] = None
-    # Optional: user-selected component choices (e.g., scheduler, transformer, etc.)
-    selected_components: Optional[Dict[str, Any]] = None
-    # "disk" | "engine" | "both"
-    mode: Optional[str] = "engine"
-    job_id: Optional[str] = None
 
 
 class JobResponse(BaseModel):
@@ -107,6 +95,7 @@ def run_engine(request: RunEngineRequest):
     try:
         from .ray_tasks import get_engine_runner_actor  # lazy import to avoid cycles
         from .ray_app import get_ray_app
+        from .ray_log_utils import extract_worker_id_and_pid, tail_worker_logs_from_ray_sessions
 
         # Ensure Ray is initialized (warm actor lookup/creation requires it).
         get_ray_app()
@@ -140,73 +129,6 @@ def run_engine(request: RunEngineRequest):
         raise HTTPException(status_code=500, detail=f"Failed to submit: {e}")
 
 
-@router.post("/warmup", response_model=JobResponse)
-def warmup_engine(request: WarmupEngineRequest):
-    """
-    Best-effort warmup for a manifest.
-
-    - mode="disk": warm OS page cache for weight files (no inference).
-    - mode="engine": instantiate engine into the per-worker warm pool.
-    - mode="both": do both.
-    """
-    try:
-        manifest_path = _resolve_manifest_path(request.manifest_id, request.yaml_path)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    mode = (request.mode or "engine").strip().lower()
-    job_id = request.job_id or str(uuid.uuid4())
-
-    # Choose scheduling resources.
-    # - Disk-only warmup doesn't need a GPU.
-    # - Engine warmup must target a GPU worker to be useful.
-    if mode == "disk":
-        resources = get_ray_resources(
-            device_index=None, device_type="cpu", load_profile="light"
-        )
-    else:
-        device_index, device_type = get_best_gpu()
-        resources = get_ray_resources(device_index, device_type, load_profile="light")
-
-    try:
-        from .ray_app import get_ray_app
-        from .ray_tasks import get_engine_runner_actor, warmup_engine_from_manifest  # lazy import
-
-        # Ensure Ray is initialized (warm actor lookup/creation requires it).
-        get_ray_app()
-
-        if mode == "disk":
-            # Disk warmup is CPU-only and doesn't need to go through the GPU actor.
-            ref = submit_tracked_job(
-                job_id=job_id,
-                job_type="engine_warmup",
-                meta={"manifest_path": manifest_path, "mode": mode},
-                submit=lambda: warmup_engine_from_manifest.options(**resources).remote(
-                    manifest_path, request.selected_components or {}, mode=mode
-                ),
-            )
-        else:
-            runner = get_engine_runner_actor(
-                device_index=device_index, device_type=device_type, resources=resources
-            )
-            ref = submit_tracked_job(
-                job_id=job_id,
-                job_type="engine_warmup",
-                meta={"manifest_path": manifest_path, "mode": mode},
-                submit=lambda: runner.warmup_engine_from_manifest.remote(
-                    manifest_path, request.selected_components or {}, mode=mode
-                ),
-            )
-        return JobResponse(
-            job_id=job_id, status="queued", message=f"Warmup queued (mode={mode})"
-        )
-    except Exception as e:
-        logger.error(f"Failed to submit engine warmup: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to submit: {e}")
-
-
 @router.get("/status/{job_id}")
 def engine_status(job_id: str):
     return job_store.status(job_id)
@@ -231,7 +153,19 @@ def engine_result(job_id: str):
             error=result.get("error"),
         )
     except Exception as e:
-        return ResultResponse(job_id=job_id, status="error", error=str(e))
+        # When Ray workers crash (e.g. native access violations / segfaults),
+        # Ray surfaces a generic "worker died" error. Attach the worker log tail
+        # to make root-causing possible from the UI.
+        msg = str(e)
+        try:
+            wid, pid = extract_worker_id_and_pid(msg)
+            if wid:
+                tail = tail_worker_logs_from_ray_sessions(worker_id=wid, worker_pid=pid)
+                if tail:
+                    msg = msg + "\n\n" + tail
+        except Exception:
+            pass
+        return ResultResponse(job_id=job_id, status="error", error=msg)
 
 
 @router.post("/cancel/{job_id}", response_model=JobResponse)

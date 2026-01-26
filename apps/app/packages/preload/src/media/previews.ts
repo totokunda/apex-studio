@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ipcRenderer } from "electron";
@@ -228,12 +228,12 @@ async function exportAudioMp3FromWav(
     const args = [
       "-y",
       "-i",
-      wavPath,
+      toFfmpegPath(wavPath),
       "-c:a",
       "libmp3lame",
       "-b:a",
       "192k",
-      outAbs,
+      toFfmpegPath(outAbs),
     ];
     const ff = spawn(resolveFfmpegCommand("ffmpeg"), args);
     let stderr = "";
@@ -357,6 +357,53 @@ function safeFixed(n: number, digits: number): string {
   return x.toFixed(digits);
 }
 
+function toFfmpegPath(p: string): string {
+  let s = String(p || "");
+  if (!s) return s;
+
+  // Resolve file:// URLs to filesystem paths.
+  if (s.startsWith("file://")) {
+    try {
+      s = fileURLToPath(s);
+    } catch {
+      // keep original
+    }
+  }
+
+  // ffmpeg/ffprobe on Windows is generally happier with forward slashes,
+  // and can choke on extended-length path prefixes (\\?\).
+  if (process.platform === "win32") {
+    // Some inputs can look like "/C:/path" (or "//?/C:/path") on Windows.
+    // ffmpeg expects "C:/path" for drive-letter paths.
+    if (s.startsWith("//?/UNC/")) {
+      // //?/UNC/server/share/path -> //server/share/path
+      s = "//" + s.slice("//?/UNC/".length);
+    } else if (s.startsWith("//?/")) {
+      // //?/C:/path -> C:/path
+      s = s.slice("//?/".length);
+    }
+
+    if (s.startsWith("\\\\?\\UNC\\")) {
+      // \\?\UNC\server\share\path -> \\server\share\path
+      s = "\\\\" + s.slice("\\\\?\\UNC\\".length);
+    } else if (s.startsWith("\\\\?\\")) {
+      // \\?\C:\path -> C:\path
+      s = s.slice("\\\\?\\".length);
+    }
+
+    // Strip leading slashes before a drive letter ("/C:/..." -> "C:/...").
+    s = s.replace(/^\/+([A-Za-z]:)(?=\/|$)/, "$1");
+
+    if (s.includes("\\")) {
+      const wasUnc = s.startsWith("\\\\");
+      s = s.replace(/\\/g, "/");
+      if (wasUnc) s = s.replace(/^\/{4}/, "//");
+    }
+  }
+
+  return s;
+}
+
 async function exportVideoTranscodeWithFfmpeg(
   options: ExportVideoTranscodeOptions,
 ): Promise<string> {
@@ -374,14 +421,20 @@ async function exportVideoTranscodeWithFfmpeg(
     ? await resolveFfmpegInputPath(options.audioSrc)
     : undefined;
 
-  if (videoPath === options.outAbs || audioPath === options.outAbs) {
+  const outAbs = options.outAbs;
+  const outPathForFfmpeg = toFfmpegPath(outAbs);
+  if (toFfmpegPath(videoPath) === outPathForFfmpeg) {
+    throw new Error(
+      "Export failed: source path is the same as the output path. Please export to a different file than the source media.",
+    );
+  }
+  if (audioPath && toFfmpegPath(audioPath) === outPathForFfmpeg) {
     throw new Error(
       "Export failed: source path is the same as the output path. Please export to a different file than the source media.",
     );
   }
 
   // Determine container/codec defaults
-  const outAbs = options.outAbs;
   const format = (options.format ||
     (outAbs.split(".").pop() as any) ||
     "mp4") as NonNullable<ExportVideoTranscodeOptions["format"]>;
@@ -415,9 +468,9 @@ async function exportVideoTranscodeWithFfmpeg(
   const args: string[] = ["-y"];
 
   // Inputs
-  args.push("-i", videoPath);
+  args.push("-i", toFfmpegPath(videoPath));
   const audioInputIndex = audioPath ? 1 : 0;
-  if (audioPath) args.push("-i", audioPath);
+  if (audioPath) args.push("-i", toFfmpegPath(audioPath));
 
   // Build video filterchain
   const vfParts: string[] = [];
@@ -613,7 +666,7 @@ async function exportVideoTranscodeWithFfmpeg(
   })();
   if (container) args.push("-f", container);
 
-  args.push(outAbs);
+  args.push(outPathForFfmpeg);
 
   await new Promise<void>((resolve, reject) => {
     const ff = spawn(resolveFfmpegCommand("ffmpeg"), args);
@@ -647,7 +700,7 @@ async function hasAudioStream(path: string): Promise<boolean> {
         "stream=index",
         "-of",
         "csv=p=0",
-        path,
+        toFfmpegPath(path),
       ]);
       let stdout = "";
       let stderr = "";
@@ -694,7 +747,7 @@ async function hasAudioStreamStrict(path: string): Promise<boolean> {
         "stream=index",
         "-of",
         "csv=p=0",
-        path,
+        toFfmpegPath(path),
       ]);
       let stdout = "";
       let stderr = "";
@@ -730,7 +783,7 @@ async function resolveFfmpegInputPath(src: string): Promise<string> {
     if (typeof p === "string" && p.startsWith("app://")) {
       const resolved = await ipcRenderer.invoke("appdir:resolve-path", p);
       if (typeof resolved === "string" && resolved.length > 0) {
-        return resolved;
+        return toFfmpegPath(resolved);
       }
     }
     if (typeof p === "string" && p.startsWith("file://")) {
@@ -743,7 +796,7 @@ async function resolveFfmpegInputPath(src: string): Promise<string> {
   } catch {
     // fall back to original src on any IPC error
   }
-  return p;
+  return toFfmpegPath(p);
 }
 
 async function renderAudioMixWithFfmpeg(
@@ -800,7 +853,7 @@ async function renderAudioMixWithFfmpeg(
     // eslint-disable-next-line no-await-in-loop
     const hasAudio = await hasAudioStream(p);
     if (!hasAudio) continue;
-    args.push("-i", p);
+    args.push("-i", toFfmpegPath(p));
     activeClips.push({ clip: c, inputIndex: nextInputIndex });
     nextInputIndex += 1;
   }
@@ -899,7 +952,7 @@ async function renderAudioMixWithFfmpeg(
   } else {
     args.push("-c:a", "libmp3lame", "-b:a", "192k");
   }
-  args.push(outAbs);
+  args.push(toFfmpegPath(outAbs));
 
   await new Promise<void>((resolve, reject) => {
     const ff = spawn(resolveFfmpegCommand("ffmpeg"), args);
@@ -1021,12 +1074,13 @@ async function exportVideoOpen(
   let audioPath: string | undefined;
   if (hasAudio) {
     audioPath = await resolveFfmpegInputPath(options.audioPath as string);
-    if (audioPath === outAbs) {
+    const outPathForFfmpeg = toFfmpegPath(outAbs);
+    if (toFfmpegPath(audioPath) === outPathForFfmpeg) {
       throw new Error(
         "Export failed: audio source path is the same as the output path. Please export to a different file than the source media.",
       );
     }
-    args.push("-i", audioPath);
+    args.push("-i", toFfmpegPath(audioPath));
   }
 
   const useCodec = codec;
@@ -1166,7 +1220,7 @@ async function exportVideoOpen(
     args.push("-f", container);
   }
 
-  args.push(outAbs);
+  args.push(toFfmpegPath(outAbs));
 
   const proc = spawn(resolveFfmpegCommand("ffmpeg"), args);
   const sessionId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1393,7 +1447,7 @@ async function savePreviewVideoFromFrames(
   }
   const outAbs = join(previewsAbs, outName);
 
-  const inputPattern = join(tempDir, "frame_%06d.png");
+  const inputPattern = toFfmpegPath(join(tempDir, "frame_%06d.png"));
   const args = [
     "-y",
     "-framerate",
@@ -1410,7 +1464,7 @@ async function savePreviewVideoFromFrames(
     "yuv420p",
     "-movflags",
     "+faststart",
-    outAbs,
+    toFfmpegPath(outAbs),
   ];
 
   await new Promise<void>((resolve, reject) => {
@@ -1453,15 +1507,24 @@ async function getPreviewPath(
   const ensureUnique = options?.ensureUnique !== false;
   const desiredExt = (options?.ext || "mp4").replace(/^\./, "");
 
-  const isAbsolutePath =
-    typeof idOrPath === "string" && idOrPath.startsWith("/");
+  let maybePath = String(idOrPath || "");
+  if (maybePath.startsWith("file://")) {
+    try {
+      maybePath = fileURLToPath(maybePath);
+    } catch {
+      // keep original
+    }
+  }
+
+  const isAbsolutePath = typeof maybePath === "string" && isAbsolute(maybePath);
 
   let baseName: string;
   if (isAbsolutePath) {
-    if (idOrPath === previewsAbs || idOrPath.startsWith(previewsAbs + "/")) {
-      baseName = idOrPath.slice(previewsAbs.length + 1);
+    const prefix = previewsAbs.endsWith(sep) ? previewsAbs : previewsAbs + sep;
+    if (maybePath === previewsAbs || maybePath.startsWith(prefix)) {
+      baseName = maybePath.slice(prefix.length);
     } else {
-      baseName = basename(idOrPath);
+      baseName = basename(maybePath);
     }
   } else {
     baseName = String(idOrPath);

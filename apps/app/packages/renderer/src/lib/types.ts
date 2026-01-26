@@ -6,8 +6,8 @@ import {
   InputFormat,
   Input,
 } from "mediabunny";
-import { Preprocessor } from "./preprocessor";
-import { ManifestDocument } from "./manifest/api";
+import type { Preprocessor } from "./preprocessor/index.js";
+import type { ManifestDocument } from "./manifest/api.js";
 
 export type ClipType =
   | "video"
@@ -342,6 +342,10 @@ export type GenerationModelClipProps = {
   selectedComponents?: Record<string, any>;
   values?: Record<string, any>;
   src?: string;
+  startFrame?: number;
+  endFrame?: number;
+  trimStart?: number;
+  trimEnd?: number;
   // Persist the clip transform used when this generation was previewed/applied
   transform?: ClipTransform;
 };

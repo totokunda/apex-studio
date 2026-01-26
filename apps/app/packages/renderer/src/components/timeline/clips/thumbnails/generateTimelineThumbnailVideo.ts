@@ -54,18 +54,24 @@ export const generateTimelineThumbnailVideo = async (
   if (currentClip.trimStart || currentClip.trimEnd) {
     const realStartFrame = currentStartFrame - (currentClip.trimStart ?? 0);
     const realEndFrame = currentEndFrame - (currentClip.trimEnd ?? 0);
-    tClipWidth = Math.max(
-      getClipWidth(
-        realStartFrame,
-        realEndFrame,
-        timelineWidth,
-        timelineDuration,
+    // Even when trims change the "real" clip width, we only need enough tiles
+    // to cover the visible timeline width. Without this clamp, max-zoom can
+    // request thousands of columns and effectively stall/blank thumbnails.
+    tClipWidth = Math.min(
+      Math.max(
+        getClipWidth(
+          realStartFrame,
+          realEndFrame,
+          timelineWidth,
+          timelineDuration,
+        ),
+        3,
       ),
-      3,
+      maxTimelineWidth,
     );
     const tempNumColumns = Math.ceil((tClipWidth - overHang) / thumbnailWidth);
     numColumnsAlt = numColumns;
-    numColumns = tempNumColumns;
+    numColumns = Math.max(1, tempNumColumns);
   }
   const timelineShift = noShift ? 0 : currentStartFrame - (currentClip.trimStart ?? 0);
   const realStartFrame = timelineShift;

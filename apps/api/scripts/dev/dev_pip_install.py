@@ -9,10 +9,9 @@ Goal: provide a simple, pip-based install path for local development that can ta
 This is intentionally lighter than `scripts/install.sh` (conda/CUDA setup) and mirrors the
 high-level order used by `scripts/bundle_python.py`:
   1) ensure build tooling
-  2) install honcho (used by `apex-engine dev`)
-  3) install torch for the chosen backend
-  4) install machine requirements (cpu/mps/cuda*/rocm)
-  5) install apex-engine itself (editable, no-deps) to expose the CLI entrypoint
+  2) install torch for the chosen backend
+  3) install machine requirements (cpu/mps/cuda*/rocm)
+  4) install apex-engine itself (editable, no-deps) to expose the CLI entrypoint
 """
 
 from __future__ import annotations
@@ -113,7 +112,7 @@ def _install(
 ) -> None:
     """
     Install packages using uv (fast) when available, with a pip fallback.
-    `args` are pip-style arguments, e.g. ["-r", "requirements.txt"] or ["honcho"].
+    `args` are pip-style arguments, e.g. ["-r", "requirements.txt"].
     """
     # Prefer uv (installed via `_bootstrap_uv`) and invoke it via `python -m uv`
     # so we don't depend on PATH/venv activation (especially on Windows).
@@ -440,8 +439,6 @@ def main() -> int:
             # Even when it's present in our requirements, pip can attempt to build lmdb before
             # installing patch-ng, so we ensure it's already available here.
             "patch-ng",
-            # Dev tooling
-            "honcho",
         ],
         use_no_build_isolation=False,
     )
@@ -547,7 +544,7 @@ def main() -> int:
     if args.venv and sys.platform != "win32":
         # Hint only; keep output short and actionable.
         print(f"Activate: source {Path(args.venv) / 'bin' / 'activate'}")
-    print("Run: python3 -m src serve")
+    print("Run: apex-engine start --port 8765")
     return 0
 
 

@@ -19,6 +19,7 @@ fvcore==0.1.5.post20221221
 gdown==5.2.0
 gguf==0.17.1
 huggingface_hub==0.34.0
+truststore==0.10.1; sys_platform == "win32"
 imageio==2.37.0
 iopath==0.1.10
 ipdb==0.13.13

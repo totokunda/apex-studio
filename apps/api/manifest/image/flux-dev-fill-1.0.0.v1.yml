@@ -30,6 +30,7 @@ spec:
   - sdpa
   - flash
   - flash3
+  - sage
   - metal_flash
   - efficient_dot_product_attention
   - xformers
@@ -328,9 +329,3 @@ spec:
       value_type: integer
       panel: sampling
       required: false
-  loras:
-  - scale: 1.0
-    name: Super Realism
-    label: Super Realism
-    verified: true
-    source: /home/tosin_coverquick_co/apex-diffusion/loras/3c7f545f81f19749afdb2126ac4747aa0c8176b9bca618145c3ceda830877675_super-realism.safetensors

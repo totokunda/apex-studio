@@ -22,9 +22,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--yaml-path",
         type=str,
-        default=(
-            "/home/tosin_coverquick_co/apex/manifest/verified/video/wan-2.2-a14b-text-to-video-1.0.0.v1.yml"
-        ),
         help=(
             "Path to the model directory (Hugging Face-style, with config.json). "
             "Defaults to the Wan 2.2 I2V A14B UMT5EncoderModel text encoder path."

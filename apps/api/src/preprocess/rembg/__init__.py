@@ -4,7 +4,7 @@ Uses the rembg library for high-quality background removal
 """
 
 import os
-
+import torch
 import numpy as np
 from PIL import Image
 
@@ -12,7 +12,6 @@ from src.preprocess.util import resize_image_with_pad
 from src.types import InputImage, OutputImage
 from src.preprocess.base_preprocessor import BasePreprocessor
 from src.utils.defaults import DEFAULT_PREPROCESSOR_SAVE_PATH
-
 
 class RembgDetector(BasePreprocessor):
     """
