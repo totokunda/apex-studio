@@ -1708,7 +1708,7 @@ class DownloadMixin:
         ] = None,
         session=None,
         filename: Optional[str] = None,
-        chunk_size: int = 2 * 1024 * 1024,  # 2MB
+        chunk_size: int = 1024 * 1024,  # 1MB
         adaptive: bool = False,
         initial_chunk_size: int = 512 * 1024,  # 512KB starting point for probing
         target_chunk_seconds: float = 0.25,  # aim ~250ms per read
@@ -2405,6 +2405,19 @@ class DownloadMixin:
                                 current_chunk_size = clamp(
                                     desired, min_chunk_size, max_chunk_size
                                 )
+
+            # If the stream ended early without raising, avoid finalizing a corrupt file.
+            # This can happen when a proxy/CDN closes the connection and urllib3 treats it
+            # as EOF. Tenacity will retry, and we will resume from the `.part` size.
+            expected_size = None
+            try:
+                expected_size = int(total_size) if total_size is not None else None
+            except Exception:
+                expected_size = None
+            if expected_size is not None and downloaded_so_far < expected_size:
+                raise RuntimeError(
+                    f"Incomplete download for {log_name}: got {downloaded_so_far} bytes, expected {expected_size} bytes"
+                )
 
             # Finalize the downloaded file
             os.replace(part_path, file_path)

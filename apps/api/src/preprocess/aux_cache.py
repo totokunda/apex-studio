@@ -304,7 +304,20 @@ class AuxillaryCache:
                         self.result_path,
                         fps=self._video_info["fps"],
                         codec="vp9",
-                        output_params=["-pix_fmt", "yuva420p"],
+                        # High-quality VP9 encode with alpha support
+                        # - pix_fmt: preserve alpha channel
+                        # - b:v 0 + crf: constant-quality mode (lower crf => higher quality)
+                        # - deadline/cpu-used: bias toward quality over speed
+                        # NOTE: For maximum fidelity (esp. masks/overlays), prefer lossless.
+                        pixelformat="yuva420p",
+                        output_params=[
+                            "-lossless",
+                            "1",
+                            "-deadline",
+                            "best",
+                            "-cpu-used",
+                            "0",
+                        ],
                     ) as writer:
                         for frame_idx in frame_range:
                             if frame_idx in new_frames_dict:
@@ -319,7 +332,26 @@ class AuxillaryCache:
                                 )
                 else:
                     with imageio.get_writer(
-                        self.result_path, fps=self._video_info["fps"]
+                        self.result_path,
+                        fps=self._video_info["fps"],
+                        # High-quality H.264 encode (widely compatible MP4)
+                        codec="libx264",
+                        # Use 4:4:4 to avoid chroma subsampling artifacts on synthetic maps
+                        # (pose/depth/seg/etc.). This trades compatibility for fidelity.
+                        pixelformat="yuv444p",
+                        macro_block_size=1,
+                        output_params=[
+                            # Lossless H.264 (large files, best quality)
+                            "-crf",
+                            "0",
+                            "-preset",
+                            "veryslow",
+                            "-profile:v",
+                            "high444",
+                            # Better playback/streaming behavior (does not affect quality)
+                            "-movflags",
+                            "+faststart",
+                        ],
                     ) as writer:
                         for frame_idx in frame_range:
                             if frame_idx in new_frames_dict:
