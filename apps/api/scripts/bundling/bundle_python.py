@@ -1467,6 +1467,11 @@ class PythonBundler:
         except Exception:
             pass
 
+        # Windows: ship VC++ runtime DLLs app-locally so torch can import without any
+        # system vc_redist install/upgrade (avoids UAC prompts for end users).
+        if self.platform_name == "win32":
+            self._bundle_windows_vc_runtime(dest_dir=Path(py_path).resolve().parent)
+
         return runtime_dir
 
     def _cleanup_bundle_tree(self, root: Path) -> tuple[int, int]:
@@ -1526,6 +1531,143 @@ class PythonBundler:
             pass
 
         return removed_files, removed_dirs
+
+    def _bundle_windows_vc_runtime(self, *, dest_dir: Path) -> None:
+        """
+        Windows: ship the VC++ runtime DLLs *app-locally* alongside the shipped Python.
+
+        Why:
+          - End users may have an old 14.x VC runtime installed (registry Installed=1),
+            which can still fail to load modern PyTorch DLLs (c10.dll dependencies).
+          - Installing/upgrading vc_redist requires elevation/UAC; app-local DLLs avoid that.
+
+        IMPORTANT:
+          - To keep builds reproducible, we do NOT copy DLLs from the build machine's System32.
+            Instead, we extract the official redist payload:
+              vc_redist.x64.exe /layout -> MSI payloads
+              msiexec /a (administrative install) -> extracted DLLs
+
+        This step only runs when the bundler itself is running on Windows.
+        """
+        if self.platform_name != "win32":
+            return
+
+        dest_dir = Path(dest_dir).resolve()
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Only supported when bundling on a Windows host.
+        if os.name != "nt":
+            print(
+                f"Skipping VC++ runtime extraction: host os.name={os.name!r} (platform_name={self.platform_name})"
+            )
+            return
+
+        # If the required DLLs are already present, don't re-extract.
+        required = ["vcruntime140_1.dll", "msvcp140.dll", "vcruntime140.dll"]
+        if all((dest_dir / name).exists() for name in required):
+            print(f"VC++ runtime DLLs already present next to python.exe: {dest_dir}")
+            return
+
+        VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+
+        # Prefer a repo-local copy (downloaded by apps/app/scripts/ensure-vc-redist.js),
+        # but fall back to downloading into the bundler output cache.
+        repo_root = self.project_root.parent.parent
+        candidate = repo_root / "apps" / "app" / "buildResources" / "vc_redist.x64.exe"
+        vc_redist_dir = (self.output_dir / "_vc-redist").resolve()
+        vc_redist_dir.mkdir(parents=True, exist_ok=True)
+        vc_redist_exe = (vc_redist_dir / "vc_redist.x64.exe").resolve()
+
+        try:
+            if candidate.exists() and candidate.stat().st_size > 1024 * 1024:
+                vc_redist_exe = candidate.resolve()
+            else:
+                # Download into the bundler output cache (local builds).
+                if not vc_redist_exe.exists() or vc_redist_exe.stat().st_size < 1024 * 1024:
+                    print(f"Downloading vc_redist.x64.exe for extraction: {VC_REDIST_URL}")
+                    self._http_download(VC_REDIST_URL, vc_redist_exe)
+        except Exception as e:
+            raise RuntimeError(f"Failed to obtain vc_redist.x64.exe: {e}") from e
+
+        layout_dir = (vc_redist_dir / "layout").resolve()
+        msi_out_dir = (vc_redist_dir / "msi").resolve()
+
+        # Clean previous extractions to avoid stale/corrupt outputs.
+        try:
+            if layout_dir.exists():
+                shutil.rmtree(layout_dir)
+            if msi_out_dir.exists():
+                shutil.rmtree(msi_out_dir)
+        except Exception:
+            pass
+
+        ps1 = (vc_redist_dir / "extract-vc-runtime.ps1").resolve()
+        ps1.write_text(
+            r"""param(
+  [Parameter(Mandatory=$true)][string]$VcRedist,
+  [Parameter(Mandatory=$true)][string]$LayoutDir,
+  [Parameter(Mandatory=$true)][string]$MsiOutDir,
+  [Parameter(Mandatory=$true)][string]$DestDir
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+New-Item -ItemType Directory -Force -Path $LayoutDir, $MsiOutDir, $DestDir | Out-Null
+
+Write-Host "Extracting vc_redist payload (layout)..." -ForegroundColor Cyan
+& $VcRedist /layout $LayoutDir /quiet | Out-Null
+
+$msiMin = Get-ChildItem -Recurse -File -Path $LayoutDir -Filter "vc_runtimeMinimum_x64.msi" | Select-Object -First 1
+$msiAdd = Get-ChildItem -Recurse -File -Path $LayoutDir -Filter "vc_runtimeAdditional_x64.msi" | Select-Object -First 1
+if (-not $msiMin) { throw "Could not find vc_runtimeMinimum_x64.msi under layout dir: $LayoutDir" }
+if (-not $msiAdd) { throw "Could not find vc_runtimeAdditional_x64.msi under layout dir: $LayoutDir" }
+
+Write-Host "Extracting MSI payloads (administrative install)..." -ForegroundColor Cyan
+Start-Process msiexec -Wait -ArgumentList "/a `"$($msiMin.FullName)`" /qn TARGETDIR=`"$MsiOutDir`""
+Start-Process msiexec -Wait -ArgumentList "/a `"$($msiAdd.FullName)`" /qn TARGETDIR=`"$MsiOutDir`""
+
+$sys32 = Join-Path $MsiOutDir "Windows\System32"
+if (-not (Test-Path $sys32)) { throw "Expected extracted System32 folder not found: $sys32" }
+
+Write-Host "Copying VC runtime DLLs into bundle..." -ForegroundColor Cyan
+Copy-Item -Force -Path (Join-Path $sys32 "vcruntime140*.dll") -Destination $DestDir
+Copy-Item -Force -Path (Join-Path $sys32 "msvcp140*.dll") -Destination $DestDir
+Copy-Item -Force -Path (Join-Path $sys32 "concrt140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+Copy-Item -Force -Path (Join-Path $sys32 "vcomp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+Copy-Item -Force -Path (Join-Path $sys32 "vcamp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+
+if (-not (Test-Path (Join-Path $DestDir "vcruntime140_1.dll"))) { throw "vcruntime140_1.dll missing after extraction" }
+if (-not (Test-Path (Join-Path $DestDir "msvcp140.dll"))) { throw "msvcp140.dll missing after extraction" }
+if (-not (Test-Path (Join-Path $DestDir "vcruntime140.dll"))) { throw "vcruntime140.dll missing after extraction" }
+
+Write-Host "VC runtime DLLs bundled successfully." -ForegroundColor Green
+""",
+            encoding="utf-8",
+        )
+
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ps1),
+                "-VcRedist",
+                str(vc_redist_exe),
+                "-LayoutDir",
+                str(layout_dir),
+                "-MsiOutDir",
+                str(msi_out_dir),
+                "-DestDir",
+                str(dest_dir),
+            ],
+            check=True,
+        )
+
+        copied = sorted({p.name for p in dest_dir.glob("*.dll")})
+        print(f"Bundled VC++ runtime DLLs next to python.exe: dest={dest_dir} dlls={copied}")
 
     def _remove_obsolete_typing_backport(self, py_path: Path) -> None:
         """
