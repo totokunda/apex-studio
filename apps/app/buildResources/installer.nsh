@@ -21,85 +21,77 @@
     ;   - but our bundled Python is x64, which needs the x64 VC runtime in the *real* System32.
     ;   So we must check the x64 runtime (registry + real System32 path via Sysnative on WOW64).
 
-    ; 1) Prefer registry detection for VC++ 2015-2022 (14.x) x64 runtime.
+    ; Detect VC++ 2015-2022 (14.x) x64 runtime via registry (authoritative).
+    ; NOTE: Avoid DLL presence checks here; some apps can drop DLLs without registering the runtime,
+    ; which makes the "DLL exists" approach produce false positives (skipping install when still broken).
     StrCpy $1 0
     ${If} ${RunningX64}
         SetRegView 64
-        ClearErrors
-        ReadRegDWORD $3 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
-        ${IfNot} ${Errors}
-            ${If} $3 == 1
-                StrCpy $1 1
-            ${EndIf}
-        ${EndIf}
-        ; Restore default registry view for the rest of the installer (important for 32-bit NSIS on x64).
-        ${If} ${IsWow64}
-            SetRegView 32
+    ${EndIf}
+    ClearErrors
+    ReadRegDWORD $2 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
+    ${IfNot} ${Errors}
+        ${If} $2 == 1
+            StrCpy $1 1
         ${EndIf}
     ${EndIf}
+    ; Restore default registry view for the rest of the installer (important for 32-bit NSIS on x64).
+    ${If} ${IsWow64}
+        SetRegView 32
+    ${EndIf}
 
+    ; If installed already, do nothing (no prompt).
     ${If} $1 == 1
         Goto vc_redist_done
     ${EndIf}
 
-    ; 2) Fallback: check the common trio of DLLs in the x64 System32 directory.
-    StrCpy $8 "$SYSDIR"
-    ${If} ${IsWow64}
-        StrCpy $8 "$WINDIR\Sysnative"
-    ${EndIf}
+    ; Missing: prompt user and install if they agree.
+    MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON1 \
+        "Apex Studio requires the Microsoft Visual C++ Redistributable (x64) to run.$\r$\n$\r$\nInstall it now?" \
+        IDYES vc_redist_install IDNO vc_redist_skip
 
-    ; $2 == 1 means "missing at least one required DLL"
-    StrCpy $2 0
-    IfFileExists "$8\msvcp140.dll" +2 0
-        StrCpy $2 1
-    IfFileExists "$8\vcruntime140.dll" +2 0
-        StrCpy $2 1
-    IfFileExists "$8\vcruntime140_1.dll" +2 0
-        StrCpy $2 1
-
-    StrCmp $2 0 vc_redist_done
+    vc_redist_install:
         DetailPrint "Installing Microsoft Visual C++ Redistributable (x64) ..."
         SetOutPath "$TEMP"
         ; electron-builder defines BUILD_RESOURCES_DIR for NSIS builds; use it to reference our embedded file.
         File /oname=vc_redist.x64.exe "${BUILD_RESOURCES_DIR}\vc_redist.x64.exe"
-        ExecWait '"$TEMP\vc_redist.x64.exe" /install /quiet /norestart' $0
+        ; Use passive UI so users can see what's happening; UAC may prompt for elevation.
+        ExecWait '"$TEMP\vc_redist.x64.exe" /install /passive /norestart' $0
         Delete "$TEMP\vc_redist.x64.exe"
 
         ; Treat success (0), reboot-required (3010), and "already installed" (1638) as OK.
-        StrCmp $0 0 vc_redist_done
-        StrCmp $0 3010 vc_redist_done
-        StrCmp $0 1638 vc_redist_done
+        StrCmp $0 0 vc_redist_postcheck
+        StrCmp $0 3010 vc_redist_postcheck
+        StrCmp $0 1638 vc_redist_postcheck
         MessageBox MB_ICONEXCLAMATION|MB_OK "Microsoft Visual C++ Redistributable install failed (code $0). Apex Studio may not start until it is installed."
-    vc_redist_done:
+        Goto vc_redist_done
 
-    ; Post-check (best-effort): if the x64 runtime still appears missing, warn early so users don't hit torch import crashes.
-    StrCpy $4 0
-    ${If} ${RunningX64}
-        SetRegView 64
+    vc_redist_skip:
+        ; User declined install; continue but warn up-front.
+        MessageBox MB_ICONEXCLAMATION|MB_OK "Apex Studio may not start until the Microsoft Visual C++ Redistributable (x64) is installed."
+        Goto vc_redist_done
+
+    ; Best-effort post-check so we can warn immediately if installation didn't take.
+    vc_redist_postcheck:
+        StrCpy $3 0
+        ${If} ${RunningX64}
+            SetRegView 64
+        ${EndIf}
         ClearErrors
-        ReadRegDWORD $5 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
+        ReadRegDWORD $4 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
         ${IfNot} ${Errors}
-            ${If} $5 == 1
-                StrCpy $4 1
+            ${If} $4 == 1
+                StrCpy $3 1
             ${EndIf}
         ${EndIf}
-        ; Restore default registry view for the rest of the installer (important for 32-bit NSIS on x64).
         ${If} ${IsWow64}
             SetRegView 32
         ${EndIf}
-    ${EndIf}
+        ${If} $3 == 0
+            MessageBox MB_ICONEXCLAMATION|MB_OK "Warning: Visual C++ runtime (x64) still appears missing after installation. If Apex Studio fails to start with a PyTorch DLL error, please run the installer again and accept the runtime install prompt."
+        ${EndIf}
 
-    ${If} $4 == 0
-        StrCpy $6 0
-        IfFileExists "$8\msvcp140.dll" +2 0
-            StrCpy $6 1
-        IfFileExists "$8\vcruntime140.dll" +2 0
-            StrCpy $6 1
-        IfFileExists "$8\vcruntime140_1.dll" +2 0
-            StrCpy $6 1
-        StrCmp $6 0 +2 0
-            MessageBox MB_ICONEXCLAMATION|MB_OK "Warning: Visual C++ runtime DLLs (x64) still appear missing after installation. If Apex Studio fails to start with a PyTorch DLL error, install vc_redist.x64.exe manually."
-    ${EndIf}
+    vc_redist_done:
     
     ; Check for existing Python installations that might conflict
     ; Note: We use a bundled Python, so this is mainly informational
