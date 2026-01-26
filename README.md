@@ -1,6 +1,10 @@
 <h1 align="center">Apex Studio</h1>
 <p align="center">Effortless Open-Source Content Creation. </p>
 <p align="center">
+  <a href="https://discord.gg/sNe8TEGscD">
+    <img src="https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=for-the-badge&logo=discord&logoColor=white" />
+  </a>
+</p><p align="center">
   <img src="assets/images/Apex-Studio-Hero.png" alt="Apex Studio" />
 </p>
 
