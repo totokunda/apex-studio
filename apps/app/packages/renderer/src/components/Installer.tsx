@@ -1458,7 +1458,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                     type="button"
                     variant="outline"
                     className="rounded-[6px]  bg-brand-background-light border border-brand-light/5 hover:bg-brand/70 hover:text-brand-light/90 px-6 py-2 dark text-brand-light/90 text-[11.5px]"
-                    disabled={installing || (!canGoBack && !hasBackend)}
+                    disabled={installing}
                     onClick={canGoBack ? goBack : requestCloseInstaller}
                   >
                     {canGoBack ? "Back" : hasBackend ? "Cancel" : "Back"}
