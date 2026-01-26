@@ -76,18 +76,33 @@ const formatComponentName = (name: string): string => {
 interface AddModelPathFormProps {
   manifestId: string;
   componentIndex: number;
+  existingVariants: string[];
   onAddCustomPath: (variant: string) => void;
 }
 
 const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
   manifestId,
   componentIndex,
+  existingVariants,
   onAddCustomPath,
 }) => {
   const [newModelName, setNewModelName] = useState("");
   const [newModelPath, setNewModelPath] = useState("");
   const [isValidatingModelPath, setIsValidatingModelPath] = useState(false);
   const queryClient = useQueryClient();
+
+  const normalizedExistingVariantNames = useMemo(() => {
+    return new Set(
+      (existingVariants ?? [])
+        .map((v) => v?.trim?.().toLowerCase?.())
+        .filter((v): v is string => typeof v === "string" && v.length > 0),
+    );
+  }, [existingVariants]);
+  const normalizedNewModelName = newModelName.trim().toLowerCase();
+  const isDuplicateVariantName =
+    normalizedNewModelName.length > 0 &&
+    normalizedExistingVariantNames.has(normalizedNewModelName);
+
   return (
     <div className="mt-2.5 w-full bg-brand-background border border-brand-light/15 rounded-md px-3 py-3.5 space-y-2.5">
       <div className="flex flex-col gap-y-1.5">
@@ -104,6 +119,11 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
           className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
           placeholder="e.g. Local GGUF Q4 variant"
         />
+        {isDuplicateVariantName && (
+          <p className="text-[9.5px] text-red-400">
+            A variant with this name already exists.
+          </p>
+        )}
       </div>
       <div className="flex flex-col gap-y-1.5">
         <label className="text-[10px] text-brand-light/90 font-medium">
@@ -125,11 +145,18 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
         
         <button
           type="button"
-          disabled={isValidatingModelPath}
+          disabled={isValidatingModelPath || isDuplicateVariantName}
           onClick={async () => {
             const path = newModelPath.trim();
             const name = newModelName.trim();
             if (!path || isValidatingModelPath) return;
+            if (
+              name &&
+              normalizedExistingVariantNames.has(name.trim().toLowerCase())
+            ) {
+              toast.error("A variant with this name already exists.");
+              return;
+            }
             try {
               setIsValidatingModelPath(true);
               const res = await validateAndRegisterCustomModelPath(
@@ -545,7 +572,14 @@ const ModelPathsSection: React.FC<{
           ))}
           <TabsContent key="add-variant" value="add-variant">
             <div className="px-3 pb-4">
-              <AddModelPathForm manifestId={manifestId} componentIndex={componentIndex} onAddCustomPath={onAddCustomPath} />
+              <AddModelPathForm
+                manifestId={manifestId}
+                componentIndex={componentIndex}
+                existingVariants={(variants ?? []).filter(
+                  (v): v is string => typeof v === "string" && v.length > 0,
+                )}
+                onAddCustomPath={onAddCustomPath}
+              />
             </div>
           </TabsContent>
       </Tabs>

@@ -1,12 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 import os.path as osp
-import subprocess
 import tempfile
 import shlex
 
 from src.preprocess.custom_mmpkg.custom_mmcv.utils import requires_executable
-from src.utils.ffmpeg import get_ffmpeg_path
+from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
 
 
 @requires_executable(get_ffmpeg_path())
@@ -59,7 +58,8 @@ def convert_video(in_file, out_file, print_cmd=False, pre_options="", **kwargs):
     cmd = [ffmpeg_exe, "-y", *pre_args, "-i", in_file, *options, out_file]
     if print_cmd:
         print(" ".join(cmd))
-    subprocess.call(cmd, shell=False)
+    # Safety: enforce timeout + file logging so ffmpeg can't hang a worker.
+    run_ffmpeg(cmd, log_path=None, timeout_s=None, check=False)
 
 
 @requires_executable(get_ffmpeg_path())

@@ -165,7 +165,7 @@ def get_ray_resources(
 
         # Medium: use a moderate fraction of the machine's CPUs
         if profile == "medium":
-            target = max(2.0, total_cpus * 0.3)  # at least 2 CPUs or 25% of machine
+            target = max(1.0, total_cpus * 0.3)  # at least 4 CPUs or 30% of machine
             return min(cpu_avail, target)
 
         # Heavy: use most of the machine's CPUs, leaving a little headroom
