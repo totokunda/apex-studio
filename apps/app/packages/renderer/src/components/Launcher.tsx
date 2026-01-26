@@ -257,6 +257,19 @@ const Launcher: React.FC = () => {
   const initialCheckDoneRef = useRef(false);
   const [showInstaller, setShowInstaller] = useState(false);
   const [showBlockingDetails, setShowBlockingDetails] = useState(false);
+  const isDevMode =
+    (typeof import.meta !== "undefined" && Boolean(import.meta.env?.DEV)) ||
+    (typeof window !== "undefined" &&
+      (window.location.protocol === "http:" ||
+        window.location.protocol === "https:"));
+  const [devSkipServerInstall, setDevSkipServerInstall] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("apex.dev.skipServerInstall") === "1";
+    } catch {
+      return false;
+    }
+  });
   const projects = useProjectsStore((s) => s.projects);
   const setProjects = useProjectsStore((s) => s.setProjects);
   const removeProject = useProjectsStore((s) => s.removeProject);
@@ -297,8 +310,9 @@ const Launcher: React.FC = () => {
 
   const canLaunch = useMemo(() => {
     const hasProjects = projects.length > 0;
-    return backendReady && hasProjects;
-  }, [backendReady, projects.length]);
+    const allowLaunchWithoutBackend = isDevMode && devSkipServerInstall;
+    return hasProjects && (backendReady || allowLaunchWithoutBackend);
+  }, [backendReady, devSkipServerInstall, isDevMode, projects.length]);
 
   const applyStatus = useCallback((st: any) => {
     const hasBackend = Boolean(st?.hasBackend);
@@ -435,12 +449,18 @@ const Launcher: React.FC = () => {
       setError("Create a project to continue.");
       return;
     }
-    if (!backendReady) {
+    if (!backendReady && !(isDevMode && devSkipServerInstall)) {
       setError("Waiting for the backend to be ready. Please try again in a moment.");
       return;
     }
     setIsLaunching(true);
     setError(null);
+    if (!backendReady && isDevMode && devSkipServerInstall) {
+      toast("Launching without a server (dev mode)", {
+        description:
+          "Some features may not work until a backend is running. Install/reinstall any time from the launcher.",
+      });
+    }
     const res = await launchMainWindow();
     if (!res.ok) {
       setError(res.error || "Failed to launch");
@@ -772,7 +792,89 @@ const Launcher: React.FC = () => {
     );
   }
 
-  if (!hasBackend || showInstaller) {
+  if (!hasBackend && !(isDevMode && devSkipServerInstall)) {
+    // In dev mode, allow developers to bypass local server installation and
+    // launch the UI (e.g. when using a separately-run backend).
+    if (isDevMode) {
+      return (
+        <main className="w-full min-h-screen flex flex-col bg-black text-center font-poppins relative overflow-hidden">
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute -top-24 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-brand-accent-two-shade/15 blur-3xl" />
+            <div className="absolute -bottom-32 right-[-120px] h-[520px] w-[520px] rounded-full bg-brand-accent-shade/10 blur-3xl" />
+            <div className="absolute inset-0 bg-linear-to-b from-black via-black to-brand-background-dark/60" />
+          </div>
+
+          <div className="relative w-full max-w-[720px] mx-auto px-6 flex-1 flex flex-col justify-center">
+            <div className="w-full rounded-2xl border border-brand-light/10 bg-brand-background/30 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_25px_80px_rgba(0,0,0,0.55)] overflow-hidden">
+              <div className="px-8 pt-8 pb-7">
+                <div className="flex items-start justify-between gap-6">
+                  <div className="flex items-center gap-4">
+                    <div className="relative">
+                      <div className="absolute inset-0 rounded-2xl bg-brand-accent-two-shade/25 blur-xl" />
+                      <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-light/10 bg-black/40">
+                        <PiRocketLaunchFill className="h-5 w-5 text-brand-light/90" />
+                      </div>
+                    </div>
+                    <div className="text-left">
+                      <div className="text-[11px] uppercase tracking-[0.35em] text-brand-light/45">
+                        Apex Studio
+                      </div>
+                      <div className="mt-1 text-xl font-semibold tracking-tight text-brand-light">
+                        No server installed (dev mode)
+                      </div>
+                      <div className="mt-1 text-[13px] text-brand-light/60">
+                        You can install the local server bundle, or skip and launch the UI without it.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-xl border border-brand-light/10 bg-black/25 px-4 py-3 text-left">
+                  <div className="text-[12px] font-semibold text-brand-light">
+                    What happens if you skip?
+                  </div>
+                  <div className="mt-1 text-[12px] leading-relaxed text-brand-light/65">
+                    The app will open, but anything that depends on the backend may be unavailable until you start one.
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError(null);
+                      setShowInstaller(true);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-md border border-brand-light/15 bg-brand-background-light px-4 py-2 text-[12px] font-semibold text-brand-light hover:bg-brand-light/10 transition-colors"
+                  >
+                    <LuRotateCcw className="h-4 w-4" />
+                    Install server
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError(null);
+                      setDevSkipServerInstall(true);
+                      try {
+                        window.localStorage.setItem("apex.dev.skipServerInstall", "1");
+                      } catch {
+                        // ignore
+                      }
+                      // Re-run status check in case a backend is already reachable.
+                      void refreshLauncherStatus({ showBlocking: true });
+                    }}
+                    className="inline-flex items-center gap-2 rounded-md bg-brand-accent-two-shade text-brand-light px-4 py-2 text-[12px] font-semibold hover:bg-brand-accent-shade transition-colors"
+                  >
+                    <PiRocketLaunchFill className="h-4 w-4" />
+                    Skip and continue
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      );
+    }
     return <Installer hasBackend={hasBackend} setShowInstaller={setShowInstaller} />;
   }
 
