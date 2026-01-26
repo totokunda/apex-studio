@@ -219,6 +219,7 @@ class AutoLoadingHelperDict(dict):
 
 class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     engine_type: Literal["torch", "mlx"] = "torch"
+    engine_label: str | None = None
     config: Dict[str, Any]
     scheduler: SchedulerInterface | None = None
     vae: AutoencoderKL | None = None
@@ -257,178 +258,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     selected_components: Dict[str, Any] | None = None
     auto_apply_loras: bool = True
     auto_memory_management: bool = True
-
-    # -------------------------
-    # VRAM pressure management
-    # -------------------------
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        raw = os.environ.get(name)
-        if raw is None:
-            return default
-        try:
-            return float(str(raw).strip())
-        except Exception:
-            return default
-
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        raw = os.environ.get(name)
-        if raw is None:
-            return default
-        try:
-            return int(str(raw).strip())
-        except Exception:
-            return default
-
-    @staticmethod
-    def _estimate_module_bytes(module: Any) -> int:
-        """
-        Best-effort estimate of a torch.nn.Module's parameters + buffers (bytes).
-        Heuristic only; safe to use for offload decisions.
-        """
-        try:
-            import torch
-
-            if module is None or not isinstance(module, torch.nn.Module):
-                return 0
-            total = 0
-            for p in module.parameters(recurse=True):
-                if p is None:
-                    continue
-                try:
-                    total += int(p.numel()) * int(p.element_size())
-                except Exception:
-                    pass
-            for b in module.buffers(recurse=True):
-                if b is None:
-                    continue
-                try:
-                    total += int(b.numel()) * int(b.element_size())
-                except Exception:
-                    pass
-            return int(total)
-        except Exception:
-            return 0
-
-    @staticmethod
-    def _available_ram_bytes() -> int | None:
-        try:
-            import psutil  # type: ignore
-
-            return int(psutil.virtual_memory().available)
-        except Exception:
-            return None
-
-    def _cuda_free_fraction(self) -> float | None:
-        try:
-            import torch
-
-            dev = getattr(self, "device", None)
-            if dev is None or getattr(dev, "type", None) != "cuda":
-                return None
-            if not torch.cuda.is_available():
-                return None
-            dev_index = (
-                dev.index
-                if getattr(dev, "index", None) is not None
-                else torch.cuda.current_device()
-            )
-            free, total = torch.cuda.mem_get_info(dev_index)
-            if total <= 0:
-                return None
-            return float(free) / float(total)
-        except Exception:
-            return None
-
-    @staticmethod
-    def _mem_debug_enabled() -> bool:
-        return str(os.environ.get("APEX_MEM_DEBUG", "")).lower() in {"1", "true", "yes"}
-
-    def memory_env_config(self) -> Dict[str, Any]:
-        """
-        Return a snapshot of memory-management related environment knobs and their
-        effective values (with defaults applied when unset). This can be exposed via
-        API to introspect/tune behavior without digging through code.
-        """
-
-        def _float(name: str, default: float) -> float:
-            try:
-                raw = os.environ.get(name, None)
-                if raw is None or str(raw).strip() == "":
-                    return default
-                return float(raw)
-            except Exception:
-                return default
-
-        def _int(name: str, default: int) -> int:
-            try:
-                raw = os.environ.get(name, None)
-                if raw is None or str(raw).strip() == "":
-                    return default
-                return int(float(raw))
-            except Exception:
-                return default
-
-        def _str(name: str, default: str) -> str:
-            val = os.environ.get(name)
-            return default if val is None or val == "" else val
-
-        return {
-            # Offload/pressure
-            "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION": _float(
-                "APEX_OFFLOAD_MIN_FREE_VRAM_FRACTION", 0.10
-            ),
-            "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION": _float(
-                "APEX_OFFLOAD_MIN_FREE_RAM_FRACTION", 0.08
-            ),
-            "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION": _float(
-                "APEX_VRAM_PRESSURE_MIN_FREE_VRAM_FRACTION", 0.06
-            ),
-            "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES": _int(
-                "APEX_VRAM_PRESSURE_CPU_SAFETY_BYTES", 2 * 1024**3
-            ),
-            "APEX_VRAM_PRESSURE_CPU_MULTIPLIER": _float(
-                "APEX_VRAM_PRESSURE_CPU_MULTIPLIER", 1.25
-            ),
-            "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES": _int(
-                "APEX_VRAM_PRESSURE_MAX_CPU_OFFLOAD_BYTES", 32 * 1024**3
-            ),
-            # Load-model guards (GPU state_dict materialization)
-            "APEX_LOAD_MODEL_TARGET_FREE_FRACTION": _float(
-                "APEX_LOAD_MODEL_TARGET_FREE_FRACTION", 0.10
-            ),
-            "APEX_LOAD_MODEL_VRAM_MULT": _float("APEX_LOAD_MODEL_VRAM_MULT", 1.20),
-            "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES": _int(
-                "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
-            ),
-            # Decode guards
-            "APEX_VAE_DECODE_FORCE_FLUSH": _str("APEX_VAE_DECODE_FORCE_FLUSH", "1"),
-            "APEX_VAE_DECODE_FLUSH_TARGET": _str("APEX_VAE_DECODE_FLUSH_TARGET", "cpu"),
-            "APEX_VAE_DECODE_MIN_FREE_BYTES": _int("APEX_VAE_DECODE_MIN_FREE_BYTES", 0),
-            "APEX_VAE_DECODE_MIN_FREE_FRAC": _float(
-                "APEX_VAE_DECODE_MIN_FREE_FRAC", 0.12
-            ),
-            "APEX_VAE_DECODE_SAFETY_MULT": _float("APEX_VAE_DECODE_SAFETY_MULT", 8.0),
-            "APEX_VAE_DECODE_TARGET_FREE_FRACTION": _float(
-                "APEX_VAE_DECODE_TARGET_FREE_FRACTION", 0.30
-            ),
-            # Preforward
-            "APEX_PREFWD_ENABLE": _str("APEX_PREFWD_ENABLE", "1"),
-            "APEX_PREFWD_FLUSH_TARGET": _str("APEX_PREFWD_FLUSH_TARGET", "cpu"),
-            "APEX_PREFWD_MIN_FREE_BYTES": _int("APEX_PREFWD_MIN_FREE_BYTES", 0),
-            "APEX_PREFWD_MIN_FREE_FRAC": _float("APEX_PREFWD_MIN_FREE_FRAC", 0.50),
-            "APEX_PREFWD_KEEP_COMPONENTS": _str("APEX_PREFWD_KEEP_COMPONENTS", "vae"),
-            # Weight manager defaults
-            "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION": _float(
-                "APEX_WEIGHT_TARGET_FREE_VRAM_FRACTION", 0.12
-            ),
-            "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION": _float(
-                "APEX_WEIGHT_TARGET_FREE_RAM_FRACTION", 0.10
-            ),
-            "APEX_DISABLE_WARM_WEIGHTS": _str("APEX_DISABLE_WARM_WEIGHTS", ""),
-            "APEX_FORCE_DISK_ONLY": _str("APEX_FORCE_DISK_ONLY", ""),
-        }
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -496,7 +325,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             pass
 
         # Validate compute requirements if specified in config
-        self._validate_compute_requirements()
+        if not self.engine_label or self.engine_label == "engine_warmup" or self.engine_label == "disk_warmup":
+            self._validate_compute_requirements()
 
         self.save_path = kwargs.get("save_path", None)
         should_download = kwargs.get("should_download", True)
@@ -900,6 +730,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             device = device.type
         else:
             device = "cpu"
+       
         component_module = None
 
         if component_type == "scheduler":
@@ -982,7 +813,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     no_weights=False,
                     key_map=component.get("key_map", {}),
                     extra_kwargs=component.get("extra_kwargs", {}),
-                    load_device=device,
                 )
             except Exception as e:
                 pass
@@ -2104,18 +1934,12 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         # Heuristic headroom for activations, KV cache, temporary buffers, etc.
         # This replaces the older percent-of-VRAM rule which was too coarse.
-        if component.get("type") == "text_encoder":
-            activation_overhead_gb = os.environ.get(
-                "TEXT_ENCODER_ACTIVATION_OVERHEAD_GB", 4.0
-            )
-        elif component.get("type") == "transformer":
-            activation_overhead_gb = os.environ.get(
-                "TRANSFORMER_ACTIVATION_OVERHEAD_GB", 8.0
-            )
-        elif component.get("type") == "vae":
-            activation_overhead_gb = os.environ.get("VAE_ACTIVATION_OVERHEAD_GB", 6.0)
-        else:
-            activation_overhead_gb = os.environ.get("ACTIVATION_OVERHEAD_GB", 8.0)
+        overhead_by_type_gb = {
+            "text_encoder": 4.0,
+            "transformer": 8.0,
+            "vae": 6.0,
+        }
+        activation_overhead_gb = float(overhead_by_type_gb.get(component.get("type"), 8.0))
 
         required_gpu_gb = total_size_gb + activation_overhead_gb
 
@@ -3005,113 +2829,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             new_components_cfg.append(component)
 
         self.config["components"] = new_components_cfg
-
-        # -----------------------
-        # Disk prewarm (page cache)
-        # -----------------------
-        # Best-effort: warm OS page cache for weight files to reduce cold-start latency.
-        # This is intentionally bounded and optionally backgrounded so it doesn't cost
-        # more wall time than just running the engine.
-        def _env_bool(name: str, default: bool) -> bool:
-            raw = os.environ.get(name)
-            if raw is None:
-                return default
-            return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-        enable_disk_prewarm = _env_bool("APEX_DISK_PREWARM_ENABLED", True)
-        background_disk_prewarm = _env_bool("APEX_DISK_PREWARM_BACKGROUND", True)
-        # Default: keep prewarm bounded so it doesn't steal time/bandwidth.
-        # Set APEX_DISK_PREWARM_MAX_BYTES="" (or unset) to use the default.
-        # Set it to a positive integer to override. Set <=0 to disable the cap (full file).
-        default_max_bytes = 256 * 1024 * 1024
-        max_bytes = default_max_bytes
-        try:
-            mb = os.environ.get("APEX_DISK_PREWARM_MAX_BYTES")
-            if mb is not None and str(mb).strip() != "":
-                v = int(str(mb).strip())
-                if v > 0:
-                    max_bytes = v
-                else:
-                    # <=0 means "no cap" (touch full file)
-                    max_bytes = None
-        except Exception:
-            max_bytes = default_max_bytes
-
-        if enable_disk_prewarm:
-            # Collect file paths first so we can optionally prewarm in a background thread.
-            prewarm_files: List[str] = []
-            for component in new_components_cfg:
-                # Mirror LoaderMixin's weight discovery logic:
-                # - If a path is a directory: prewarm all matching `*.{ext}` weight files inside it
-                # - Extensions are taken from component["extensions"] with sane defaults
-                extensions = component.get(
-                    "extensions", ["safetensors", "bin", "pt", "ckpt", "gguf", "pth"]
-                )
-                if "gguf" not in extensions:
-                    extensions = list(extensions) + ["gguf"]
-
-                def _iter_weight_files(path: Any) -> List[str]:
-                    if not path:
-                        return []
-                    if isinstance(path, dict):
-                        path = (
-                            path.get("path")
-                            or path.get("model_path")
-                            or path.get("file")
-                        )
-                    if not path:
-                        return []
-
-                    path_str = os.fspath(path)
-                    if os.path.isdir(path_str):
-                        files: List[str] = []
-                        for ext in extensions:
-                            ext = str(ext).lstrip(".")
-                            files.extend(glob(os.path.join(path_str, f"*.{ext}")))
-                        return files
-
-                    path_lower = path_str.lower()
-                    for ext in extensions:
-                        ext = str(ext).lstrip(".").lower()
-                        if path_lower.endswith(f".{ext}"):
-                            return [path_str]
-                    return []
-
-                model_path = component.get("model_path")
-                prewarm_files.extend(_iter_weight_files(model_path))
-
-                extra_model_paths = component.get("extra_model_paths") or []
-                if isinstance(extra_model_paths, str):
-                    extra_model_paths = [extra_model_paths]
-                for extra_model_path in extra_model_paths:
-                    prewarm_files.extend(_iter_weight_files(extra_model_path))
-
-            # De-dupe while preserving order
-            seen = set()
-            prewarm_files = [p for p in prewarm_files if not (p in seen or seen.add(p))]
-
-            def _do_prewarm(files: List[str]) -> None:
-                for fp in files:
-                    try:
-                        self._prewarm_model(fp, max_bytes=max_bytes)
-                    except Exception:
-                        pass
-
-            if background_disk_prewarm:
-                try:
-                    import threading
-
-                    t = threading.Thread(
-                        target=_do_prewarm,
-                        args=(prewarm_files,),
-                        name="apex-disk-prewarm",
-                        daemon=True,
-                    )
-                    t.start()
-                except Exception:
-                    _do_prewarm(prewarm_files)
-            else:
-                _do_prewarm(prewarm_files)
 
     def _get_latents(
         self,

@@ -46,3 +46,4 @@ parameters:
   type: int
 supports_image: true
 supports_video: true
+files: []

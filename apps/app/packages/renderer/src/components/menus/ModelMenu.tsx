@@ -56,11 +56,14 @@ export const ModelItem: React.FC<{
   const { setSelectedManifestId } = useManifestStore();
   const tagsContainerRef = useRef<HTMLDivElement>(null);
   const hiddenMeasureRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [visibleTagCount, setVisibleTagCount] = useState<number | null>(null);
   const [isStartingDownload, setIsStartingDownload] = useState(false);
   const { data: manifestData } = useManifestQuery(initialManifest.metadata?.id || "");
   const manifest = manifestData ?? initialManifest;
   const {getSourceToJobId, getJobUpdates} = useDownloadJobIdStore();
+
+  const demoPath = manifest.metadata?.demo_path;
 
   const isVideoDemo = React.useMemo(() => {
     const value = (manifest.metadata?.demo_path || "").toLowerCase();
@@ -80,6 +83,43 @@ export const ModelItem: React.FC<{
       );
     }
   }, [manifest.metadata?.demo_path]);
+
+  const posterPath = useMemo(() => {
+    if (!demoPath) return undefined;
+
+    const replaceExt = (s: string) =>
+      s.replace(/\.(mp4|webm|mov|m4v|ogg|m3u8)$/i, ".poster.jpg");
+
+    try {
+      const url = new URL(demoPath);
+      url.pathname = replaceExt(url.pathname);
+      return url.toString();
+    } catch {
+      const m = demoPath.match(/^([^?#]+)(\?[^#]*)?(#.*)?$/);
+      const base = m?.[1] ?? demoPath;
+      const search = m?.[2] ?? "";
+      const hash = m?.[3] ?? "";
+      return replaceExt(base) + search + hash;
+    }
+  }, [demoPath]);
+
+  const playDemo = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    const p = v.play();
+    if (p) p.catch(() => {});
+  };
+
+  const stopDemo = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.pause();
+    try {
+      v.currentTime = 0;
+    } catch {
+      // ignore
+    }
+  };
 
   const allDownloadablePaths = useMemo(() => {
     return extractAllDownloadablePaths(manifest);
@@ -160,16 +200,20 @@ export const ModelItem: React.FC<{
       >
         {isVideoDemo ? (
           <video
-            src={manifest.metadata?.demo_path}
+            ref={videoRef}
+            src={demoPath}
+            poster={posterPath}
             className="h-full w-full object-cover rounded-t-md"
-            autoPlay
+            preload="none"
             muted
             loop
             playsInline
+            onMouseEnter={playDemo}
+            onMouseLeave={stopDemo}
           />
         ) : (
           <img
-            src={manifest.metadata?.demo_path}
+            src={demoPath}
             alt={manifest.metadata?.name}
             className="h-full w-full object-cover rounded-t-md"
           />
@@ -434,6 +478,7 @@ const ModelCategory: React.FC<{
       });
     }
   };
+  
 
   return (
     <div className="flex flex-col gap-y-1 w-full px-4">
@@ -579,9 +624,9 @@ const ModelMenu: React.FC = () => {
       queryClient.getQueryData<ManifestDocument[]>(["manifest"]),
     placeholderData: (prev) => prev,
     retry: true,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
     staleTime: Infinity,
-    
+    gcTime: Infinity,
   });
   
   const modelTypesQuery = useQuery<ModelTypeInfo[]>({
@@ -589,9 +634,10 @@ const ModelMenu: React.FC = () => {
     queryFn: fetchModelTypes,
     initialData: () => queryClient.getQueryData<ModelTypeInfo[]>(["modelTypes"]),
     placeholderData: (prev) => prev,
-    retry: false,
+    retry: true,
     refetchOnWindowFocus: false,
     staleTime: 30000,
+
   });
 
   const manifestsData = manifestsQuery.data;

@@ -7,7 +7,7 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 from src.engine import UniversalEngine
 
 path = (
-    "/home/tosin_coverquick_co/apex/manifest/verified/image/zimage-turbo-1.0.0.v1.yml"
+    "manifest/verified/image/zimage-turbo-1.0.0.v1.yml"
 )
 engine = UniversalEngine(yaml_path=path).engine
 
