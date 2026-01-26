@@ -83,9 +83,9 @@ module.exports = {
     "!node_modules/@app/renderer/tsconfig*.json",
     "!node_modules/@app/renderer/components.json",
     "!node_modules/@app/renderer/index.html",
-    // - ffprobe-static ships multi-platform binaries; keep only Windows x64
-    "!node_modules/ffprobe-static/bin/**",
-    "node_modules/ffprobe-static/bin/win32/x64/**",
+    // - ffprobe-static is required on all targets; include wrapper + binaries
+    "node_modules/ffprobe-static/**",
+    "!node_modules/ffprobe-static/tests/**",
     // - model demo media is optional and large; download later if needed
   ],
 
