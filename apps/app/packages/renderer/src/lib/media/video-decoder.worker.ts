@@ -3,16 +3,7 @@ import {
   EncodedPacket,
   Input,
   UrlSource,
-  ALL_FORMATS,
-  MP4,
-  WEBM,
-  QTFF,
-  MATROSKA,
-  OGG,
-  MP3,
-  WAVE,
-  FLAC,
-  ADTS,
+  ALL_FORMATS
 } from "mediabunny";
 // Minimal asset shape expected from the main thread. This mirrors the core
 // fields of the renderer-side `Asset` type but is kept local to the worker
@@ -850,18 +841,7 @@ async function handleConfigure(
   dispose(id);
   const state = getOrCreateState(id);
   let formats = ALL_FORMATS;
-  if (cfg.formatStr) {
-      if (cfg.formatStr === "mp4") formats = [MP4];
-      else if (cfg.formatStr === "webm") formats = [WEBM];
-      else if (cfg.formatStr === "mov") formats = [QTFF];
-      else if (cfg.formatStr === "mkv") formats = [MATROSKA];
-      else if (cfg.formatStr === "ogg") formats = [OGG];
-      else if (cfg.formatStr === "mp3") formats = [MP3];
-      else if (cfg.formatStr === "wav") formats = [WAVE];
-      else if (cfg.formatStr === "flac") formats = [FLAC];
-      else if (cfg.formatStr === "aac") formats = [ADTS];
-  }
-
+  
   // 1. Setup Input (asset-centric only)
   // Interpret the asset path as a URL-like string that mediabunny knows how
   // to open (e.g. file://, app://, http://).

@@ -16,7 +16,6 @@ import numpy as np
 from . import util
 from .body import  BodyResult, Keypoint
 from .types import PoseResult, AnimalPoseResult
-from huggingface_hub import hf_hub_download
 from .wholebody import Wholebody
 import warnings
 from src.preprocess.util import (
@@ -31,7 +30,7 @@ import cv2
 from PIL import Image
 from .animalpose import AnimalPoseImage
 from src.utils.defaults import get_torch_device
-from typing import Tuple, List, Callable, Union, Optional
+from typing import Tuple, List, Union, Optional
 
 
 def draw_animalposes(animals: list[list[Keypoint]], H: int, W: int) -> np.ndarray:

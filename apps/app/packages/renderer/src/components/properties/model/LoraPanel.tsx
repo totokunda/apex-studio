@@ -57,6 +57,8 @@ const RAY_JOBS_QUERY_KEY = ["rayJobs"] as const;
 const STARTUP_TIMEOUT_MS = 15_000;
 const LORA_VERIFICATION_FAILED_MSG = "LoRA verification failed; removed from manifest";
 
+const normalizeLoraName = (name: string): string => name.trim().toLowerCase();
+
 const DownloadProgressSection: React.FC<{
   jobUpdates: UnifiedDownloadWsUpdate[];
   onCancel: () => void;
@@ -313,7 +315,8 @@ const LoraItem: React.FC<{
   item: LoraType;
   manifestId: string;
   index: number;
-}> = ({ item, manifestId, index }) => {
+  isLoraNameTaken?: (name: string, excludeIndex?: number) => boolean;
+}> = ({ item, manifestId, index, isLoraNameTaken }) => {
   const isObject = typeof item !== "string";
   const remoteSource = useMemo(
     () => (isObject ? (item as any).remote_source || "" : ""),
@@ -358,6 +361,12 @@ const LoraItem: React.FC<{
   const [isSavingName, setIsSavingName] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [initialEditingName, setInitialEditingName] = useState("");
+  const isDuplicatePendingName = useMemo(() => {
+    const candidate = pendingName.trim();
+    if (!candidate) return false;
+    if (!isLoraNameTaken) return false;
+    return isLoraNameTaken(candidate, index);
+  }, [index, isLoraNameTaken, pendingName]);
 
   const displayPath = useMemo(() => {
     if (remoteSource) return remoteSource;
@@ -393,9 +402,19 @@ const LoraItem: React.FC<{
                 className="flex-1 min-w-0 bg-brand-background border border-brand-light/20 rounded-[4px] px-2 py-1 text-[10px] text-brand-light placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
                 placeholder="LoRA name"
               />
+              {isDuplicatePendingName && (
+                <div className="text-[9.5px] text-red-400 px-1">
+                  A LoRA with this name already exists.
+                </div>
+              )}
               <button
                 type="button"
-                disabled={!pendingName.trim() || isSavingName || isDeleting}
+                disabled={
+                  !pendingName.trim() ||
+                  isDuplicatePendingName ||
+                  isSavingName ||
+                  isDeleting
+                }
                 onClick={async () => {
                   if (pendingName.trim() === initialEditingName) {
                     setIsEditingName(false);
@@ -403,6 +422,10 @@ const LoraItem: React.FC<{
                   }
                   const name = pendingName.trim();
                   if (!name) return;
+                  if (isLoraNameTaken?.(name, index)) {
+                    toast.error("A LoRA with this name already exists.");
+                    return;
+                  }
                   const manifestIdSafe =
                     manifestId ||
                     (isObject && (item as any)?.metadata?.id) ||
@@ -945,6 +968,35 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
     getTransformerComponentKey,
   ]);
 
+  const existingLoraNameEntries = useMemo(() => {
+    const list = (manifest?.spec?.loras || []) as any[];
+    return list
+      .map((l, idx) => {
+        if (!l || typeof l !== "object") return null;
+        const raw = (l as any).label || (l as any).name || "";
+        const normalized = normalizeLoraName(String(raw || ""));
+        if (!normalized) return null;
+        return { idx, normalized };
+      })
+      .filter((x): x is { idx: number; normalized: string } => !!x);
+  }, [manifest?.spec?.loras]);
+
+  const isLoraNameTaken = useCallback(
+    (name: string, excludeIndex?: number) => {
+      const normalized = normalizeLoraName(name);
+      if (!normalized) return false;
+      return existingLoraNameEntries.some(
+        (e) => e.normalized === normalized && e.idx !== excludeIndex,
+      );
+    },
+    [existingLoraNameEntries],
+  );
+
+  const isDuplicateNewLoraName = useMemo(() => {
+    if (!newLoraName.trim()) return false;
+    return isLoraNameTaken(newLoraName);
+  }, [isLoraNameTaken, newLoraName]);
+
   const handleAddLoraSource = async (
     source: string,
     name: string,
@@ -952,6 +1004,10 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   ) => {
     if (!source) return;
     if (!name) return;
+    if (isLoraNameTaken(name)) {
+      toast.error("A LoRA with this name already exists.");
+      return;
+    }
     const currentManifestId = manifest?.metadata?.id || clip.manifest.id || "";
     if (currentManifestId) {
       setStartingSources((prev) => [
@@ -1173,6 +1229,11 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
                   className="w-full bg-brand-background border border-brand-light/15 rounded-[5px] mt-1.5 px-2.5 py-2 text-[10px] text-brand-light placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
                   placeholder="e.g. Anime style"
                 />
+                {isDuplicateNewLoraName && (
+                  <p className="text-[9.5px] text-red-400 mt-1">
+                    A LoRA with this name already exists.
+                  </p>
+                )}
               </div>
               <div className="flex flex-col gap-y-0.5 text-start">
                 <label className="text-[11px] text-brand-light/90 font-medium">
@@ -1242,19 +1303,23 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    {
+                  onClick={() => {
+                    const trimmedName = newLoraName.trim();
+                    const trimmedSource = newLoraSource.trim();
+                    if (isLoraNameTaken(trimmedName)) {
+                      toast.error("A LoRA with this name already exists.");
+                      return;
+                    }
                     handleAddLoraSource(
-                      newLoraSource.trim(),
-                      newLoraName,
+                      trimmedSource,
+                      trimmedName,
                       newLoraComponent || undefined,
                     );
-                    setIsAddingLora(false);
-                    }
-                  }
+                  }}
                   disabled={
                     !newLoraSource.trim() ||
                     !newLoraName.trim() ||
+                    isDuplicateNewLoraName ||
                     (hasMultipleTransformers &&
                       transformerComponents.length > 1 &&
                       !newLoraComponent.trim()) ||
@@ -1344,6 +1409,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
                     item={lora}
                     manifestId={manifest?.metadata?.id || ""}
                     index={idx}
+                    isLoraNameTaken={isLoraNameTaken}
                   />
                 );
               })}
