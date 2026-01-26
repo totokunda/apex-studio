@@ -320,7 +320,7 @@ class AuxillaryCache:
                     with imageio.get_writer(
                         self.result_path,
                         fps=self._video_info["fps"],
-                        codec="vp9",
+                        codec="libvpx-vp9",
                         # High-quality VP9 encode with alpha support
                         # - pix_fmt: preserve alpha channel
                         # - b:v 0 + crf: constant-quality mode (lower crf => higher quality)
