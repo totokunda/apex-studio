@@ -570,8 +570,6 @@ class LoraManager(DownloadMixin):
                         # diffusers filters metadata keys by prefix and strips it, so prefix these keys to keep them.
                         metadata = {f"{prefix}.{k}": v for k, v in metadata.items()}
                         
-                    
-
                     model.load_lora_adapter(
                         local_path_state_dict,
                         adapter_name=adapter_name,
