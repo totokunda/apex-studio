@@ -713,10 +713,10 @@ class LTXTransformerConverter(TransformerConverter):
         self.rename_dict = {
             "proj_in": "patchify_proj",
             "time_embed": "adaln_single",
-            "attn1.norm_k.weight": "attn1.k_norm.weight",
-            "attn1.norm_q.weight": "attn1.q_norm.weight",
-            "attn2.norm_k.weight": "attn2.k_norm.weight",
-            "attn2.norm_q.weight": "attn2.q_norm.weight",
+            "attn1.norm_k.": "attn1.k_norm.",
+            "attn1.norm_q.": "attn1.q_norm.",
+            "attn2.norm_k.": "attn2.k_norm.",
+            "attn2.norm_q.": "attn2.q_norm.",
         }
         self.special_keys_map = {
             "vae": self.remove_keys_inplace,
@@ -1245,13 +1245,13 @@ class MagiTransformerConverter(TransformerConverter):
             "mlp.linear_fc2": "ffn.proj2",
             "self_attention.linear_proj": "proj",
             "self_attention.k_layernorm_xattn.bias": "attn2.cross_k_norm.bias",
-            "self_attention.k_layernorm_xattn.weight": "attn2.cross_k_norm.weight",
+            "self_attention.k_layernorm_xattn.": "attn2.cross_k_norm.",
             "self_attention.k_layernorm.bias": "attn1.norm_k.bias",
-            "self_attention.k_layernorm.weight": "attn1.norm_k.weight",
+            "self_attention.k_layernorm.": "attn1.norm_k.",
             "self_attention.q_layernorm_xattn.bias": "attn2.cross_q_norm.bias",
-            "self_attention.q_layernorm_xattn.weight": "attn2.cross_q_norm.weight",
+            "self_attention.q_layernorm_xattn.": "attn2.cross_q_norm.",
             "self_attention.q_layernorm.bias": "attn1.norm_q.bias",
-            "self_attention.q_layernorm.weight": "attn1.norm_q.weight",
+            "self_attention.q_layernorm.": "attn1.norm_q.",
             "self_attention.linear_qkv.qx": "attn2.to_q",
             "self_attention.linear_qkv.k": "attn1.to_k",
             "self_attention.linear_qkv.q": "attn1.to_q",
@@ -1306,27 +1306,55 @@ class Flux2TransformerConverter(TransformerConverter):
     def _handle_txt_attn_qkv(key: str, state_dict: Dict[str, Any]):
         """
         double_blocks.*.txt_attn.qkv --> transformer_blocks.*.attn.{add_q_proj|add_k_proj|add_v_proj}
+        
+        For LoRA down matrices (lora_down/lora_A), duplicate the tensor across q/k/v.
+        For LoRA up matrices (lora_up/lora_B) and base weights, chunk into 3 parts.
         """
         w = state_dict.pop(key)
-        blk, _ = key.split(".txt_attn.qkv")
+        blk, suffix = key.split(".txt_attn.qkv", 1)
         blk = blk.replace("double_blocks.", "transformer_blocks.")
-        q, k, v = ggml_chunk(w, 3, dim=0)
-        state_dict[f"{blk}.attn.add_k_proj.weight"] = k
-        state_dict[f"{blk}.attn.add_q_proj.weight"] = q
-        state_dict[f"{blk}.attn.add_v_proj.weight"] = v
+        
+        # Check if this is a LoRA down matrix (should be duplicated, not chunked)
+        is_lora_down = (".lora_down" in suffix) or (".lora_A" in suffix)
+        
+        if is_lora_down:
+            # Duplicate for all three projections
+            state_dict[f"{blk}.attn.add_k_proj{suffix}"] = w
+            state_dict[f"{blk}.attn.add_q_proj{suffix}"] = w
+            state_dict[f"{blk}.attn.add_v_proj{suffix}"] = w
+        else:
+            # Chunk into 3 parts for base weights and LoRA up matrices
+            q, k, v = ggml_chunk(w, 3, dim=0)
+            state_dict[f"{blk}.attn.add_k_proj{suffix}"] = k
+            state_dict[f"{blk}.attn.add_q_proj{suffix}"] = q
+            state_dict[f"{blk}.attn.add_v_proj{suffix}"] = v
 
     @staticmethod
     def _handle_img_attn_qkv(key: str, state_dict: Dict[str, Any]):
         """
         double_blocks.*.img_attn.qkv --> transformer_blocks.*.attn.{add_q_proj|add_k_proj|add_v_proj}
+        
+        For LoRA down matrices (lora_down/lora_A), duplicate the tensor across q/k/v.
+        For LoRA up matrices (lora_up/lora_B) and base weights, chunk into 3 parts.
         """
         w = state_dict.pop(key)
-        blk, _ = key.split(".img_attn.qkv")
+        blk, suffix = key.split(".img_attn.qkv", 1)
         blk = blk.replace("double_blocks.", "transformer_blocks.")
-        q, k, v = ggml_chunk(w, 3, dim=0)
-        state_dict[f"{blk}.attn.to_k.weight"] = k
-        state_dict[f"{blk}.attn.to_q.weight"] = q
-        state_dict[f"{blk}.attn.to_v.weight"] = v
+        
+        # Check if this is a LoRA down matrix (should be duplicated, not chunked)
+        is_lora_down = (".lora_down" in suffix) or (".lora_A" in suffix)
+        
+        if is_lora_down:
+            # Duplicate for all three projections
+            state_dict[f"{blk}.attn.to_k{suffix}"] = w
+            state_dict[f"{blk}.attn.to_q{suffix}"] = w
+            state_dict[f"{blk}.attn.to_v{suffix}"] = w
+        else:
+            # Chunk into 3 parts for base weights and LoRA up matrices
+            q, k, v = ggml_chunk(w, 3, dim=0)
+            state_dict[f"{blk}.attn.to_k{suffix}"] = k
+            state_dict[f"{blk}.attn.to_q{suffix}"] = q
+            state_dict[f"{blk}.attn.to_v{suffix}"] = v
 
     @staticmethod
     def _handle_final_layer_mod(key: str, state_dict: Dict[str, Any]):
