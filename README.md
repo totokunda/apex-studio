@@ -141,8 +141,8 @@ cd apps/api
 python3.12 -m venv .venv
 source .venv/bin/activate
 # pick one:
-python3 scripts/dev/dev_pip_install.py --machine cpu --venv .venv
-# python3 scripts/dev/dev_pip_install.py --machine linux --venv .venv # NVIDIA CUDA on Linux
+python3 scripts/dev/dev_pip_install.py --machine linux --venv .venv
+# python3 scripts/dev/dev_pip_install.py --machine cpu --venv .venv # CPU on Linux
 # python3 scripts/dev/dev_pip_install.py --machine rocm --venv .venv  # AMD ROCm on Linux (source build; not tested)
 ```
 
@@ -153,8 +153,8 @@ cd apps\api
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 # pick one:
-py scripts\dev\dev_pip_install.py --machine cpu --venv .venv
-# py scripts\dev\dev_pip_install.py --machine windows --venv .venv # NVIDIA CUDA on Windows
+py scripts\dev\dev_pip_install.py --machine windows --venv .venv
+# py scripts\dev\dev_pip_install.py --machine cpu --venv .venv # CPU on Windows
 ```
 
 Note: **Option A** applies Apex-maintained third-party patches (diffusers + xformers) automatically.

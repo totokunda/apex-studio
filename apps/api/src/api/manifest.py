@@ -199,7 +199,7 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
     # identifier (URN/spec/url). For UI convenience we expose the resolved local
     # downloaded file path(s) via `source` (backwards-compat) and `local_paths`,
     # while preserving the original identifier in `remote_source`.
-    all_loras_downloaded = True
+    required_loras_downloaded = True
     for lora_index, lora in enumerate(content.get("spec", {}).get("loras", [])):
         if isinstance(lora, str):
             remote_source = lora
@@ -243,7 +243,7 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
                 out_lora["is_downloaded"] = False
                 out_lora["source"] = remote_source
                 out_lora["local_paths"] = []
-                all_loras_downloaded = False
+                required_loras_downloaded = False
             content["spec"]["loras"][lora_index] = out_lora
         elif isinstance(lora, dict):
             out_lora = dict(lora)
@@ -276,7 +276,8 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
                 out_lora["is_downloaded"] = False
                 out_lora["source"] = remote_source or out_lora.get("source")
                 out_lora["local_paths"] = []
-                all_loras_downloaded = False
+                if out_lora.get("required", False):
+                    required_loras_downloaded = False
             content["spec"]["loras"][lora_index] = out_lora
 
     # Enrich components entries
@@ -381,7 +382,7 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
             isinstance(c, dict) and c.get("is_downloaded", False)
             for c in components_list
         )
-        and all_loras_downloaded
+        and required_loras_downloaded
     )
 
     # Compute compatibility check

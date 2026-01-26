@@ -1079,8 +1079,7 @@ class WanTransformerBlock(nn.Module):
     def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 1) -> None:
         self._ff_chunk_size = chunk_size
         self._ff_chunk_dim = dim
-        print(f"Chunking feed-forward: {chunk_size} dim: {dim}")
-
+   
     def set_chunk_norms(
         self,
         *,
@@ -1098,8 +1097,7 @@ class WanTransformerBlock(nn.Module):
         """
         self._mod_norm_chunk_size = modulated_norm_chunk_size
         self._norm_chunk_size = norm_chunk_size
-        print(f"Chunking norms: modulated_norm_chunk_size: {modulated_norm_chunk_size}, norm_chunk_size: {norm_chunk_size}")
-
+      
     def forward(
         self,
         hidden_states: torch.Tensor,
