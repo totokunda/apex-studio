@@ -18,6 +18,7 @@ import { useControlsStore } from "@/lib/control";
 import { useEngineJobClipSync } from "@/hooks/use-engine-job-clip-sync";
 import { useDownloadJobClipSync } from "@/hooks/use-download-job-clip-sync";
 import { usePreprocessorJobClipSync } from "@/hooks/use-preprocessor-job-clip-sync";
+import { usePostprocessorJobClipSync } from "@/hooks/use-postprocessor-job-clip-sync";
 
 const POLL_MS = 1000;
 const RAY_JOBS_QUERY_KEY = ["rayJobs"] as const;
@@ -219,6 +220,13 @@ const JobsMenu: React.FC = () => {
     addAssetAsync,
   });
 
+  usePostprocessorJobClipSync({
+    jobsById,
+    setJobsById,
+    updateClip,
+    addAssetAsync,
+  });
+
   // When a component card cancels a download, it dispatches a `jobs-menu-reload`
   // event with the associated jobId. Mark that job as canceled locally so it
   // disappears from the active jobs list immediately.
@@ -365,6 +373,16 @@ const JobsMenu: React.FC = () => {
                 activeJobId: undefined,
                 progress: 0,
               } as any);
+            }
+          }
+        } else if (cat === "postprocessor") {
+          const state = useClipStore.getState();
+          const clips = state.clips || [];
+          for (const c of clips) {
+            if (!c || c.type !== "video") continue;
+            const v = c as any;
+            if (v.frameInterpolateJobId && v.frameInterpolateJobId === jobId) {
+              updateClip(v.clipId, { frameInterpolateJobId: undefined } as any);
             }
           }
         }

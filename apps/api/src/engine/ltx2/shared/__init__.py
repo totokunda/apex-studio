@@ -7,11 +7,9 @@ import torch.nn.functional as F
 from diffusers.utils.torch_utils import randn_tensor
 from src.engine.ltx2.shared.audio_processing import LTX2AudioProcessingMixin
 from einops import rearrange
-import subprocess
 import numpy as np
 from PIL import Image
-from src.utils.ffmpeg import get_ffmpeg_path
-
+from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
 
 class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
     """LTX2 Shared Engine Implementation"""
@@ -375,19 +373,18 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             "pipe:1",
         ]
 
-        enc = subprocess.run(
-            encode_cmd,
-            input=raw_in,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+        rc, lp, mp4_bytes = run_ffmpeg(
+            encode_cmd, stdin_bytes=raw_in, capture_stdout=True, log_path=None
         )
-        if enc.returncode != 0:
+        if rc != 0 or not mp4_bytes:
+            try:
+                err_txt = lp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                err_txt = ""
             raise RuntimeError(
-                "ffmpeg encode failed:\n" + enc.stderr.decode("utf-8", errors="replace")
+                "ffmpeg encode failed "
+                f"(code={rc}) (log={lp})\n{err_txt[-4000:]}"
             )
-
-        mp4_bytes = enc.stdout
 
         # Decode back to raw RGB
         decode_cmd = [
@@ -406,19 +403,19 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             "pipe:1",
         ]
 
-        dec = subprocess.run(
-            decode_cmd,
-            input=mp4_bytes,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+        rc, lp, raw_out = run_ffmpeg(
+            decode_cmd, stdin_bytes=mp4_bytes, capture_stdout=True, log_path=None
         )
-        if dec.returncode != 0:
+        if rc != 0 or raw_out is None:
+            try:
+                err_txt = lp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                err_txt = ""
             raise RuntimeError(
-                "ffmpeg decode failed:\n" + dec.stderr.decode("utf-8", errors="replace")
+                "ffmpeg decode failed "
+                f"(code={rc}) (log={lp})\n{err_txt[-4000:]}"
             )
 
-        raw_out = dec.stdout
         expected = h * w * 3
         if len(raw_out) != expected:
             raise RuntimeError(

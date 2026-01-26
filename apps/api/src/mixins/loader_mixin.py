@@ -1403,8 +1403,7 @@ class LoaderMixin(DownloadMixin):
         self, video_path: str, sample_rate: int, normalize: bool = True
     ) -> np.ndarray:
         """Extract audio from video file."""
-        import subprocess
-        from src.utils.ffmpeg import get_ffmpeg_path
+        from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
 
         # Create temporary file for extracted audio
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
@@ -1426,7 +1425,12 @@ class LoaderMixin(DownloadMixin):
                 "1",
                 temp_audio_path,
             ]
-            subprocess.run(ffmpeg_command, check=True, capture_output=True)
+            log_path = Path(temp_audio_path).with_suffix(".ffmpeg.log")
+            rc, lp, _ = run_ffmpeg(
+                ffmpeg_command, log_path=log_path, timeout_s=None, check=False
+            )
+            if rc != 0:
+                raise RuntimeError(f"ffmpeg audio extract failed (code={rc}) (log={lp})")
 
             # Load the extracted audio
             audio_array, sr = librosa.load(temp_audio_path, sr=sample_rate)
