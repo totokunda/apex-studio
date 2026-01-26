@@ -7,9 +7,7 @@ audio files using the provided models.
 """
 
 import os
-import subprocess
-
-import librosa
+from pathlib import Path
 import numpy as np
 import torch
 
@@ -18,7 +16,7 @@ from transformers import WhisperModel, AutoFeatureExtractor
 import torch.nn.functional as F
 from src.helpers.base import BaseHelper
 from src.utils.defaults import get_components_path
-from src.utils.ffmpeg import get_ffmpeg_path
+from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
 from src.types import InputAudio
 
 
@@ -34,21 +32,20 @@ def linear_interpolation_fps(features, input_fps, output_fps, output_len=None):
 
 
 def resample_audio(input_audio_file: str, output_audio_file: str, sample_rate: int):
-    p = subprocess.Popen(
-        [
-            get_ffmpeg_path(),
-            "-y",
-            "-v",
-            "error",
-            "-i",
-            input_audio_file,
-            "-ar",
-            str(sample_rate),
-            output_audio_file,
-        ]
-    )
-    ret = p.wait()
-    assert ret == 0, "Resample audio failed!"
+    cmd = [
+        get_ffmpeg_path(),
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        input_audio_file,
+        "-ar",
+        str(sample_rate),
+        output_audio_file,
+    ]
+    log_path = Path(output_audio_file).with_suffix(".ffmpeg.log")
+    ret, lp, _ = run_ffmpeg(cmd, log_path=log_path)
+    assert ret == 0, f"Resample audio failed (code={ret}) (log={lp})"
     return output_audio_file
 
 

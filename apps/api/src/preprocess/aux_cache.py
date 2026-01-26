@@ -299,6 +299,23 @@ class AuxillaryCache:
 
             # Use imageio writer for iterative saving
             if new_frames_dict or existing_frames:
+                # Encode settings:
+                # - Previous settings were true lossless, which makes cache files massive.
+                # - We now use near-lossless CRF-based encoding (still very high quality,
+                #   dramatically smaller). You can override via env vars if needed.
+                #
+                # Notes on CRF:
+                # - libx264 CRF: 0 (lossless) .. 51 (worst). ~12 is near-lossless.
+                # - libvpx-vp9 CRF: 0 (lossless-ish) .. 63 (worst). ~18 is very high quality.
+                try:
+                    h264_crf = int(os.getenv("APEX_AUXCACHE_H264_CRF", "12"))
+                except Exception:
+                    h264_crf = 12
+                try:
+                    vp9_crf = int(os.getenv("APEX_AUXCACHE_VP9_CRF", "18"))
+                except Exception:
+                    vp9_crf = 18
+
                 if self.supports_alpha_channel:
                     with imageio.get_writer(
                         self.result_path,
@@ -308,11 +325,14 @@ class AuxillaryCache:
                         # - pix_fmt: preserve alpha channel
                         # - b:v 0 + crf: constant-quality mode (lower crf => higher quality)
                         # - deadline/cpu-used: bias toward quality over speed
-                        # NOTE: For maximum fidelity (esp. masks/overlays), prefer lossless.
+                        # NOTE: We use near-lossless settings by default to keep cache sizes sane.
                         pixelformat="yuva420p",
                         output_params=[
-                            "-lossless",
-                            "1",
+                            # Constant-quality mode (smaller than true lossless).
+                            "-b:v",
+                            "0",
+                            "-crf",
+                            str(vp9_crf),
                             "-deadline",
                             "best",
                             "-cpu-used",
@@ -341,11 +361,14 @@ class AuxillaryCache:
                         pixelformat="yuv444p",
                         macro_block_size=1,
                         output_params=[
-                            # Lossless H.264 (large files, best quality)
+                            # Near-lossless H.264 (much smaller than CRF 0)
                             "-crf",
-                            "0",
+                            str(h264_crf),
                             "-preset",
                             "veryslow",
+                            # Better edge preservation for synthetic/flat-color maps.
+                            "-tune",
+                            "animation",
                             "-profile:v",
                             "high444",
                             # Better playback/streaming behavior (does not affect quality)

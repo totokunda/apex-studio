@@ -110,6 +110,12 @@ export type VideoClipProps = ClipProps &
     assetId: string;
     assetIdHistory: string[];
     type: "video";
+    /**
+     * Optional active frame interpolation job id.
+     * Persisted so the job can keep running while users navigate away and
+     * the UI can reconnect later (synced via JobsMenu).
+     */
+    frameInterpolateJobId?: string;
     // Intrinsic media dimensions for consistent aspect ratio
     mediaWidth?: number;
     mediaHeight?: number;

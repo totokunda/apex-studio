@@ -3,15 +3,6 @@ import {
   Input,
   UrlSource,
   ALL_FORMATS,
-  MP4,
-  WEBM,
-  QTFF,
-  MATROSKA,
-  OGG,
-  MP3,
-  WAVE,
-  FLAC,
-  ADTS,
   AudioSample,
 } from "mediabunny";
 
@@ -279,17 +270,6 @@ async function handleConfigure(
   state.cachedKeyPacket = null;
 
   let formats = ALL_FORMATS;
-  if (cfg.formatStr) {
-    if (cfg.formatStr === "mp4") formats = [MP4];
-    else if (cfg.formatStr === "webm") formats = [WEBM];
-    else if (cfg.formatStr === "mov") formats = [QTFF];
-    else if (cfg.formatStr === "mkv") formats = [MATROSKA];
-    else if (cfg.formatStr === "ogg") formats = [OGG];
-    else if (cfg.formatStr === "mp3") formats = [MP3];
-    else if (cfg.formatStr === "wav") formats = [WAVE];
-    else if (cfg.formatStr === "flac") formats = [FLAC];
-    else if (cfg.formatStr === "aac") formats = [ADTS];
-  }
 
   // Setup Input
   let input: Input | null = null;
@@ -337,6 +317,7 @@ async function handleConfigure(
     }
   }
 
+  console.log("input", input);
   state.input = input;
 
   const audioTrack = await state.input.getPrimaryAudioTrack();
