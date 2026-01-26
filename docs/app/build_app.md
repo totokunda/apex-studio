@@ -1,14 +1,14 @@
 # Building Apex Studio
 
-This document describes how to build and package Apex Studio for distribution. The application consists of an Electron frontend and a Python API backend that are bundled together.
+This document describes how to build and package Apex Studio for distribution.
 
 ## Prerequisites
 
 ### All Platforms
 
-- **Node.js** >= 23.0.0
+- **Node.js** >= 24.0.0
 - **npm** >= 10.0.0
-- **Python** >= 3.10
+- **Python** >= 3.12
 - **Git**
 
 ### Platform-Specific
@@ -88,23 +88,8 @@ npm run bundle:win
 npm run bundle:linux
 ```
 
-### Python API Only
-
-Build the Python API bundle separately:
-
-```bash
-# Auto-detect GPU support
-npm run bundle:python
-
-# Force specific GPU backend
-npm run bundle:python:cuda  # NVIDIA CUDA 12.6
-npm run bundle:python:cpu   # CPU only
-npm run bundle:python:mps   # Apple Silicon MPS
-```
 
 ### Electron Only (Using Existing Python Bundle)
-
-If you've already built the Python bundle:
 
 ```bash
 npm run compile         # Current platform
@@ -200,7 +185,7 @@ After building, you'll find the distributables in `apps/app/dist/`:
 | macOS | DMG | `Apex Studio-{version}-mac-{arch}.dmg` |
 | macOS | ZIP | `Apex Studio-{version}-mac-{arch}.zip` |
 | Windows | Installer | `Apex Studio-{version}-win-x64.exe` |
-| Windows | Portable | `Apex Studio-{version}-win-x64-portable.exe` |
+| Windows | Setup (NSIS) | `apex-studio-{version}-win-x64-setup.exe` |
 | Linux | Debian | `Apex Studio-{version}-linux-x64.deb` |
 | Linux | AppImage | `Apex Studio-{version}-x64.AppImage` |
 | Linux | Tarball | `Apex Studio-{version}-linux-x64.tar.gz` |
@@ -260,8 +245,42 @@ spctl -a -vv "/path/to/Apex Studio.app"
 
 ### Windows: Missing Dependencies
 
-If the app fails to start, install the Visual C++ Redistributable:
-- Download from [Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+If a packaged Windows build fails to start with a PyTorch DLL error (e.g. `c10.dll`), it's usually due to a missing Visual C++ runtime.
+
+- **NSIS installer builds**: the installer will automatically install the required Visual C++ Redistributable when needed.
+
+#### How to test the installer fixes this (recommended)
+
+1) Use a clean environment:
+- **Windows Sandbox** (quickest) or a fresh VM.
+
+2) Inside that clean environment, run your `*-setup.exe`.
+
+3) Verify the VC++ runtime is present:
+
+```powershell
+# DLL presence check (what PyTorch tries to load)
+Test-Path "$env:WINDIR\System32\msvcp140.dll"
+Test-Path "$env:WINDIR\System32\vcruntime140.dll"
+Test-Path "$env:WINDIR\System32\vcruntime140_1.dll"
+
+# Installed-program check (best-effort; names vary slightly by version)
+$keys = @(
+  "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
+Get-ItemProperty $keys -ErrorAction SilentlyContinue |
+  Where-Object { $_.DisplayName -like "Microsoft Visual C++ 2015-2022 Redistributable (x64)*" } |
+  Select-Object DisplayName, DisplayVersion
+```
+
+4) Finally verify Torch imports using the bundled Python (adjust path to your extracted python-api bundle if needed):
+
+```powershell
+& ".\python-api\apex-engine\apex-studio\python.exe" -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+```
+
+If the DLL checks are false, install the redist manually from Microsoft: `https://aka.ms/vs/17/release/vc_redist.x64.exe`
 
 ### Linux: CUDA Not Detected
 

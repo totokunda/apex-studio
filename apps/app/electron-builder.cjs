@@ -5,11 +5,37 @@ const { join } = require("node:path");
 const pkg = require("./package.json");
 const path = require("node:path");
 
+const publishTimeoutMs = (() => {
+  // GitHub uploads can stall on slow/unstable networks; electron-publish uses this as a request/socket timeout.
+  // Override per environment if needed.
+  const raw = process.env.ELECTRON_PUBLISH_TIMEOUT_MS;
+  const fallback = 15 * 60 * 1000; // 15 minutes
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+})();
+
+const bundleFullFilters = process.env.APEX_BUNDLE_FILTERS_FULL === "1";
+
+// electron-builder v26 expects `mac.notarize` to be a boolean.
+// Per schema: it controls whether to DISABLE electron-builder's notarization integration.
+// We disable notarization when we don't have the required environment variables.
+const hasMacNotarizeEnv =
+  // App Store Connect API key flow
+  (process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) ||
+  // Apple ID + app-specific password flow
+  (process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID) ||
+  // Keychain profile flow
+  (process.env.APPLE_KEYCHAIN && process.env.APPLE_KEYCHAIN_PROFILE);
 
 /** @type {import("electron-builder").Configuration} */
 module.exports = {
   appId: "com.apex.studio",
   productName: "Apex Studio",
+
+  // Keep ASAR enabled (default). We intentionally avoid broad `asarUnpack` globs,
+  // because @electron/asar uses minimatch internally and can throw "pattern is too long"
+  // when unpack patterns expand into huge brace patterns on large trees.
 
   directories: {
     output: "dist",
@@ -31,21 +57,35 @@ module.exports = {
    * It is recommended to avoid using non-standard characters such as spaces in artifact names,
    * as they can unpredictably change during deployment, making them impossible to locate and download for update.
    */
-  artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+  // Use `${name}` (package.json name) to avoid spaces in filenames.
+  // NOTE: electron-builder doesn't define a `${target}` macro at this level.
+  // Windows target-specific names are configured under `win.target` below.
+  artifactName: "${name}-${version}-${os}-${arch}.${ext}",
 
   // Keep packaging minimal: include our entry point and only built artifacts from workspace packages.
   files: [
     "LICENSE*",
     pkg.main,
 
-    // Exclude everything first, then explicitly include only built outputs.
-    "!node_modules/@app/**",
-    "node_modules/@app/**/dist/**",
-    "node_modules/@app/**/package.json",
+    // Include built outputs from workspace packages.
+    "node_modules/@app/*/dist/**",
+    "node_modules/@app/*/package.json",
 
     // Size trims:
-    // - renderer filter packs are huge; ship "small" only by default
-    "!node_modules/@app/renderer/dist/filters/full/**",
+    // - renderer filter packs are huge; ship "small" and "examples" by default
+    ...(bundleFullFilters ? [] : ["!node_modules/@app/renderer/dist/filters/full/**"]),
+    // - never ship renderer source/public trees (dev-only); dist/** is the runtime payload
+    "!node_modules/@app/renderer/public/**",
+    "!node_modules/@app/renderer/src/**",
+    "!node_modules/@app/renderer/scripts/**",
+    "!node_modules/@app/renderer/vite.config.*",
+    "!node_modules/@app/renderer/tailwind.config.*",
+    "!node_modules/@app/renderer/tsconfig*.json",
+    "!node_modules/@app/renderer/components.json",
+    "!node_modules/@app/renderer/index.html",
+    // - ffprobe-static ships multi-platform binaries; keep only Windows x64
+    "!node_modules/ffprobe-static/bin/**",
+    "node_modules/ffprobe-static/bin/win32/x64/**",
     // - model demo media is optional and large; download later if needed
   ],
 
@@ -72,14 +112,9 @@ module.exports = {
       "^python-api/.*\\.pyc$",
       "^python-api/.*/__pycache__/.*",
     ],
-    notarize:
-      process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD
-        ? {
-            teamId: process.env.APPLE_TEAM_ID,
-          }
-        : false,
+    // `true` disables notarization; `false` enables it (when env vars are set).
+    notarize: !Boolean(hasMacNotarizeEnv),
   },
-
   dmg: {
     contents: [
       {
@@ -93,7 +128,7 @@ module.exports = {
         path: "/Applications",
       },
     ],
-    sign: false, // DMG signing is often not needed and can cause issues
+    sign: true, // DMG signing is often not needed and can cause issues
   },
 
   // Windows configuration
@@ -103,15 +138,12 @@ module.exports = {
         target: "nsis",
         arch: ["x64"],
       },
-      {
-        target: "portable",
-        arch: ["x64"],
-      },
     ],
     icon: "buildResources/icon.ico",
   },
 
   nsis: {
+    artifactName: "${name}-${version}-${os}-${arch}-setup.${ext}",
     oneClick: false,
     allowToChangeInstallationDirectory: true,
     perMachine: false,
@@ -177,6 +209,7 @@ module.exports = {
       repo: process.env.GITHUB_REPO || "apex-studio",
       releaseType: "release",
       publishAutoUpdate: true,
+      timeout: publishTimeoutMs,
     },
     // Optional: S3 for faster downloads
     ...(process.env.AWS_S3_BUCKET
@@ -185,6 +218,7 @@ module.exports = {
             provider: "s3",
             bucket: process.env.AWS_S3_BUCKET,
             region: process.env.AWS_REGION || "us-east-1",
+            timeout: publishTimeoutMs,
           },
         ]
       : []),

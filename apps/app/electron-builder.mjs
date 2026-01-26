@@ -4,9 +4,30 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 
+const publishTimeoutMs = (() => {
+  // GitHub uploads can stall on slow/unstable networks; electron-publish uses this as a request/socket timeout.
+  // Override per environment if needed.
+  const raw = process.env.ELECTRON_PUBLISH_TIMEOUT_MS;
+  const fallback = 15 * 60 * 1000; // 15 minutes
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+})();
+
 // Determine if Python API bundle exists
 const pythonApiBundlePath = join(process.cwd(), "python-api-bundle");
 const hasPythonBundle = existsSync(pythonApiBundlePath);
+
+// electron-builder v26 expects `mac.notarize` to be a boolean.
+// Per schema: it controls whether to DISABLE electron-builder's notarization integration.
+// We disable notarization when we don't have the required environment variables.
+const hasMacNotarizeEnv =
+  // App Store Connect API key flow
+  (process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) ||
+  // Apple ID + app-specific password flow
+  (process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID) ||
+  // Keychain profile flow
+  (process.env.APPLE_KEYCHAIN && process.env.APPLE_KEYCHAIN_PROFILE);
 
 export default /** @type import('electron-builder').Configuration */
 ({
@@ -33,7 +54,10 @@ export default /** @type import('electron-builder').Configuration */
    * It is recommended to avoid using non-standard characters such as spaces in artifact names,
    * as they can unpredictably change during deployment, making them impossible to locate and download for update.
    */
-  artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+  // Use `${name}` (package.json name) to avoid spaces in filenames.
+  // NOTE: electron-builder doesn't define a `${target}` macro at this level.
+  // Windows target-specific names are configured under `win.target` below.
+  artifactName: "${name}-${version}-${os}-${arch}.${ext}",
   
   files: [
     "LICENSE*",
@@ -65,9 +89,8 @@ export default /** @type import('electron-builder').Configuration */
       "python-api/**/*.pyc",
       "python-api/**/__pycache__/**",
     ],
-    notarize: process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD ? {
-      teamId: process.env.APPLE_TEAM_ID,
-    } : false,
+    // `true` disables notarization; `false` enables it (when env vars are set).
+    notarize: !Boolean(hasMacNotarizeEnv),
   },
   
   dmg: {
@@ -83,7 +106,7 @@ export default /** @type import('electron-builder').Configuration */
         path: "/Applications",
       },
     ],
-    sign: false, // DMG signing is often not needed and can cause issues
+    sign: true, // DMG signing is often not needed and can cause issues
   },
   
   // Windows configuration
@@ -91,10 +114,6 @@ export default /** @type import('electron-builder').Configuration */
     target: [
       {
         target: "nsis",
-        arch: ["x64"],
-      },
-      {
-        target: "portable",
         arch: ["x64"],
       },
     ],
@@ -107,6 +126,7 @@ export default /** @type import('electron-builder').Configuration */
   },
   
   nsis: {
+    artifactName: "${name}-${version}-${os}-${arch}-setup.${ext}",
     oneClick: false,
     allowToChangeInstallationDirectory: true,
     perMachine: false,
@@ -121,7 +141,7 @@ export default /** @type import('electron-builder').Configuration */
     // Custom NSIS script for Python runtime setup
     include: "buildResources/installer.nsh",
   },
-  
+
   // Linux configuration
   linux: {
     target: [
@@ -172,12 +192,14 @@ export default /** @type import('electron-builder').Configuration */
       repo: process.env.GITHUB_REPO || "apex-studio",
       releaseType: "release",
       publishAutoUpdate: true,
+      timeout: publishTimeoutMs,
     },
     // Optional: S3 for faster downloads
     ...(process.env.AWS_S3_BUCKET ? [{
       provider: "s3",
       bucket: process.env.AWS_S3_BUCKET,
       region: process.env.AWS_REGION || "us-east-1",
+      timeout: publishTimeoutMs,
     }] : []),
   ],
   

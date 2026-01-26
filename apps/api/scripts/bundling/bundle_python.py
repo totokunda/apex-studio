@@ -22,9 +22,13 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Optional, Set, List, Tuple
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 
 class PythonBundler:
@@ -63,15 +67,20 @@ class PythonBundler:
         python_executable: Optional[str] = None,
         prefer_python_312: bool = True,
         bundle_version: Optional[str] = None,
+        target_arch: Optional[str] = None,
+        use_portable_python: bool = True,
     ):
         self.platform_name = platform_name
         # Resolve to an absolute path so later subprocess calls that change cwd (e.g. Rust builds)
         # still can find the venv interpreter and other bundle files reliably.
         self.output_dir = Path(output_dir).resolve()
         self.cuda_version = cuda_version
+        # NOTE: `python_executable` is the interpreter we will use to create the bundle venv.
+        # By default we will bootstrap a portable Python (python-build-standalone) and use that.
         self.python_executable = python_executable or sys.executable
         self.prefer_python_312 = prefer_python_312
         self.bundle_version = (bundle_version or "").strip() or None
+        self.use_portable_python: bool = bool(use_portable_python)
 
         # This file lives at scripts/bundling/bundle_python.py.
         # Project root is apps/api/.
@@ -85,6 +94,22 @@ class PythonBundler:
         # Name of the venv directory we create & ship.
         # Users can activate it directly: `source apex-studio/bin/activate`
         self.venv_name = "apex-studio"
+
+        # Target arch/triple (controls portable Python selection and macOS Intel special-cases).
+        self.target_arch: str = self._normalize_arch(target_arch or platform.machine())
+        if not self.target_arch:
+            self.target_arch = self._normalize_arch(platform.machine())
+        # Normalize common Apple naming.
+        if self.target_arch in {"arm64", "aarch64"}:
+            self.target_arch = "arm64"
+        if self.target_arch in {"x86_64", "amd64", "x64"}:
+            self.target_arch = "x86_64"
+
+        # Portable Python bootstrap cache root.
+        self.portable_python_root = self.output_dir / "_portable-python"
+        self.portable_python_exe: Optional[Path] = None
+        self.portable_python_version: Optional[str] = None
+        self.portable_python_tag: Optional[str] = None
 
         # Populated after bundling
         self.last_gpu_type: Optional[str] = None
@@ -105,6 +130,21 @@ class PythonBundler:
         # Populated after we create the venv (this is the Python version that ships).
         self.venv_python_tag: Optional[str] = None
         self.venv_python_version: Optional[str] = None
+
+    @staticmethod
+    def _normalize_arch(arch: str) -> str:
+        """
+        Normalize architecture strings for bundle naming/metadata.
+
+        Goal: keep bundle artifacts consistent across platforms/toolchains.
+        In particular, Windows commonly reports `AMD64` but we want `x86_64`.
+        """
+        low = (arch or "").strip().lower()
+        if not low:
+            return ""
+        if low in {"amd64", "x64"}:
+            return "x86_64"
+        return low
 
     def _probe_python_info(self, python_exe: Path) -> tuple[Optional[str], Optional[str]]:
         """
@@ -138,6 +178,408 @@ class PythonBundler:
         except Exception:
             return (None, None)
 
+    # ----------------------------
+    # Portable Python bootstrap
+    # ----------------------------
+
+    PYTHON_BUILD_STANDALONE_LATEST_JSON = (
+        "https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json"
+    )
+
+    def _portable_python_major_minor(self) -> str:
+        """
+        Policy:
+          - macOS Intel (x86_64): Python 3.11.x
+          - everything else we bundle: Python 3.12.x
+        """
+        if self.platform_name == "darwin" and self.target_arch == "x86_64":
+            return "3.11"
+        return "3.12"
+
+    def _portable_python_target_triple(self) -> str:
+        """
+        Return the LLVM target triple we use to select python-build-standalone artifacts.
+
+        We intentionally pick conservative targets (no x86_64_v2/v3/v4) so the bundle runs on
+        the widest range of machines for a given OS.
+        """
+        if self.platform_name == "darwin":
+            if self.target_arch == "x86_64":
+                return "x86_64-apple-darwin"
+            return "aarch64-apple-darwin"
+        if self.platform_name == "win32":
+            return "x86_64-pc-windows-msvc"
+        # linux
+        return "x86_64-unknown-linux-gnu"
+
+    def _http_get_json(self, url: str, *, timeout: int = 60) -> dict:
+        req = Request(
+            url,
+            headers={
+                "User-Agent": "apex-studio-bundler/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urlopen(req, timeout=timeout) as resp:
+            data = resp.read()
+        return json.loads(data.decode("utf-8"))
+
+    def _http_download(self, url: str, dest: Path, *, timeout: int = 600) -> Path:
+        dest = Path(dest).resolve()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        req = Request(
+            url,
+            headers={
+                "User-Agent": "apex-studio-bundler/1.0",
+                "Accept": "*/*",
+            },
+        )
+        # Stream download so we can show progress (GitHub release assets can be large).
+        with urlopen(req, timeout=timeout) as resp:
+            try:
+                total = int(resp.headers.get("Content-Length") or "0") or None
+            except Exception:
+                total = None
+
+            def _fmt_bytes(n: int) -> str:
+                if n < 1024:
+                    return f"{n} B"
+                kb = n / 1024.0
+                if kb < 1024:
+                    return f"{kb:.1f} KiB"
+                mb = kb / 1024.0
+                if mb < 1024:
+                    return f"{mb:.1f} MiB"
+                gb = mb / 1024.0
+                return f"{gb:.2f} GiB"
+
+            # Only render a bar if we're in an interactive terminal.
+            is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+            chunk_size = 1024 * 1024  # 1 MiB
+            downloaded = 0
+            last_print = 0
+
+            with open(tmp, "wb") as f:
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+
+                    # Update progress.
+                    if total and is_tty:
+                        pct = min(1.0, downloaded / float(total))
+                        width = 30
+                        filled = int(width * pct)
+                        bar = "=" * filled + "-" * (width - filled)
+                        msg = (
+                            f"\r  [{bar}] {pct*100:6.2f}% "
+                            f"({_fmt_bytes(downloaded)} / {_fmt_bytes(total)})"
+                        )
+                        sys.stdout.write(msg)
+                        sys.stdout.flush()
+                    else:
+                        # Non-tty or unknown total: print occasionally (every ~16 MiB).
+                        if downloaded - last_print >= 16 * 1024 * 1024:
+                            if total:
+                                pct = min(100.0, 100.0 * downloaded / float(total))
+                                print(
+                                    f"  Downloaded {_fmt_bytes(downloaded)} / {_fmt_bytes(total)} ({pct:.1f}%)"
+                                )
+                            else:
+                                print(f"  Downloaded {_fmt_bytes(downloaded)}")
+                            last_print = downloaded
+
+            if total and is_tty:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+
+        tmp.replace(dest)
+        return dest
+
+    def _select_python_build_asset(
+        self, assets: list[dict], *, major_minor: str, target_triple: str
+    ) -> tuple[str, str, str]:
+        """
+        Choose the best python-build-standalone asset for (major_minor, target_triple).
+
+        Returns (asset_name, download_url, python_version_str).
+        """
+        # Prefer formats that we can extract with stdlib only (no zstd needed).
+        if self.platform_name == "win32":
+            prefer_exts = [".zip"]
+        else:
+            prefer_exts = [".tar.gz", ".tgz", ".zip", ".tar.zst"]
+
+        mm = str(major_minor).strip()
+        triple = str(target_triple).strip()
+
+        def _parse_ver(name: str) -> Optional[tuple[int, int, int]]:
+            # Try common patterns like "python-3.12.7" or "cpython-3.12.7".
+            m = re.search(r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)", name)
+            if not m:
+                return None
+            try:
+                return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except Exception:
+                return None
+
+        def _score(name: str) -> tuple:
+            # Higher is better.
+            ver = _parse_ver(name) or (0, 0, 0)
+            ext_rank = 0
+            for i, ext in enumerate(prefer_exts):
+                if name.endswith(ext):
+                    ext_rank = len(prefer_exts) - i
+                    break
+            flavor_rank = 2 if "install_only" in name else (1 if "full" in name else 0)
+            shared_rank = 1 if "windows-msvc" in name else 0
+            return (ver[0], ver[1], ver[2], ext_rank, flavor_rank, shared_rank)
+
+        candidates: list[tuple[tuple, dict]] = []
+        for a in assets or []:
+            name = str(a.get("name") or "")
+            url = str(a.get("browser_download_url") or "")
+            if not name or not url:
+                continue
+            if triple not in name:
+                continue
+            ver = _parse_ver(name)
+            if not ver:
+                continue
+            if f"{ver[0]}.{ver[1]}" != mm:
+                continue
+            # Avoid static linux/musl builds (can't load .so extensions).
+            if "musl" in name:
+                continue
+            candidates.append((_score(name), a))
+
+        if not candidates:
+            raise RuntimeError(
+                "Could not find a python-build-standalone asset for "
+                f"python {mm}.x and target {triple}."
+            )
+
+        candidates.sort(key=lambda t: t[0], reverse=True)
+        best = candidates[0][1]
+        best_name = str(best.get("name"))
+        best_url = str(best.get("browser_download_url"))
+        best_ver = _parse_ver(best_name) or (0, 0, 0)
+        return (best_name, best_url, f"{best_ver[0]}.{best_ver[1]}.{best_ver[2]}")
+
+    def _extract_archive(self, archive_path: Path, dest_dir: Path) -> Path:
+        """
+        Extract supported archives into dest_dir and return the extraction root.
+        """
+        archive_path = Path(archive_path).resolve()
+        dest_dir = Path(dest_dir).resolve()
+        if dest_dir.exists():
+            shutil.rmtree(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        name = archive_path.name.lower()
+        if name.endswith(".zip"):
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                zf.extractall(dest_dir)
+        elif name.endswith(".tar.gz") or name.endswith(".tgz"):
+            with tarfile.open(archive_path, "r:gz") as tf:
+                # Python 3.12+ supports `filter=...` and warns that the default behavior
+                # will change in Python 3.14. Use the "data" filter to be explicit and
+                # future-proof while still extracting normal archives.
+                try:
+                    tf.extractall(dest_dir, filter="data")
+                except TypeError:
+                    # Older Python: no filter parameter.
+                    tf.extractall(dest_dir)
+        elif name.endswith(".tar.zst"):
+            # Decompress via the `zstandard` Python module (bootstrap it into the runner env if needed).
+            try:
+                import zstandard as zstd  # type: ignore
+            except Exception:
+                # Install into the *runner* environment (the Python executing this script),
+                # using uv (no direct pip usage).
+                uv = self._ensure_uv_available()
+                subprocess.run(
+                    [uv, "pip", "install", "--python", str(sys.executable), "--upgrade", "zstandard"],
+                    check=True,
+                )
+                import zstandard as zstd  # type: ignore
+
+            with open(archive_path, "rb") as f:
+                dctx = zstd.ZstdDecompressor()
+                with dctx.stream_reader(f) as reader:
+                    with tarfile.open(fileobj=reader, mode="r|") as tf:
+                        tf.extractall(dest_dir)
+        else:
+            raise RuntimeError(f"Unsupported portable Python archive format: {archive_path.name}")
+
+        # Heuristic: prefer a single top-level directory if present.
+        children = [p for p in dest_dir.iterdir()]
+        if len(children) == 1 and children[0].is_dir():
+            return children[0]
+        return dest_dir
+
+    def _find_python_executable(self, root: Path) -> Path:
+        root = Path(root).resolve()
+        if self.platform_name == "win32":
+            # Common layouts include:
+            # - <root>/python/install/python.exe
+            # - <root>/install/python.exe
+            # - <root>/python.exe
+            candidates: list[Path] = []
+            for pat in ["python.exe"]:
+                for p in root.rglob(pat):
+                    if p.is_file() and p.name.lower() == "python.exe":
+                        candidates.append(p)
+            if not candidates:
+                raise RuntimeError(f"Portable Python extraction did not contain python.exe under: {root}")
+
+            def _rank(p: Path) -> tuple[int, int]:
+                parts = [x.lower() for x in p.parts]
+                score = 0
+                if "install" in parts:
+                    score += 2
+                if "python" in parts:
+                    score += 1
+                return (score, -len(parts))
+
+            candidates.sort(key=_rank, reverse=True)
+            return candidates[0]
+
+        # POSIX (macOS/Linux)
+        preferred_names = [
+            "python3",
+            f"python{self._portable_python_major_minor()}",
+            "python",
+        ]
+        candidates: list[Path] = []
+        for nm in preferred_names:
+            for p in root.rglob(nm):
+                try:
+                    if p.is_file() and p.parent.name == "bin":
+                        candidates.append(p)
+                except Exception:
+                    continue
+        if not candidates:
+            raise RuntimeError(f"Portable Python extraction did not contain a bin/python under: {root}")
+
+        def _rank(p: Path) -> tuple[int, int]:
+            parts = [x.lower() for x in p.parts]
+            score = 0
+            if "install" in parts:
+                score += 2
+            if "bin" in parts:
+                score += 1
+            return (score, -len(parts))
+
+        candidates.sort(key=_rank, reverse=True)
+        return candidates[0]
+
+    def _ensure_pip(self, python_exe: Path) -> None:
+        """
+        Legacy helper retained for compatibility.
+
+        We intentionally do NOT invoke pip here. All dependency installation should go through `uv`.
+        """
+        _ = python_exe
+        return
+
+    def ensure_portable_python(self) -> Path:
+        """
+        Download and extract a portable Python distribution and return its python executable path.
+
+        This uses python-build-standalone. We always pick a conservative target triple so the
+        resulting bundles run on as many machines as possible for a given platform.
+        """
+        if not self.use_portable_python:
+            return Path(self.python_executable).resolve()
+
+        mm = self._portable_python_major_minor()
+        triple = self._portable_python_target_triple()
+
+        self.portable_python_root.mkdir(parents=True, exist_ok=True)
+        meta_path = self.portable_python_root / "portable-python.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        except Exception:
+            meta = {}
+
+        # If cache matches, reuse.
+        if (
+            meta.get("major_minor") == mm
+            and meta.get("target_triple") == triple
+            and meta.get("python_exe")
+        ):
+            cached = self.portable_python_root / str(meta.get("python_exe"))
+            if cached.exists():
+                self.portable_python_exe = cached
+                self.portable_python_version = str(meta.get("python_version") or "") or None
+                self.portable_python_tag = str(meta.get("python_tag") or "") or None
+                self.python_executable = str(cached)
+                return cached
+
+        # Fetch latest tag
+        try:
+            latest = self._http_get_json(self.PYTHON_BUILD_STANDALONE_LATEST_JSON)
+        except (URLError, HTTPError) as e:
+            raise RuntimeError(
+                "Failed to fetch python-build-standalone latest-release.json. "
+                f"url={self.PYTHON_BUILD_STANDALONE_LATEST_JSON}"
+            ) from e
+
+        tag = str(latest.get("tag") or "").strip()
+        release_url = str(latest.get("release_url") or "").strip()
+        if not tag and release_url:
+            tag = release_url.rstrip("/").split("/")[-1]
+        if not tag:
+            raise RuntimeError(
+                "python-build-standalone latest-release.json did not contain a tag/release_url."
+            )
+
+        # Query GitHub release assets for that tag.
+        api_url = f"https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/{tag}"
+        release = self._http_get_json(api_url)
+        assets = list(release.get("assets") or [])
+
+        asset_name, asset_url, py_ver = self._select_python_build_asset(
+            assets, major_minor=mm, target_triple=triple
+        )
+
+        print(f"Bootstrapping portable Python: {py_ver} ({triple})")
+        archive_path = self.portable_python_root / asset_name
+        if not archive_path.exists():
+            print(f"Downloading portable Python asset: {asset_name}")
+            self._http_download(asset_url, archive_path)
+
+        extract_root = self.portable_python_root / "extracted"
+        extracted = self._extract_archive(archive_path, extract_root)
+        py_exe = self._find_python_executable(extracted)
+
+        # Avoid pip bootstrapping; all installs are done via `uv` elsewhere.
+
+        # Probe tag/version.
+        tag_str, ver_str = self._probe_python_info(py_exe)
+        self.portable_python_exe = py_exe
+        self.portable_python_version = ver_str or py_ver
+        self.portable_python_tag = tag_str
+        self.python_executable = str(py_exe)
+
+        meta_out = {
+            "tag": tag,
+            "release_url": release_url,
+            "major_minor": mm,
+            "target_triple": triple,
+            "asset_name": asset_name,
+            "python_version": self.portable_python_version or "",
+            "python_tag": self.portable_python_tag or "",
+            "python_exe": str(py_exe.relative_to(self.portable_python_root)),
+        }
+        meta_path.write_text(json.dumps(meta_out, indent=2) + "\n", encoding="utf-8")
+
+        return py_exe
+
     def _bundle_python_path_env(self, bundle_dir: Path, env: dict) -> dict:
         """
         Ensure the bundle root is on PYTHONPATH, matching runtime launch behavior.
@@ -156,9 +598,29 @@ class PythonBundler:
         return env
 
     def _smoke_py_path(self, bundle_dir: Path) -> Path:
+        """
+        Return the Python interpreter path inside the *shipped bundle*.
+
+        NOTE: We no longer ship a venv. Instead, we ship a portable CPython distribution
+        under `<bundleRoot>/<venv_name>/` (kept name for backwards compatibility).
+        """
+        base = (Path(bundle_dir).resolve() / self.venv_name).resolve()
         if self.platform_name == "win32":
-            return bundle_dir / self.venv_name / "Scripts" / "python.exe"
-        return bundle_dir / self.venv_name / "bin" / "python"
+            candidates = [
+                base / "python.exe",
+                base / "Scripts" / "python.exe",  # legacy venv layout (if present)
+                base / "install" / "python.exe",  # some archive layouts
+            ]
+        else:
+            candidates = [
+                base / "bin" / "python",
+                base / "bin" / "python3",
+            ]
+        for p in candidates:
+            if p.exists():
+                return p
+        # Fallback: return the first candidate for clearer error messages upstream.
+        return candidates[0]
 
 
 
@@ -276,8 +738,8 @@ class PythonBundler:
         """
         Ensure the `uv` CLI is available.
 
-        We prefer using a system-installed `uv`. If not available, we install it into the
-        bundler's selected interpreter environment (the host interpreter running this script).
+        We require a system-installed `uv` (or otherwise available on PATH).
+        This bundler intentionally avoids bootstrapping uv via pip.
         """
         try:
             subprocess.run(
@@ -285,12 +747,12 @@ class PythonBundler:
             )
             return "uv"
         except Exception:
-            # Bootstrap uv using the selected interpreter (network access is already assumed for dependency installs).
-            subprocess.run(
-                [self.python_executable, "-m", "pip", "install", "--upgrade", "uv"],
-                check=True,
+            raise RuntimeError(
+                "`uv` was not found on PATH. Install uv first, then re-run bundling.\n"
+                "macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh\n"
+                "Windows (PowerShell): irm https://astral.sh/uv/install.ps1 | iex\n"
+                "Or install via your package manager and ensure `uv` is on PATH."
             )
-            return "uv"
 
     def _ensure_macos_libpython_present(self, venv_dir: Path) -> None:
         """
@@ -379,10 +841,7 @@ class PythonBundler:
             # macOS:
             # - Apple Silicon can use MPS (Metal Performance Shaders)
             # - Intel macOS (x86_64) cannot use MPS; treat as CPU-only
-            try:
-                arch = (platform.machine() or "").lower()
-            except Exception:
-                arch = ""
+            arch = (self.target_arch or "").lower()
             if arch in {"x86_64", "amd64", "i386", "i686"} or arch.startswith("x86"):
                 return "cpu"
             return "mps"
@@ -523,10 +982,7 @@ class PythonBundler:
         """
         if self.platform_name != "darwin":
             return False
-        try:
-            arch = (platform.machine() or "").lower()
-        except Exception:
-            arch = ""
+        arch = (self.target_arch or "").lower()
         return arch in {"x86_64", "amd64", "i386", "i686"} or arch.startswith("x86")
 
     def _setuptools_spec_for_venv(self) -> str:
@@ -543,10 +999,7 @@ class PythonBundler:
         # - Apple Silicon should use MPS requirements
         # - Intel macOS (x86_64) should use CPU requirements (no MPS)
         if self.platform_name == "darwin":
-            try:
-                arch = (platform.machine() or "").lower()
-            except Exception:
-                arch = ""
+            arch = (self.target_arch or "").lower()
             if arch in {"x86_64", "amd64", "i386", "i686"} or arch.startswith("x86"):
                 return req_root / "cpu" / "requirements.txt"
             return req_root / "mps" / "requirements.txt"  
@@ -609,7 +1062,7 @@ class PythonBundler:
         """Create platform-specific requirements file"""
         req_file = self.output_dir / "requirements-bundle.txt"
 
-        requirements = []
+        requirements: list[str] = []
 
         # Choose machine-specific requirements entrypoint early so we can apply
         # correct Windows wheel-stack torch pins (they depend on the chosen entry).
@@ -688,11 +1141,8 @@ class PythonBundler:
         """
         lock_path = self.output_dir / "requirements.lock"
 
-        # Determine venv python
-        if self.platform_name == "win32":
-            py_path = venv_dir / "Scripts" / "python.exe"
-        else:
-            py_path = venv_dir / "bin" / "python"
+        # Determine python inside the runtime dir (venv_dir is now a portable runtime root).
+        py_path = self._find_python_executable(Path(venv_dir))
 
         uv = self._ensure_uv_available()
 
@@ -710,7 +1160,7 @@ class PythonBundler:
 
         # Freeze installed packages from the venv.
         res = subprocess.run(
-            [str(uv), "pip", "freeze", "--python", str(py_path), "--exclude-editable"],
+            [uv, "pip", "freeze", "--python", str(py_path)],
             check=True,
             capture_output=True,
             text=True,
@@ -741,88 +1191,129 @@ class PythonBundler:
         print(f"Created lockfile: {lock_path}")
         return lock_path
 
-    def create_venv(self, requirements_file: Path) -> Path:
+    def _stage_portable_python_runtime(self, *, base_prefix: Path) -> Path:
         """
-        Create a virtual environment with all dependencies.
+        Stage the portable Python installation prefix into `<output>/<venv_name>/`.
 
-        The venv directory is named `apex-studio` to make manual usage predictable:
-          source apex-studio/bin/activate
-          python -m src start ...
+        Previous behavior:
+          - extract portable python into `<output>/_portable-python/extracted/...`
+          - copytree that prefix into `<output>/apex-studio`
+          - later copytree `<output>/apex-studio` into the shipped bundle
+
+        That means two full filesystem copies of a large Python tree. On Windows this is
+        particularly slow (Defender/AV scans + many small files).
+
+        New behavior:
+          - if the extracted prefix lives under `<output>/_portable-python/`, we *move/rename*
+            it into `<output>/apex-studio` (fast, same-volume rename),
+          - otherwise we fall back to copytree (safe for unexpected layouts).
         """
-        venv_dir = self.output_dir / self.venv_name
+        base_prefix = Path(base_prefix).resolve()
+        runtime_dir = (self.output_dir / self.venv_name).resolve()
 
-        if venv_dir.exists():
-            print(f"Removing existing venv: {venv_dir}")
-            shutil.rmtree(venv_dir)
+        if runtime_dir.exists():
+            print(f"Removing existing portable runtime: {runtime_dir}")
+            shutil.rmtree(runtime_dir)
 
-        print(f"Creating virtual environment: {venv_dir}")
-        uv = self._ensure_uv_available()
-        # Use uv to create the venv (faster + consistent across platforms).
-        subprocess.run(
-            [uv, "venv", str(venv_dir), "--python", str(self.python_executable)],
-            check=True,
+        print(f"Staging portable Python runtime: {runtime_dir}")
+
+        # Prefer a fast rename/move when the extracted portable python lives inside our
+        # output-dir cache (same drive).
+        try:
+            cache_root = Path(self.portable_python_root).resolve()
+        except Exception:
+            cache_root = Path(self.portable_python_root)
+
+        try:
+            _ = base_prefix.relative_to(cache_root)
+            shutil.move(str(base_prefix), str(runtime_dir))
+            return runtime_dir
+        except Exception:
+            pass
+
+        # Fallback: copytree (previous behavior).
+        ignore_junk = shutil.ignore_patterns(
+            ".DS_Store",
+            "._*",
+            "__MACOSX",
+            "__pycache__",
+            "*.pyc",
+            "*.pyo",
         )
+        ignore_libdir = self._choose_venv_libdir_to_ignore(base_prefix)
 
-        # Get python path within the venv
-        if self.platform_name == "win32":
-            py_path = venv_dir / "Scripts" / "python.exe"
-        else:
-            py_path = venv_dir / "bin" / "python"
+        def _ignore_with_libdir(src: str, names: list[str]) -> set[str]:
+            ignored = set(ignore_junk(src, names) or [])
+            # Only apply the lib/lib64 exclusion at the runtime root.
+            try:
+                if ignore_libdir and Path(src).resolve() == base_prefix.resolve():
+                    ignored.add(ignore_libdir)
+            except Exception:
+                pass
+            return ignored
 
-        # Record the *shipped* Python tag/version based on the venv interpreter, not the
-        # bundler's own interpreter (which may differ when using --runner-python).
+        shutil.copytree(
+            base_prefix, runtime_dir, symlinks=False, ignore=_ignore_with_libdir
+        )
+        return runtime_dir
+
+    def create_portable_python_runtime(self, requirements_file: Path) -> Path:
+        """
+        Create a *portable* Python runtime directory that contains:
+          - the python-build-standalone CPython distribution
+          - all dependencies installed directly into that Python (NO venv)
+
+        The runtime directory is named `apex-studio` (self.venv_name) for backwards
+        compatibility with the Electron app's bundle discovery.
+        """
+        # Ensure we have a base portable python downloaded.
+        base_py = self.ensure_portable_python()
+
+        # Probe the base prefix (installation root) so we copy the correct subtree.
+        probe = subprocess.run(
+            [
+                str(base_py),
+                "-c",
+                "import json, sys; print(json.dumps({'prefix': sys.prefix, 'exe': sys.executable}))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        info = json.loads((probe.stdout or "").strip() or "{}")
+        base_prefix = Path(str(info.get("prefix") or "")).resolve()
+        if not base_prefix.exists():
+            raise RuntimeError(f"Portable Python prefix not found: {base_prefix}")
+        # Stage into `<output>/apex-studio`. Prefer a fast move/rename to avoid copying
+        # the portable Python tree twice.
+        runtime_dir = self._stage_portable_python_runtime(base_prefix=base_prefix)
+
+        # Resolve python exe within the staged runtime.
+        py_path = self._find_python_executable(runtime_dir)
+
+        uv = self._ensure_uv_available()
+
+        # Record shipped Python tag/version based on the runtime interpreter we ship.
         tag, ver = self._probe_python_info(py_path)
         self.venv_python_tag = tag
         self.venv_python_version = ver
 
-        # Install with uv into the venv we just created.
-        uv_path = uv
+        # Ensure pip tooling exists and is up to date inside the runtime.
+        self._ensure_pip(py_path)
 
-        # Ensure standard build tooling exists inside the venv.
-        # Some sdists / VCS installs (e.g. diffusers from git) can assume setuptools is present.
+        # Install standard build tooling inside the runtime (use uv, not pip).
         subprocess.run(
-            [
-                str(uv_path),
-                "pip",
-                "install",
-                "--python",
-                str(py_path),
-                "--upgrade",
-                "pip",
-                self._setuptools_spec_for_venv(),
-                "wheel",
-            ],
+            [uv, "pip", "install", "--python", str(py_path), "--upgrade", self._setuptools_spec_for_venv(), "wheel"],
             check=True,
         )
 
         # Pre-install build helpers that some legacy sdists forget to declare.
-        # (Example: opendr/opendr-toolkit needs Cython/numpy at build time but doesn't specify them.)
         subprocess.run(
-            [
-                str(uv_path),
-                "pip",
-                "install",
-                "--python",
-                str(py_path),
-                "Cython>=0.29.36",
-                "numpy",
-                "psutil",
-                "enscons",
-                "pytoml",
-            ],
+            [uv, "pip", "install", "--python", str(py_path), "Cython>=0.29.36", "numpy", "psutil", "enscons", "pytoml"],
             check=True,
         )
 
-        # Pre-install torch *before* installing the full requirements set.
-        #
-        # Why: some packages (notably `sageattention` from git) import `torch` at
-        # build/metadata time, but do not declare it as a build dependency. `uv pip`
-        # (like pip) can evaluate/build metadata for requirements before installing
-        # anything, so `torch` must already exist in the environment to avoid:
-        #   ModuleNotFoundError: No module named 'torch'
-        #
-        # We derive both the index options and the torch package specs from the
-        # generated requirements file so CUDA/CPU + Windows pins stay consistent.
+        # Pre-install torch (same reasoning as before: some packages import torch at build time).
         try:
             req_lines = [
                 ln.strip()
@@ -830,13 +1321,10 @@ class PythonBundler:
                 if ln.strip()
             ]
             option_args: list[str] = []
+            torch_specs: list[str] = []
             for ln in req_lines:
                 if ln.startswith("--"):
-                    # Requirements files store options as a single line like:
-                    #   --extra-index-url https://...
-                    # but subprocess argv must be split into separate args.
                     option_args.extend(shlex.split(ln))
-            torch_specs: list[str] = []
             for ln in req_lines:
                 lower = ln.lower()
                 if (
@@ -844,57 +1332,58 @@ class PythonBundler:
                     or lower.startswith("torchvision")
                     or lower.startswith("torchaudio")
                 ):
-                    # Exclude stray option lines, which also start with '-' in requirements.
                     if ln.startswith("--"):
                         continue
                     torch_specs.append(ln)
-            # Only run if torch is part of this bundle's requirements.
             if torch_specs:
+                env = os.environ.copy()
+                env["PYTHONNOUSERSITE"] = "1"
                 subprocess.run(
                     [
-                        str(uv_path),
+                        uv,
                         "pip",
                         "install",
+                        "--index-strategy",
+                        "unsafe-best-match",
                         "--python",
                         str(py_path),
                         "--no-build-isolation",
-                        "--index-strategy",
-                        "unsafe-best-match",
                         *option_args,
                         *torch_specs,
                     ],
                     check=True,
+                    env=env,
                 )
         except Exception:
             # Best-effort: don't fail bundling solely due to this preinstall step.
             pass
 
-        # Build & install Rust wheels (apex_download_rs) into the venv so they are
-        # included in the final bundle.
+        # Build & install Rust wheels into the runtime.
         if not getattr(self, "skip_rust", False):
-            self._build_and_install_rust_wheels(uv_path=uv_path, py_path=py_path)
+            self._build_and_install_rust_wheels(py_path=py_path)
 
-        # Install requirements
-        print(f"Installing requirements from: {requirements_file}")
+        # Install requirements directly into this portable runtime (NO venv).
+        print(f"Installing requirements into portable runtime from: {requirements_file}")
+        env = os.environ.copy()
+        env["PYTHONNOUSERSITE"] = "1"
         subprocess.run(
             [
-                str(uv_path),
+                uv,
                 "pip",
                 "install",
+                "--index-strategy",
+                "unsafe-best-match",
                 "--python",
                 str(py_path),
                 "--no-build-isolation",
-                "--index-strategy",
-                "unsafe-best-match",
                 "-r",
                 str(requirements_file),
             ],
             check=True,
+            env=env,
         )
 
-        # Optional: Nunchaku (CUDA-only) — install separately and default to --no-deps.
-        # This prevents resolver churn from nunchaku's dependency metadata while still
-        # enabling nunchaku-backed models on supported platforms.
+        # Optional: Nunchaku (CUDA-only) — best-effort.
         try:
             if self.last_machine_entry and str(self.last_machine_entry).replace(
                 "\\", "/"
@@ -937,11 +1426,9 @@ class PythonBundler:
                     check=False,
                 )
         except Exception:
-            # Best-effort; do not fail bundling.
             pass
 
         # Install local universal wheels if available (overrides requirements)
-        # We look for wheels in: apps/api/<pkg>/wheelhouse/universal/*.whl
         local_wheel_dirs = [
             self.project_root / "flash-attention" / "wheelhouse" / "universal",
             self.project_root / "SageAttention" / "wheelhouse" / "universal",
@@ -957,53 +1444,30 @@ class PythonBundler:
                 f"Installing local universal wheels: {[w.name for w in local_wheels]}"
             )
             subprocess.run(
-                [
-                    str(uv_path),
-                    "pip",
-                    "install",
-                    "--python",
-                    str(py_path),
-                    "--force-reinstall",
-                    "--no-deps",
-                    *[str(w) for w in local_wheels],
-                ],
+                [uv, "pip", "install", "--python", str(py_path), "--force-reinstall", "--no-deps", *[str(w) for w in local_wheels]],
                 check=True,
             )
 
-        # Install the project itself (so the venv has the `apex-engine` console script),
-        # but we still ship `src/` alongside the venv and run `python -m src ...` in production.
+        # Install the project itself so the runtime has the `apex-engine` console script,
+        # but we still ship `src/` alongside and run `python -m src ...` in production.
         subprocess.run(
-            [
-                str(uv_path),
-                "pip",
-                "install",
-                "--python",
-                str(py_path),
-                str(self.project_root),
-            ],
+            [uv, "pip", "install", "--python", str(py_path), str(self.project_root)],
             check=True,
         )
 
-        # PyInstaller hard-fails if the obsolete PyPI backport package `typing` is installed.
-        # Some environments/dependency stacks can accidentally pull it in.
-        # Remove it proactively (no-op if not installed).
         self._remove_obsolete_typing_backport(py_path=py_path)
 
-        # macOS/conda: ensure libpython is present so the venv can run after being moved/installed.
-        self._ensure_macos_libpython_present(venv_dir)
-
         # Final hygiene: remove cache/artifact files that should never ship in bundles.
-        # (Best-effort; don't fail bundling if cleanup has issues.)
         try:
-            removed_files, removed_dirs = self._cleanup_bundle_tree(venv_dir)
+            removed_files, removed_dirs = self._cleanup_bundle_tree(runtime_dir)
             if removed_files or removed_dirs:
                 print(
-                    f"Cleaned venv artifacts: removed_files={removed_files}, removed_dirs={removed_dirs}"
+                    f"Cleaned runtime artifacts: removed_files={removed_files}, removed_dirs={removed_dirs}"
                 )
         except Exception:
             pass
 
-        return venv_dir
+        return runtime_dir
 
     def _cleanup_bundle_tree(self, root: Path) -> tuple[int, int]:
         """
@@ -1071,9 +1535,10 @@ class PythonBundler:
         This refers to the *PyPI distribution named `typing`*, not the stdlib module.
         """
         try:
+            uv = self._ensure_uv_available()
             # `pip uninstall` returns non-zero when the package isn't installed; that's fine.
             subprocess.run(
-                [str(py_path), "-m", "pip", "uninstall", "-y", "typing"],
+                [uv, "pip", "uninstall", "--python", str(py_path), "-y", "typing"],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -1099,10 +1564,8 @@ class PythonBundler:
             print("Skipping diffusers peft.py patch (APEX_PATCH_DIFFUSERS_PEFT=0)")
             return
 
-        if self.platform_name == "win32":
-            py_path = venv_dir / "Scripts" / "python.exe"
-        else:
-            py_path = venv_dir / "bin" / "python"
+        # We no longer ship a venv; `venv_dir` is the portable runtime root.
+        py_path = self._find_python_executable(Path(venv_dir))
 
         # Patch diffusers first so it can be imported by subsequent patchers.
         # Some diffusers versions reference `torch.xpu` at import time; our Intel macOS
@@ -1134,7 +1597,7 @@ class PythonBundler:
             check=True,
         )
 
-    def _build_and_install_rust_wheels(self, uv_path: Path, py_path: Path) -> None:
+    def _build_and_install_rust_wheels(self, *, py_path: Path) -> None:
         rust_project = self.project_root / "rust" / "apex_download_rs"
         if not rust_project.exists():
             print(f"Rust project not found, skipping: {rust_project}")
@@ -1182,16 +1645,11 @@ class PythonBundler:
                     pass
         wheels_dir.mkdir(parents=True, exist_ok=True)
 
-        # Install maturin into the venv (pyproject build backend is maturin).
+        uv = self._ensure_uv_available()
+
+        # Install maturin into the environment (pyproject build backend is maturin), using uv.
         subprocess.run(
-            [
-                str(uv_path),
-                "pip",
-                "install",
-                "--python",
-                str(py_path),
-                "maturin>=1.6,<2.0",
-            ],
+            [uv, "pip", "install", "--python", str(py_path), "maturin>=1.6,<2.0"],
             check=True,
         )
 
@@ -1248,7 +1706,7 @@ class PythonBundler:
         wheel_path = built_wheels[-1]
         print(f"Installing Rust wheel: {wheel_path.name}")
         subprocess.run(
-            [str(uv_path), "pip", "install", "--python", str(py_path), str(wheel_path)],
+            [uv, "pip", "install", "--python", str(py_path), str(wheel_path)],
             check=True,
         )
 
@@ -1267,7 +1725,7 @@ class PythonBundler:
 setlocal
 set SCRIPT_DIR=%~dp0
 set PYTHONPATH=%SCRIPT_DIR%
-"%SCRIPT_DIR%\apex-studio\Scripts\python.exe" -m src %*
+"%SCRIPT_DIR%\apex-studio\python.exe" -m src %*
 """
             launcher.write_text(content, encoding="utf-8")
             return
@@ -1277,32 +1735,15 @@ set PYTHONPATH=%SCRIPT_DIR%
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR"
-exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
+if [ -x "$SCRIPT_DIR/apex-studio/bin/python" ]; then
+  exec "$SCRIPT_DIR/apex-studio/bin/python" -m src "$@"
+fi
+exec "$SCRIPT_DIR/apex-studio/bin/python3" -m src "$@"
 """
         launcher.write_text(content, encoding="utf-8")
         os.chmod(launcher, 0o755)
 
-        # Also override the venv-installed console script.
-        #
-        # The Electron updater resolves `apex-engine` as a sibling of the bundled Python
-        # (i.e. <bundleRoot>/apex-studio/bin/apex-engine on mac/linux). Pip-generated
-        # console scripts embed an absolute build-time interpreter path in the shebang,
-        # which breaks after extraction/move.
-        venv_launcher = bundle_dir / self.venv_name / "bin" / "apex-engine"
-        try:
-            venv_launcher.parent.mkdir(parents=True, exist_ok=True)
-            venv_content = """#!/usr/bin/env bash
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUNDLE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-export PYTHONPATH="$BUNDLE_ROOT"
-exec "$BUNDLE_ROOT/apex-studio/bin/python" -m src "$@"
-"""
-            venv_launcher.write_text(venv_content, encoding="utf-8")
-            os.chmod(venv_launcher, 0o755)
-        except Exception:
-            # Best-effort: do not fail bundling if this step can't be applied.
-            pass
+        # We no longer override an internal venv console-script because we don't ship a venv.
 
     def _choose_venv_libdir_to_ignore(self, venv_dir: Path) -> Optional[str]:
         """
@@ -1331,7 +1772,7 @@ exec "$BUNDLE_ROOT/apex-studio/bin/python" -m src "$@"
         # If both are symlinks or both are real dirs, fall back to keeping `lib/`.
         return "lib64"
 
-    def create_venv_bundle(self, venv_dir: Path) -> Path:
+    def create_portable_python_bundle(self, venv_dir: Path) -> Path:
         """
         Create a self-contained bundle built around a venv (no PyInstaller).
 
@@ -1359,7 +1800,7 @@ exec "$BUNDLE_ROOT/apex-studio/bin/python" -m src "$@"
             "*.pyo",
         )
 
-        # Copy venv (avoid symlinks for portability: we want a self-contained bundle).
+        # Copy portable runtime (avoid symlinks for portability: we want a self-contained bundle).
         dest_venv = bundle_dir / self.venv_name
         ignore_libdir = self._choose_venv_libdir_to_ignore(venv_dir)
 
@@ -1439,8 +1880,12 @@ exec "$BUNDLE_ROOT/apex-studio/bin/python" -m src "$@"
 setlocal
 set SCRIPT_DIR=%~dp0
 set PYTHONPATH=%SCRIPT_DIR%
-set PATH=%SCRIPT_DIR%\\apex-studio\\Scripts;%PATH%
-"%SCRIPT_DIR%\\apex-studio\\Scripts\\python.exe" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
+set PATH=%SCRIPT_DIR%\\apex-studio;%PATH%
+if exist "%SCRIPT_DIR%\\apex-studio\\python.exe" (
+  "%SCRIPT_DIR%\\apex-studio\\python.exe" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
+) else (
+  "%SCRIPT_DIR%\\apex-studio\\Scripts\\python.exe" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
+)
 """
         else:
             launcher = bundle_dir / "start-api.sh"
@@ -1448,7 +1893,10 @@ set PATH=%SCRIPT_DIR%\\apex-studio\\Scripts;%PATH%
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="$SCRIPT_DIR"
 export PATH="$SCRIPT_DIR/apex-studio/bin:$PATH"
-exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
+if [ -x "$SCRIPT_DIR/apex-studio/bin/python" ]; then
+  exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
+fi
+exec "$SCRIPT_DIR/apex-studio/bin/python3" -m uvicorn src.api.main:app --host 127.0.0.1 --port 8765
 """
 
         with open(launcher, "w") as f:
@@ -1466,12 +1914,12 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         manifest = {
             "version": version,
             "platform": self.platform_name,
-            "arch": platform.machine(),
+            "arch": self._normalize_arch(self.target_arch),
             "gpu_support": gpu_type,
             "python_tag": py_tag,
             "python_version": py_ver,
-            "bundle_type": "venv",
-            "venv_dirname": self.venv_name,
+            "bundle_type": "portable-python",
+            "python_dirname": self.venv_name,
             "rust_wheels": not getattr(self, "skip_rust", False),
             "created_at": __import__("datetime").datetime.utcnow().isoformat()
         }
@@ -1516,7 +1964,8 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             prefix = "apex-engine"
         version = self._safe_filename_component(str(m.get("version", "0.0.0")))
         plat = self._safe_filename_component(str(m.get("platform", self.platform_name)))
-        arch = self._safe_filename_component(str(m.get("arch", platform.machine())))
+        arch_raw = str(m.get("arch", platform.machine()))
+        arch = self._safe_filename_component(self._normalize_arch(arch_raw))
         gpu = self._safe_filename_component(
             str(m.get("gpu_support", self.last_gpu_type or "unknown"))
         )
@@ -1566,7 +2015,7 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             # Keep versioning consistent with the full bundle when available.
             "version": str(base.get("version", "0.1.0")),
             "platform": self.platform_name,
-            "arch": platform.machine(),
+            "arch": self._normalize_arch(self.target_arch),
             "gpu_support": gpu_type,
             "python_tag": py_tag,
             "created_at": __import__("datetime").datetime.utcnow().isoformat(),
@@ -1774,128 +2223,270 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         level: int = 19,
     ) -> Path:
         """
-        Create a .tar.zst of src_dir using system `tar` + `zstd`.
+        Create a .tar.zst of src_dir.
 
-        Notes:
-        - This avoids a huge intermediate `.tar` file by streaming tar -> zstd.
-        - Requires `zstd` to be installed and available on PATH.
+        This works cross-platform (including Windows) without requiring system `tar` or `zstd`.
+        We intentionally do NOT depend on the portable-python cache here, since bundling cleans
+        it up by default after producing the final artifacts.
+
+        Strategy:
+          - Prefer native `tar` + `zstd` if available (much faster; enables multithreaded zstd).
+          - Fallback to a pure-Python implementation using `tarfile` + `zstandard`.
         """
-        tar_bin = shutil.which("tar")
-        zstd_bin = shutil.which("zstd")
-        if not tar_bin:
-            raise RuntimeError("Cannot create .tar.zst: `tar` not found on PATH.")
-        if not zstd_bin:
-            raise RuntimeError(
-                "Cannot create .tar.zst: `zstd` not found on PATH. "
-                "Install it (macOS: `brew install zstd`)."
-            )
-
-        src_dir = src_dir.resolve()
-        out_path = out_path.resolve()
+        src_dir = Path(src_dir).resolve()
+        out_path = Path(out_path).resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         if out_path.exists():
             out_path.unlink()
 
-        # We keep the same exclude semantics as zip to avoid cache noise.
-        excludes = [
-            "--exclude=__pycache__",
-            "--exclude=*/__pycache__",
-            "--exclude=*.pyc",
-            "--exclude=*.pyo",
-            "--exclude=.DS_Store",
-            "--exclude=__MACOSX",
-            "--exclude=*/__MACOSX",
-            "--exclude=._*",
-            "--exclude=*/._*",
-        ]
+        def _should_exclude(rel_parts: list[str], name: str) -> bool:
+            parts = set(rel_parts)
+            if "__pycache__" in parts or "__MACOSX" in parts:
+                return True
+            if name in (".DS_Store",):
+                return True
+            if name.startswith("._"):
+                return True
+            if name.endswith((".pyc", ".pyo")):
+                return True
+            return False
 
-        env = os.environ.copy()
-        env["COPYFILE_DISABLE"] = "1"
+        def _try_native_tar_zst() -> bool:
+            """
+            Try `tar | zstd` streaming archiving.
+            Returns True on success, False if unavailable or failed.
+            """
+            tar_exe = shutil.which("tar")
+            zstd_exe = shutil.which("zstd")
+            if not tar_exe or not zstd_exe:
+                return False
 
-        if include_root_dir:
-            tar_cmd = [
-                tar_bin,
-                *excludes,
-                "-C",
-                str(src_dir.parent),
-                "-cf",
-                "-",
-                str(src_dir.name),
+            # Create the archive from the parent dir so we can control whether the root
+            # dir is included.
+            if include_root_dir:
+                cwd = src_dir.parent
+                tar_target = src_dir.name
+            else:
+                cwd = src_dir
+                tar_target = "."
+
+            # Exclusions (keep conservative; mirrors Python fallback).
+            exclude_patterns = [
+                "__pycache__",
+                "*/__pycache__",
+                "__MACOSX",
+                "*/__MACOSX",
+                ".DS_Store",
+                "*/.DS_Store",
+                "._*",
+                "*/._*",
+                "*.pyc",
+                "*.pyo",
             ]
-        else:
-            tar_cmd = [
-                tar_bin,
-                *excludes,
-                "-C",
-                str(src_dir),
-                "-cf",
+            exclude_args: list[str] = []
+            for pat in exclude_patterns:
+                # Most tar implementations support both `--exclude PAT` and `--exclude=PAT`.
+                exclude_args.extend(["--exclude", pat])
+
+            tar_cmd = [tar_exe, "-cf", "-", *exclude_args, tar_target]
+
+            # zstd:
+            # -T0: use all cores
+            # -<level>: compression level
+            # -q: quieter logs (we print our own status)
+            zstd_cmd = [
+                zstd_exe,
+                "-q",
+                f"-{int(level)}",
+                "-T0",
+                "-o",
+                str(out_path),
                 "-",
-                ".",
             ]
 
-        # zstd reads from stdin and writes to file.
-        # -T0 uses all cores.
-        zstd_cmd = [
-            zstd_bin,
-            "-T0",
-            f"-{int(level)}",
-            "-o",
-            str(out_path),
-        ]
+            print(f"Creating tar.zst (native): {out_path.name} (from {src_dir})")
 
-        print(f"Creating tar.zst: {out_path.name} (from {src_dir})")
-        p1 = subprocess.Popen(
-            tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
+            try:
+                tar_proc = subprocess.Popen(
+                    tar_cmd,
+                    cwd=str(cwd),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                )
+                assert tar_proc.stdout is not None
+                zstd_proc = subprocess.Popen(
+                    zstd_cmd,
+                    stdin=tar_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                # Allow tar to receive SIGPIPE if zstd exits.
+                tar_proc.stdout.close()
+
+                z_out, z_err = zstd_proc.communicate()
+                t_err = tar_proc.stderr.read() if tar_proc.stderr else b""
+                t_rc = tar_proc.wait()
+                z_rc = zstd_proc.returncode
+
+                if t_rc != 0 or z_rc != 0:
+                    # Best-effort cleanup of partial output.
+                    try:
+                        out_path.unlink(missing_ok=True)  # py3.8+
+                    except TypeError:
+                        if out_path.exists():
+                            out_path.unlink()
+
+                    # Don't raise; fall back to Python archiving for maximum compatibility.
+                    t_msg = (t_err or b"").decode(errors="ignore").strip()
+                    z_msg = ((z_err or b"") + (z_out or b"")).decode(errors="ignore").strip()
+                    if t_msg or z_msg:
+                        print(
+                            "Warning: native tar|zstd failed; falling back to Python tar.zst.\n"
+                            f"tar: {t_msg}\n"
+                            f"zstd: {z_msg}\n"
+                        )
+                    return False
+
+                return True
+            except Exception:
+                try:
+                    out_path.unlink(missing_ok=True)  # py3.8+
+                except TypeError:
+                    if out_path.exists():
+                        out_path.unlink()
+                return False
+
+        # Fast path: native tar + zstd if available.
+        if _try_native_tar_zst():
+            print(f"Created tar.zst: {out_path}")
+            return out_path
+
+        # Fallback: pure Python (tarfile + zstandard).
+        # Ensure the runner Python can import zstandard.
+        runner_py = Path(sys.executable).resolve()
         try:
-            p2 = subprocess.run(
-                zstd_cmd,
-                stdin=p1.stdout,
+            subprocess.run(
+                [str(runner_py), "-c", "import zstandard as zstd; print(zstd.__version__)"],
+                check=True,
                 capture_output=True,
                 text=True,
-                env=env,
-            )
-        finally:
-            # Ensure tar's stdout pipe is closed so tar can receive SIGPIPE if zstd exits early.
-            try:
-                if p1.stdout:
-                    p1.stdout.close()
-            except Exception:
-                pass
-
-        tar_stderr = ""
-        try:
-            _, tar_stderr = p1.communicate(timeout=120)
-            tar_stderr = (
-                (tar_stderr or b"").decode("utf-8", errors="replace")
-                if isinstance(tar_stderr, (bytes, bytearray))
-                else (tar_stderr or "")
             )
         except Exception:
-            # If tar hangs for any reason, terminate best-effort.
-            try:
-                p1.kill()
-            except Exception:
-                pass
-
-        if p1.returncode not in (0, None):
-            raise RuntimeError(
-                f"`tar` failed (exit {p1.returncode}). stderr:\n{tar_stderr}"
-            )
-        if p2.returncode != 0:
-            raise RuntimeError(
-                f"`zstd` failed (exit {p2.returncode}). stderr:\n{p2.stderr}"
+            uv = self._ensure_uv_available()
+            subprocess.run(
+                [uv, "pip", "install", "--python", str(runner_py), "--upgrade", "zstandard"],
+                check=True,
             )
 
+        # Create tar.zst using a small helper script executed by the runner Python.
+        # We stream tar -> zstd to avoid a massive intermediate .tar file.
+        helper = r"""
+import os, sys, tarfile
+
+def should_exclude(rel_parts, name):
+    parts = set(rel_parts)
+    if "__pycache__" in parts or "__MACOSX" in parts:
+        return True
+    if name in (".DS_Store",):
+        return True
+    if name.startswith("._"):
+        return True
+    if name.endswith((".pyc", ".pyo")):
+        return True
+    return False
+
+def main():
+    import zstandard as zstd
+    src_dir = os.path.abspath(sys.argv[1])
+    out_path = os.path.abspath(sys.argv[2])
+    include_root = sys.argv[3] == "1"
+    level = int(sys.argv[4])
+
+    root_name = os.path.basename(src_dir.rstrip(os.sep)) if include_root else ""
+
+    os.environ["COPYFILE_DISABLE"] = "1"
+    with open(out_path, "wb") as f:
+        # Prefer multi-threaded zstd when supported.
+        try:
+            cctx = zstd.ZstdCompressor(level=level, threads=-1)
+        except TypeError:
+            cctx = zstd.ZstdCompressor(level=level)
+        with cctx.stream_writer(f) as zfh:
+            with tarfile.open(fileobj=zfh, mode="w|") as tf:
+                for dirpath, dirnames, filenames in os.walk(src_dir):
+                    # Ensure stable traversal order.
+                    dirnames.sort()
+                    filenames.sort()
+                    rel_dir = os.path.relpath(dirpath, src_dir)
+                    rel_parts = [] if rel_dir in (".", "") else rel_dir.split(os.sep)
+
+                    # Exclude entire dirs early.
+                    dirnames[:] = [
+                        d for d in dirnames
+                        if not should_exclude(rel_parts + [d], d)
+                    ]
+
+                    for fn in filenames:
+                        if should_exclude(rel_parts + [fn], fn):
+                            continue
+                        abs_path = os.path.join(dirpath, fn)
+                        rel_path = os.path.relpath(abs_path, src_dir)
+                        arc = os.path.join(root_name, rel_path) if root_name else rel_path
+                        arc = arc.replace(os.sep, "/")
+                        tf.add(abs_path, arcname=arc, recursive=False)
+
+if __name__ == "__main__":
+    main()
+"""
+        print(f"Creating tar.zst: {out_path.name} (from {src_dir})")
+        subprocess.run(
+            [
+                str(runner_py),
+                "-c",
+                helper,
+                str(src_dir),
+                str(out_path),
+                "1" if include_root_dir else "0",
+                str(int(level)),
+            ],
+            check=True,
+        )
         print(f"Created tar.zst: {out_path}")
         return out_path
+
+    def _cleanup_intermediate_portable_python(self) -> None:
+        """
+        Remove intermediate portable-python artifacts under the output directory.
+
+        Deletes:
+          - `<output>/<venv_name>` (intermediate runtime root, e.g. `<output>/apex-studio`)
+          - `<output>/_portable-python` (portable Python download/extraction cache)
+        """
+        runtime_dir = (self.output_dir / self.venv_name).resolve()
+        cache_dir = Path(self.portable_python_root).resolve()
+
+        try:
+            if runtime_dir.exists():
+                shutil.rmtree(runtime_dir)
+        except Exception:
+            pass
+
+        try:
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+        except Exception:
+            pass
 
     def bundle(self) -> Path:
         """Run the full bundling process (full env bundle + code-only update bundle)."""
         print(f"Bundling Python API for platform: {self.platform_name}")
 
         # Create output directory
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # if path exists remove it
+        if self.output_dir.exists():
+            shutil.rmtree(self.output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=False)
 
         # Detect GPU support
         gpu_type = self.cuda_version or self.detect_gpu_support()
@@ -1905,17 +2496,14 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         # Create requirements
         req_file = self.create_requirements(gpu_type)
 
-        # Create virtual environment
-        venv_dir = self.create_venv(req_file)
+        # Create portable runtime (NO venv) and install dependencies directly into it.
+        runtime_dir = self.create_portable_python_runtime(req_file)
 
-        # Patch third-party deps inside the venv before we copy it into the shipped bundle.
-        self._patch_diffusers_set_adapter_scale(venv_dir)
-        # Patch xformers (if installed) in the venv, by resolving the installed module
+        # Patch third-party deps inside the portable runtime before we copy it into the shipped bundle.
+        self._patch_diffusers_set_adapter_scale(runtime_dir)
+        # Patch xformers (if installed) in the runtime, by resolving the installed module
         # path and editing in-place (avoids applying a broad patches directory).
-        if self.platform_name == "win32":
-            py_path = venv_dir / "Scripts" / "python.exe"
-        else:
-            py_path = venv_dir / "bin" / "python"
+        py_path = self._find_python_executable(runtime_dir)
         subprocess.run(
             [
                 str(py_path),
@@ -1932,23 +2520,12 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
         # Create a lockfile for update-time dependency syncing.
         # Do this after all installs/patches so the lock reflects the final environment.
         try:
-            self.create_lockfile(requirements_file=req_file, venv_dir=venv_dir)
+            self.create_lockfile(requirements_file=req_file, venv_dir=runtime_dir)
         except Exception as e:
             print(f"Warning: failed to create requirements.lock: {e}")
 
-        # Build venv-based bundle (no PyInstaller)
-        bundle_dir = self.create_venv_bundle(venv_dir)
-
-        # IMPORTANT: avoid doubling output size.
-        # We build the venv under `<output>/<venv_name>/` and then copy it into the shipped bundle.
-        # If we keep both, release zips (or any packaging of the whole output dir) will include Python twice.
-        if not getattr(self, "keep_build_venv", False):
-            try:
-                if venv_dir.exists():
-                    shutil.rmtree(venv_dir)
-            except Exception:
-                # Best-effort: don't fail bundling just because cleanup didn't work.
-                pass
+        # Build portable-python-based bundle (no venv, no PyInstaller)
+        bundle_dir = self.create_portable_python_bundle(runtime_dir)
 
         # Smoke test the shipped bundle (strongly recommended).
         smoke_env = os.environ.get("APEX_BUNDLE_SMOKE_TESTS")
@@ -1969,12 +2546,26 @@ exec "$SCRIPT_DIR/apex-studio/bin/python" -m uvicorn src.api.main:app --host 127
             # Best-effort: code-only bundle should not break full bundle creation.
             print(f"Warning: failed to create code-only update bundle: {e}")
 
+        # Cleanup intermediate portable-python artifacts unless explicitly requested.
+        if not self.keep_build_venv:
+            self._cleanup_intermediate_portable_python()
+
         print(f"Bundle created: {bundle_dir}")
         return bundle_dir
 
 
 def main():
     parser = argparse.ArgumentParser(description="Bundle Python API for Apex Studio")
+    parser.add_argument(
+        "--arch",
+        choices=["auto", "x86_64", "arm64"],
+        default="auto",
+        help=(
+            "Target CPU architecture for the bundle. "
+            "macOS supports x86_64 (Intel) and arm64 (Apple Silicon). "
+            "Windows/Linux bundles are built for x86_64. Default: auto-detect."
+        ),
+    )
     parser.add_argument(
         "--platform",
         choices=["darwin", "linux", "win32", "auto"],
@@ -2007,7 +2598,15 @@ def main():
         "--python",
         dest="python_executable",
         default=None,
-        help="Python interpreter to use for the venv (recommended: Python 3.12). Defaults to the current interpreter.",
+        help=(
+            "Python interpreter to use for the venv ONLY when --no-portable-python is set. "
+            "By default the bundler downloads a portable Python and uses it for all installs/tests."
+        ),
+    )
+    parser.add_argument(
+        "--no-portable-python",
+        action="store_true",
+        help="Disable portable-Python bootstrap and use --python / the current interpreter instead (not recommended).",
     )
     parser.add_argument(
         "--bundle-version",
@@ -2016,11 +2615,6 @@ def main():
             "Bundle version to write into manifests and artifact names. "
             "Precedence: --bundle-version > APEX_BUNDLE_VERSION env var > pyproject.toml [project].version."
         ),
-    )
-    parser.add_argument(
-        "--require-python312",
-        action="store_true",
-        help="Fail fast if the selected interpreter is not Python 3.12.x",
     )
 
     parser.add_argument(
@@ -2066,9 +2660,9 @@ def main():
         help="Zip filename to use when --zip-output is not provided (default: python-api-<platform>.zip or apex-engine-<platform>.zip).",
     )
     parser.add_argument(
-        "--tar-zst",
+        "--no-tar-zst",
         action="store_true",
-        help="Create a release .tar.zst artifact after bundling (requires `zstd` on PATH).",
+        help="Disable writing .tar.zst artifacts after bundling (not recommended).",
     )
     parser.add_argument(
         "--tar-zst-scope",
@@ -2148,29 +2742,29 @@ def main():
     else:
         gpu_version = gpu
 
-    py_exe = args.python_executable or sys.executable
-    # If the caller didn't specify a venv interpreter, prefer Python 3.12 when available.
-    # Many binary deps in our stack (e.g. ray) do not provide cp313 wheels yet.
-    if args.python_executable is None and not (
-        sys.version_info.major == 3 and sys.version_info.minor == 12
-    ):
-        py312 = shutil.which("python3.12")
-        if py312:
-            py_exe = py312
-    if args.require_python312:
-        if not (sys.version_info.major == 3 and sys.version_info.minor == 12):
-            # If they didn't pass --python, this is definitely wrong.
-            # If they did pass --python, we can't inspect that interpreter without executing it,
-            # so keep this a conservative guard for the common case.
-            raise SystemExit(
-                "Python 3.12.x is required. Re-run with a Python 3.12 interpreter or pass --python <path-to-python3.12>."
-            )
+    # Target arch (controls portable-Python selection and macOS Intel special-case).
+    def _norm_arch(a: str) -> str:
+        low = (a or "").strip().lower()
+        if low in {"amd64", "x64"}:
+            return "x86_64"
+        if low in {"aarch64"}:
+            return "arm64"
+        return low
+
+    arch = args.arch
+    if arch == "auto":
+        arch = _norm_arch(platform.machine())
     else:
-        if not (sys.version_info.major == 3 and sys.version_info.minor == 12):
-            print(
-                "Warning: bundler is not running under Python 3.12.x. "
-                "For best compatibility with Windows wheels (cp312) and newer stacks, use Python 3.12."
-            )
+        arch = _norm_arch(arch)
+
+    # We only build conservative universal bundles for these platforms.
+    if platform_name in ("win32", "linux"):
+        arch = "x86_64"
+    if platform_name == "darwin" and arch not in ("x86_64", "arm64"):
+        arch = "arm64"
+
+    use_portable_python = not bool(args.no_portable_python)
+    py_exe = args.python_executable or sys.executable
 
     # Resolve bundle version (CLI > env > pyproject).
     bundle_version = (args.bundle_version or "").strip() or None
@@ -2189,6 +2783,8 @@ def main():
         cuda_version=gpu_version,
         python_executable=py_exe,
         bundle_version=bundle_version,
+        target_arch=arch,
+        use_portable_python=use_portable_python,
     )
     bundler.skip_rust = args.skip_rust
     bundler.keep_build_venv = args.keep_build_venv
@@ -2217,7 +2813,7 @@ def main():
                 bundler.code_dist_dir, code_zip_path, include_root_dir=True
             )
 
-    if args.tar_zst:
+    if not args.no_tar_zst:
         if args.tar_zst_scope == "bundle":
             tar_src = bundle_dir
         elif args.tar_zst_scope == "python-code":

@@ -181,17 +181,39 @@ export async function createProject(
   );
   const filePath = path.join(projectsDir, `project-${id}.json`);
 
-  await fs.writeFile(
-    filePath,
-    JSON.stringify(baseDoc, null, 2),
-    "utf8",
-  );
-
   const folderUuid =
     typeof baseDoc.meta?.id === "string" &&
     baseDoc.meta.id.length > 0
       ? baseDoc.meta.id
       : `project-${id}`;
+
+  // Ensure on-disk media folders exist for this project:
+  //   <userData>/media/<folderUuid>/(generations|processors)
+  //   <userData>/media/<folderUuid>/server/(generations|processors)
+  //
+  // We derive <userData> from the projects directory:
+  //   <userData>/projects-json  ->  <userData>
+  const safeFolderUuid = folderUuid.replace(/[^a-zA-Z0-9_-]/g, "_");
+  if (safeFolderUuid.length > 0) {
+    const userDataDir = path.dirname(projectsDir);
+    const projectMediaDir = path.join(userDataDir, "media", safeFolderUuid);
+    await Promise.all([
+      fs.mkdir(path.join(projectMediaDir, "generations"), { recursive: true }),
+      fs.mkdir(path.join(projectMediaDir, "processors"), { recursive: true }),
+      fs.mkdir(path.join(projectMediaDir, "server", "generations"), {
+        recursive: true,
+      }),
+      fs.mkdir(path.join(projectMediaDir, "server", "processors"), {
+        recursive: true,
+      }),
+    ]);
+  }
+
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(baseDoc, null, 2),
+    "utf8",
+  );
 
   const aspectRatio =
     (baseDoc.settings as any)?.aspectRatio ?? undefined;

@@ -74,6 +74,8 @@ def frame_interpolate(request: FrameInterpolateRequest):
                 "input_path": str(input_path),
                 "target_fps": float(request.target_fps),
             },
+            # Force non-persistent Ray workers for postprocessors: we do not want any
+            # warm/persistent model state after the job completes.
             submit=lambda: run_frame_interpolation.options(**resources).remote(
                 str(input_path),
                 float(request.target_fps),

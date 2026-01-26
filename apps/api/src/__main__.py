@@ -1,12 +1,16 @@
 from __future__ import annotations
-import os, subprocess, signal, psutil, sys, shlex, importlib.util, time, shutil
+import os, subprocess, signal, psutil, sys, shlex, time
 import re
 import json
 import urllib.request
 import urllib.parse
+import urllib.error
+import ssl
+import shutil
 import platform as _platform
 from dataclasses import dataclass
 from typing import Any, Optional
+import sys
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
@@ -68,14 +72,43 @@ def create_envfile(envfile: Path, mode="dev"):
 
 app = typer.Typer(help="Apex command line")
 
-
-def _honcho_available() -> bool:
-    return importlib.util.find_spec("honcho") is not None
-
-
 def _is_frozen() -> bool:
     # PyInstaller sets sys.frozen = True in the bundled executable.
     return bool(getattr(sys, "frozen", False))
+
+
+def _resolve_python_runner() -> str:
+    """
+    Return the best-guess Python interpreter path for launching child Python processes.
+
+    Why this exists:
+    - In some Windows entrypoint/wrapper scenarios, `sys.executable` may point at the
+      *entrypoint executable* (e.g. `apex-engine.exe`) rather than `python.exe`.
+      If we use that as the runner, subprocesses can exit immediately (or behave
+      unexpectedly), making it look like `subprocess.run(...)` isn't waiting.
+    """
+    exe = Path(sys.executable).resolve()
+    name = exe.name.lower()
+
+    # Most common: already a Python interpreter.
+    if name.startswith("python"):
+        return str(exe)
+
+    # Windows venv entrypoints typically live next to `python.exe`.
+    if sys.platform == "win32":
+        candidate = exe.with_name("python.exe")
+        if candidate.exists():
+            return str(candidate)
+
+    # Fallback: CPython exposes the base executable (may be outside a venv).
+    base = getattr(sys, "_base_executable", None)
+    if base:
+        base_path = Path(str(base)).resolve()
+        if base_path.exists():
+            return str(base_path)
+
+    # Last resort: whatever we were given.
+    return str(exe)
 
 
 def _load_envfile_if_present(envfile: Path | None) -> None:
@@ -186,10 +219,10 @@ def start(
     ),
 ):
     """
-    Start FastAPI (and anything else in your Procfile) via Honcho.
-    Equivalent to: honcho start -f Procfile [-e .env]
+    Start FastAPI using the `api:` entry in the Procfile.
     """
     cwd = cwd.resolve()
+    
 
     # Allow callers (Electron bundle / CLI users) to override host/port without needing to
     # manage environment variables themselves.
@@ -198,7 +231,7 @@ def start(
     if port is not None:
         os.environ["APEX_PORT"] = str(port)
 
-    # Resolve procfile/envfile relative to cwd (matches how honcho interprets -f/-e)
+    # Resolve procfile/envfile relative to cwd
     procfile_path = procfile if procfile.is_absolute() else (cwd / procfile)
     envfile_path = None
     if envfile is not None:
@@ -215,30 +248,23 @@ def start(
     client_host = (
         "127.0.0.1" if effective_host in {"0.0.0.0", "::", "[::]"} else effective_host
     )
+
+
     print(f"API should be reachable at: http://{client_host}:{effective_port}")
+
 
     log_path = (cwd / "apex-engine-start.log") if daemon else None
     _load_envfile_if_present(envfile_path)
 
-    # In frozen builds we cannot use `sys.executable -m honcho ...` because sys.executable
-    # points to this binary. Use our internal server runner instead.
+    # In frozen builds we cannot rely on `python -m ...` module execution helpers.
+    # Use our internal server runner instead.
     if _is_frozen():
         _run([sys.executable, "serve"], cwd=cwd, daemon=daemon, log_path=log_path)
         return
-
-    if _honcho_available():
-        args = [sys.executable, "-m", "honcho", "start", "-f", str(procfile_path)]
-        if envfile_path is not None:
-            args += ["-e", str(envfile_path)]
-        _run(args, cwd=cwd, daemon=daemon, log_path=log_path)
-        return
-
-    # Fallback: procfile only contains `api:` in our project, so we can run it directly.
-    cmd = _proc_cmd_from_procfile(procfile_path, name="api")
-    if daemon and log_path is not None:
-        with open(log_path, "a", buffering=1) as f:
-            f.write("Honcho not available; running Procfile 'api' command directly.\n")
     
+
+    # Procfile only contains `api:` in our project, so we can run it directly.
+    cmd = _proc_cmd_from_procfile(procfile_path, name="api")
     _run(cmd, cwd=cwd, daemon=daemon, log_path=log_path)
 
 
@@ -380,7 +406,7 @@ def internal_serve(
 
 
 def _find_apex_processes():
-    """Find running processes related to apex engine (uvicorn, ray, honcho)"""
+    """Find running processes related to apex engine (uvicorn, ray)"""
     processes = []
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
@@ -391,8 +417,6 @@ def _find_apex_processes():
                 for pattern in [
                     "uvicorn src.api.main:app",
                     "ray::",
-                    "honcho start",
-                    " -m honcho start",
                 ]
             ):
                 processes.append(proc)
@@ -408,7 +432,7 @@ def stop(
     ),
 ):
     """
-    Stop running Apex Engine processes (uvicorn, ray, honcho).
+    Stop running Apex Engine processes (uvicorn, ray).
     Finds and terminates any existing server processes.
     """
     processes = _find_apex_processes()
@@ -449,10 +473,33 @@ def stop(
 
 # Optional sugar: `apex dev` alias
 @app.command()
-def dev(cwd: Path = Path(".")):
-    """Convenience alias for apex start -f Procfile.dev"""
-    create_procfile(cwd / "Procfile.dev", "dev")
-    _run([sys.executable, "-m", "honcho", "start", "-f", "Procfile.dev"], cwd=cwd)
+def dev(
+    cwd: Path = typer.Option(
+        Path("."), "--cwd", help="Working directory where processes run"
+    ),
+    host: str | None = typer.Option(
+        None,
+        "--host",
+        help="Host to bind the API to (sets APEX_HOST).",
+    ),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        help="Port to bind the API to (sets APEX_PORT).",
+    ),
+    daemon: bool = typer.Option(
+        False, "--daemon", "-d", help="Run as daemon in background"
+    ),
+):
+    """Convenience alias for `apex-engine start -f Procfile.dev`."""
+    start(
+        procfile=Path("Procfile.dev"),
+        envfile=None,
+        cwd=cwd,
+        host=host,
+        port=port,
+        daemon=daemon,
+    )
 
 
 @app.command()
@@ -461,6 +508,11 @@ def bundle(
         "auto",
         "--platform",
         help="Target platform for bundle (darwin|linux|win32|auto). Default: auto (this machine).",
+    ),
+    arch: str = typer.Option(
+        "auto",
+        "--arch",
+        help="Target CPU architecture for bundle (auto|x86_64|arm64). Default: auto.",
     ),
     gpu: str = typer.Option(
         "auto",
@@ -491,23 +543,7 @@ def bundle(
         12,
         "--tar-zst-level",
         help="Zstd compression level for .tar.zst (default: 12).",
-    ),
-    venv_python: str | None = typer.Option(
-        None,
-        "--python",
-        help=(
-            "Python interpreter to use for the bundled venv (forwarded to bundler). "
-            "If omitted, bundler chooses a recommended interpreter automatically."
-        ),
-    ),
-    runner_python: str = typer.Option(
-        "python3.12",
-        "--runner-python",
-        help=(
-            "Python interpreter used to run the bundling script itself (default: python3.12). "
-            "Falls back to the current interpreter if not found on PATH."
-        ),
-    ),
+    )
 ):
     """
     Bundle the Python API for distribution.
@@ -515,7 +551,6 @@ def bundle(
     This is a thin wrapper around `scripts/bundle_python.py` with sensible defaults:
     - platform/gpu default to auto-detect for this machine
     - tar.zst enabled with level 12
-    - signing enabled
     """ 
     
     project_root = Path(__file__).resolve().parent.parent  # apps/api/
@@ -523,22 +558,15 @@ def bundle(
     if not script.exists():
         raise typer.BadParameter(f"Bundling script not found: {script}")
     
-
-
-    runner = shutil.which(runner_python) or runner_python
-    if shutil.which(runner_python) is None and runner_python == "python3.12":
-        # Best-effort fallback for dev environments where python3.12 isn't installed.
-        runner = sys.executable
-        print(
-            "Warning: `python3.12` not found on PATH; "
-            f"running bundler with current interpreter: {runner}"
-        )
+    runner = sys.executable
 
     cmd: list[str] = [
         runner,
         str(script),
         "--platform",
         str(platform),
+        "--arch",
+        str(arch),
         "--gpu",
         str(gpu),
         "--output",
@@ -554,11 +582,11 @@ def bundle(
     effective_version = _with_nightly_version(str(effective_version or "0.0.0"), nightly)
     if effective_version:
         cmd += ["--bundle-version", str(effective_version)]
-    if venv_python:
-        cmd += ["--python", str(venv_python)]
-    if tar_zst:
-        cmd.append("--tar-zst")
-        cmd += ["--tar-zst-level", str(int(tar_zst_level))]
+    # Bundler writes .tar.zst by default; disable explicitly when requested.
+    if not tar_zst:
+        cmd.append("--no-tar-zst")
+    # Always forward compression level (used when tar.zst is enabled).
+    cmd += ["--tar-zst-level", str(int(tar_zst_level))]
 
     # Run from the API project root so relative paths (like ./dist) behave as expected.
     proc = subprocess.Popen(cmd, cwd=str(project_root))
@@ -662,6 +690,11 @@ def publish(
         "--platform",
         help="Target platform for bundle (darwin|linux|win32|auto). Default: auto (this machine).",
     ),
+    arch: str = typer.Option(
+        "auto",
+        "--arch",
+        help="Target CPU architecture for bundle (auto|x86_64|arm64). Default: auto.",
+    ),
     gpu: str = typer.Option(
         "auto",
         "--gpu",
@@ -676,22 +709,6 @@ def publish(
         12,
         "--tar-zst-level",
         help="Zstd compression level for .tar.zst (default: 12).",
-    ),
-    venv_python: str | None = typer.Option(
-        None,
-        "--python",
-        help=(
-            "Python interpreter to use for the bundled venv (forwarded to bundler). "
-            "If omitted, bundler chooses a recommended interpreter automatically."
-        ),
-    ),
-    runner_python: str = typer.Option(
-        "python3.12",
-        "--runner-python",
-        help=(
-            "Python interpreter used to run the bundling script itself (default: python3.12). "
-            "Falls back to the current interpreter if not found on PATH."
-        ),
     ),
     repo_id: str | None = typer.Option(
         None,
@@ -733,17 +750,12 @@ def publish(
     if effective_platform == "auto":
         effective_platform = sys.platform
     
-    bundle_script = project_root / "scripts" / "bundle_python.py"
+    # Call the real bundler implementation directly (avoid wrapper exec semantics on Windows).
+    bundle_script = project_root / "scripts" / "bundling" / "bundle_python.py"
     if not bundle_script.exists():
         raise typer.BadParameter(f"Bundling script not found: {bundle_script}")
 
-    runner = shutil.which(runner_python) or runner_python
-    if shutil.which(runner_python) is None and runner_python == "python3.12":
-        runner = sys.executable
-        print(
-            "Warning: `python3.12` not found on PATH; "
-            f"running bundler with current interpreter: {runner}"
-        )
+    runner = _resolve_python_runner()
 
     started_at = time.time()
 
@@ -752,28 +764,36 @@ def publish(
         str(bundle_script),
         "--platform",
         str(platform),
+        "--arch",
+        str(arch),
         "--gpu",
         str(gpu),
         "--output",
         str(output),
         "--bundle-version",
         str(version),
-        "--tar-zst",
-        "--tar-zst-level",
-        str(int(tar_zst_level)),
     ]
-    if venv_python:
-        bundle_cmd += ["--python", str(venv_python)]
+    # Bundler writes .tar.zst by default; just set the level.
+    bundle_cmd += ["--tar-zst-level", str(int(tar_zst_level))]
+
+    # Ensure bundler emits python-api + python-code tarballs (python-api scope also triggers code tar).
+    bundle_cmd += ["--tar-zst-scope", "python-api"]
 
     # Run from the API project root so relative paths (like ./dist) behave as expected.
-    proc = subprocess.Popen(bundle_cmd, cwd=str(project_root))
     try:
-        proc.wait()
+        env = os.environ.copy()
+        # Ensure bundler logs stream immediately (avoid Python stdio buffering).
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        subprocess.run(
+            bundle_cmd,
+            cwd=str(project_root),
+            env=env,
+            check=True,
+            text=True,
+        )
     except KeyboardInterrupt:
-        proc.terminate()
-        proc.wait()
-    if proc.returncode != 0:
-        raise SystemExit(proc.returncode)
+        raise SystemExit(130)
+
 
     # Resolve the bundler output directory relative to apps/api/ (since we ran with cwd=project_root).
     out_dir = output if output.is_absolute() else (project_root / output)
@@ -786,8 +806,30 @@ def publish(
     # Prefer tarballs created by *this* publish run.
     api_recent = [p for p in api_candidates if p.stat().st_mtime >= started_at - 2]
     code_recent = [p for p in code_candidates if p.stat().st_mtime >= started_at - 2]
-    api_tar = _pick_newest(api_recent or api_candidates)
-    code_tar = _pick_newest(code_recent or code_candidates)
+    api_tar_candidates = api_recent or api_candidates
+    code_tar_candidates = code_recent or code_candidates
+    if not api_tar_candidates or not code_tar_candidates:
+        # Provide actionable diagnostics instead of a generic "No paths provided".
+        try:
+            existing = sorted(
+                [p.name for p in out_dir.iterdir() if p.is_file()],
+                key=lambda s: s.lower(),
+            )
+        except Exception:
+            existing = []
+
+        raise typer.BadParameter(
+            "Bundling completed, but expected .tar.zst artifacts were not found.\n"
+            f"- output dir: {out_dir}\n"
+            f"- expected api glob: python-api-{safe_version}-*.tar.zst\n"
+            f"- expected code glob: python-code-{safe_version}-*.tar.zst\n"
+            f"- found files: {existing[:50]}{' ...' if len(existing) > 50 else ''}\n"
+            "If bundling was interrupted, re-run `apex-engine publish`.\n"
+            "If you disabled tar output, run with `--tar-zst` (or omit `--no-tar-zst`)."
+        )
+
+    api_tar = _pick_newest(api_tar_candidates)
+    code_tar = _pick_newest(code_tar_candidates)
 
     upload_script = project_root / "scripts" / "release" / "upload_release_artifacts.py"
     if not upload_script.exists():
@@ -996,6 +1038,102 @@ def _encode_hf_path(path: str) -> str:
     parts = [p for p in (path or "").split("/") if p]
     return "/".join(urllib.parse.quote(p, safe="") for p in parts)
 
+_SSL_CONTEXT: ssl.SSLContext | None = None
+
+
+def _maybe_enable_truststore() -> None:
+    """
+    On Windows, prefer the system certificate store when possible.
+
+    This matches what tools like `curl` often use and avoids bundled-python CA issues
+    in some deployments.
+    """
+    if sys.platform != "win32":
+        return
+    if os.environ.get("APEX_DISABLE_TRUSTSTORE", "").strip().lower() in {"1", "true", "yes"}:
+        return
+    try:
+        import truststore  # type: ignore
+
+        truststore.inject_into_ssl()
+    except Exception:
+        # Optional dependency; ignore if unavailable.
+        return
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """
+    Return an SSL context for outbound HTTPS.
+
+    In some bundled/embedded Python environments on Windows, the default trust store
+    can be missing, causing CERTIFICATE_VERIFY_FAILED. Prefer certifi when available.
+    """
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is not None:
+        return _SSL_CONTEXT
+
+    _maybe_enable_truststore()
+    ctx = ssl.create_default_context()
+    try:
+        import certifi  # type: ignore
+
+        cafile = certifi.where()
+        if cafile and os.path.exists(cafile):
+            ctx = ssl.create_default_context(cafile=cafile)
+    except Exception:
+        # certifi is optional; fall back to system defaults
+        pass
+
+    # Allow explicit CA bundle override (useful for corporate proxies / custom roots).
+    cafile_override = os.environ.get("APEX_UPDATE_CA_BUNDLE", "").strip()
+    if cafile_override:
+        try:
+            p = str(Path(cafile_override).expanduser().resolve())
+            if os.path.exists(p):
+                ctx = ssl.create_default_context(cafile=p)
+        except Exception:
+            pass
+
+    if os.environ.get("APEX_SSL_NO_VERIFY", "").strip().lower() in {"1", "true", "yes"}:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+    _SSL_CONTEXT = ctx
+    return ctx
+
+
+def _friendly_update_network_error(e: Exception) -> str:
+    """
+    Convert noisy urllib/ssl exceptions into a compact, user-facing message.
+    """
+    try:
+        if isinstance(e, urllib.error.URLError) and getattr(e, "reason", None):
+            reason = e.reason  # type: ignore[attr-defined]
+            txt = str(reason)
+        else:
+            txt = str(e)
+    except Exception:
+        txt = "Unknown network error"
+
+    low = (txt or "").lower()
+    if (
+        "certificate_verify_failed" in low
+        or "certificateverificationerror" in low
+        or "unable to get local issuer certificate" in low
+        or "self signed certificate" in low
+        or "self-signed certificate" in low
+    ):
+        return (
+            "SSL certificate verification failed while contacting huggingface.co. "
+            "If you're behind a corporate proxy, install your root CA / configure system certificates "
+            "(Windows Update can refresh root CAs)."
+        )
+    if "timed out" in low:
+        return "Network timed out while checking for updates."
+    if "name or service not known" in low or "temporary failure in name resolution" in low:
+        return "DNS lookup failed while checking for updates."
+    return f"Network error while checking for updates: {txt}".strip()
+
 
 def _hf_json(url: str) -> Any:
     req = urllib.request.Request(
@@ -1005,16 +1143,58 @@ def _hf_json(url: str) -> Any:
             "User-Agent": "apex-engine",
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.urlopen(req, timeout=20, context=_get_ssl_context()) as r:
         raw = r.read()
     return json.loads(raw.decode("utf-8"))
 
 
 def _hf_list_tree(owner: str, repo: str, path: str | None = None) -> list[dict]:
-    base = f"https://huggingface.co/api/models/{owner}/{repo}/tree/main"
-    url = f"{base}/{_encode_hf_path(path)}" if path else base
-    data = _hf_json(url)
-    return data if isinstance(data, list) else []
+    # Prefer the official client. It uses robust HTTP behaviors and supports auth tokens.
+    # Fall back to the raw REST endpoint if huggingface_hub is unavailable.
+    try:
+        from huggingface_hub import HfApi, get_token  # type: ignore
+
+        _maybe_enable_truststore()
+        # If a custom CA bundle is configured, forward it to requests-based clients.
+        cafile_override = os.environ.get("APEX_UPDATE_CA_BUNDLE", "").strip()
+        if cafile_override and cafile_override not in {"-", "none"}:
+            os.environ.setdefault("REQUESTS_CA_BUNDLE", cafile_override)
+            os.environ.setdefault("CURL_CA_BUNDLE", cafile_override)
+
+        api = HfApi()
+        repo_id = f"{owner}/{repo}"
+        token = get_token()
+        items = api.list_repo_tree(
+            repo_id=repo_id,
+            repo_type="model",
+            revision="main",
+            path_in_repo=path or "",
+            recursive=False,
+            token=token,
+        )
+        out: list[dict] = []
+        for it in items:
+            p = str(getattr(it, "path", "") or "")
+            if not p:
+                continue
+            t = getattr(it, "type", None)
+            if t is not None:
+                tt = str(t).lower()
+                kind = "directory" if tt in {"directory", "dir", "folder", "tree"} else "file"
+            else:
+                cls = it.__class__.__name__.lower()
+                if "folder" in cls or "dir" in cls:
+                    kind = "directory"
+                else:
+                    # RepoFile typically has `size`; folders typically don't.
+                    kind = "file" if hasattr(it, "size") else "directory"
+            out.append({"type": kind, "path": p})
+        return out
+    except Exception:
+        base = f"https://huggingface.co/api/models/{owner}/{repo}/tree/main"
+        url = f"{base}/{_encode_hf_path(path)}" if path else base
+        data = _hf_json(url)
+        return data if isinstance(data, list) else []
 
 
 @dataclass(frozen=True)
@@ -1029,6 +1209,9 @@ class UpdateAsset:
     device: str
     python_tag: str
     download_url: str
+    repo_id: str
+    repo_path: str
+    revision: str
 
 
 def _is_prerelease_tag(tag: str) -> bool:
@@ -1171,9 +1354,22 @@ def _list_remote_python_code_assets(
                 continue
 
             dl = (
-                f"https://huggingface.co/{owner}/{repo}/resolve/main/"
-                f"{_encode_hf_path(full_path)}?download=true"
+                None
             )
+            try:
+                from huggingface_hub import hf_hub_url  # type: ignore
+
+                dl = hf_hub_url(
+                    repo_id=f"{owner}/{repo}",
+                    filename=full_path,
+                    repo_type="model",
+                    revision="main",
+                )
+            except Exception:
+                dl = (
+                    f"https://huggingface.co/{owner}/{repo}/resolve/main/"
+                    f"{_encode_hf_path(full_path)}?download=true"
+                )
             out.append(
                 UpdateAsset(
                     tag=tag,
@@ -1186,6 +1382,9 @@ def _list_remote_python_code_assets(
                     device=str(parsed["device"]),
                     python_tag=str(parsed["python_tag"]),
                     download_url=dl,
+                    repo_id=f"{owner}/{repo}",
+                    repo_path=full_path,
+                    revision="main",
                 )
             )
 
@@ -1263,7 +1462,7 @@ def _download_to(url: str, dest: Path, *, quiet: bool) -> None:
         return
 
     req = urllib.request.Request(url, headers={"User-Agent": "apex-engine"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urllib.request.urlopen(req, timeout=60, context=_get_ssl_context()) as r:
         total = None
         try:
             total = int(r.headers.get("Content-Length") or "0") or None
@@ -1292,6 +1491,46 @@ def _download_to(url: str, dest: Path, *, quiet: bool) -> None:
         os.replace(tmp, dest)
         if not quiet:
             print(f"Downloaded: {dest}")
+
+
+def _download_update_asset(asset: UpdateAsset, dest: Path, *, quiet: bool) -> None:
+    """
+    Download an update asset into `dest`.
+
+    Prefer `huggingface_hub.hf_hub_download` (resume, auth, robust HTTP), but fall back
+    to the precomputed `download_url` via urllib.
+    """
+    dest = Path(dest).resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 0:
+        return
+    try:
+        from huggingface_hub import hf_hub_download, get_token  # type: ignore
+
+        _maybe_enable_truststore()
+        cafile_override = os.environ.get("APEX_UPDATE_CA_BUNDLE", "").strip()
+        if cafile_override and cafile_override not in {"-", "none"}:
+            os.environ.setdefault("REQUESTS_CA_BUNDLE", cafile_override)
+            os.environ.setdefault("CURL_CA_BUNDLE", cafile_override)
+
+        token = get_token()
+        cached_path = hf_hub_download(
+            repo_id=asset.repo_id,
+            filename=asset.repo_path,
+            repo_type="model",
+            revision=asset.revision,
+            cache_dir=str(dest.parent),
+            token=token,
+            resume_download=True,
+        )
+        # Copy into our predictable cache filename.
+        shutil.copyfile(cached_path, dest)
+        if not quiet:
+            print(f"Downloaded: {dest}")
+        return
+    except Exception:
+        # Fallback: raw URL fetch (still uses our SSL context).
+        _download_to(asset.download_url, dest, quiet=quiet)
 
 
 def _apply_code_update(archive_path: Path, target_dir: Path, *, quiet: bool) -> None:
@@ -1374,9 +1613,28 @@ def check_updates(
     current_sem = _semver_triplet_prefix(current_version) or (0, 0, 0)
     current_is_prerelease = _is_prerelease_tag(current_version)
 
-    assets = _list_remote_python_code_assets(
-        owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
-    )
+    try:
+        assets = _list_remote_python_code_assets(
+            owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
+        )
+    except Exception as e:
+        msg = _friendly_update_network_error(e)
+        if format.strip().lower() == "json":
+            payload = {
+                "current": {
+                    "version": current_version,
+                    "device": current_gpu,
+                    "python_tag": _python_tag(),
+                    "platform": sys.platform,
+                    "arch": _platform.machine(),
+                },
+                "updates": [],
+                "error": {"message": msg},
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return
+        print(msg)
+        return
  
     if not any_device:
         preferred = [a for a in assets if a.device.lower() == current_gpu.lower()]
@@ -1525,9 +1783,15 @@ def update(
     current_sem = _semver_triplet_prefix(current_version) or (0, 0, 0)
     current_is_prerelease = _is_prerelease_tag(current_version)
 
-    assets = _list_remote_python_code_assets(
-        owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
-    )
+    try:
+        assets = _list_remote_python_code_assets(
+            owner=repo_owner, repo=repo_name, allow_nightly=allow_nightly
+        )
+    except Exception as e:
+        msg = _friendly_update_network_error(e)
+        if not quiet:
+            print(msg, file=sys.stderr)
+        raise typer.Exit(code=2)
     if not any_device:
         preferred = [a for a in assets if a.device.lower() == current_gpu.lower()]
         candidates = preferred or assets
@@ -1568,7 +1832,7 @@ def update(
     if not quiet:
         print(f"Updating {current_version} -> {chosen.asset_version}")
         print(f"Downloading: {chosen.asset_name}")
-    _download_to(chosen.download_url, archive_path, quiet=quiet)
+    _download_update_asset(chosen, archive_path, quiet=quiet)
     _apply_code_update(archive_path, target, quiet=quiet)
     _cleanup_cached_update_archive(archive_path, cache_root=cache_root, quiet=quiet)
     if not quiet:

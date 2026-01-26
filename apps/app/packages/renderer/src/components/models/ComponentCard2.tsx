@@ -450,7 +450,7 @@ const SchedulerConfigPathItem: React.FC<{
                       });
                     }}
                     disabled={startDownloading || isDownloading}
-                    className="w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light  hover:bg-brand/70 border border-brand-light/10 rounded-[6px] bg-brand px-3 py-2 transition-all"
+                    className={cn("w-full text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light  hover:bg-brand/70 border border-brand-light/10 rounded-[6px] bg-brand px-3 py-2 transition-all", startDownloading ? "opacity-60 cursor-default hover:bg-brand" : "")}
                   >
                     {startDownloading ? (
                       <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
@@ -629,16 +629,6 @@ const ModelPathItem: React.FC<{
     }
   }, []);
 
-  // If we never receive WS updates for this job, revert to idle so the UI can't get stuck.
-  useEffect(() => {
-    if (!jobId) return;
-    if (!startDownloading) return;
-    if ((jobUpdates?.length ?? 0) > 0) return;
-    const t = window.setTimeout(() => {
-      setStartDownloading(false);
-    }, STARTUP_TIMEOUT_MS);
-    return () => window.clearTimeout(t);
-  }, [jobId, jobUpdates?.length, startDownloading]);
 
   return (
     <div className="w-full bg-brand-background rounded-md p-3" ref={ref}>
@@ -792,9 +782,15 @@ const ModelPathItem: React.FC<{
                   {startDownloading && (
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={async () => {
                         setStartDownloading(false);
-                        clearDownloadTracking({ jobId, source: path.path });
+                        if (!jobId) return;
+                        try {
+                          await cancelRayJob(jobId);
+                        } catch {}
+                        try {
+                          clearDownloadTracking({ jobId, source: path.path });
+                        } catch {}
                       }}
                       className="w-full mt-2 text-[10px] text-brand-light/80 hover:text-brand-light font-medium bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded-[6px] px-2 py-2 transition-all"
                     >

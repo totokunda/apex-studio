@@ -57,7 +57,7 @@ def get_cuda_compute_capability() -> Optional[float]:
     - 7.0: Tesla V100
     - 7.5: RTX 2080, RTX 2080 Ti, Titan RTX
     - 8.0: A100
-    - 8.6: RTX 3090, RTX 3080, RTX 4090
+    - 8.6: RTX 3090, RTX 3080, RTX 3070
     - 8.9: RTX 4090, L4, L40
     - 9.0: H100
     """

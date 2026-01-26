@@ -82,6 +82,26 @@ if [ -n "$CONDA_PREFIX" ]; then
     log_info "Using conda environment: $CONDA_PREFIX"
 fi
 
+# Ensure `uv` is available (bundler uses uv for all installs; no pip fallback).
+if ! command -v uv &> /dev/null; then
+    log_warning "`uv` not found on PATH. Installing uv..."
+    case "$PLATFORM" in
+        darwin|linux)
+            if command -v curl &> /dev/null; then
+                curl -LsSf https://astral.sh/uv/install.sh | sh
+                export PATH="$HOME/.local/bin:$PATH"
+            else
+                log_error "curl is required to install uv automatically. Please install uv and retry."
+                exit 1
+            fi
+            ;;
+        *)
+            log_warning "Auto-install for uv is not configured for PLATFORM=$PLATFORM. Please install uv manually and retry."
+            exit 1
+            ;;
+    esac
+fi
+
 # Clean previous build
 if [ -d "$OUTPUT_DIR" ]; then
     log_info "Removing previous bundle..."
@@ -104,7 +124,14 @@ BUNDLER_ARGS=(
 )
 
 if [ "$GPU_MODE" != "auto" ]; then
-    BUNDLER_ARGS+=("--cuda" "$GPU_MODE")
+    # The bundler expects `--gpu {auto,cuda,cpu,mps,rocm}`.
+    # Our shell wrapper accepts "cuda*" (e.g. cuda126/cuda128); map all of those to "cuda"
+    # because the bundler intentionally ships a single CUDA wheel stack.
+    if [[ "$GPU_MODE" == cuda* ]]; then
+        BUNDLER_ARGS+=("--gpu" "cuda")
+    else
+        BUNDLER_ARGS+=("--gpu" "$GPU_MODE")
+    fi
 fi
 
 if [ "$SKIP_RUST" = true ]; then
@@ -112,13 +139,14 @@ if [ "$SKIP_RUST" = true ]; then
 fi
 
 if [ "$REQUIRE_PY312" = true ]; then
-    BUNDLER_ARGS+=("--require-python312")
+    # The bundler CLI no longer accepts --require-python312; we enforce it in this shell script above.
+    :
 fi
 
 # Check for signing on macOS
 if [ "$PLATFORM" = "darwin" ] && [ -n "$APPLE_IDENTITY" ]; then
     log_info "Code signing enabled with identity: $APPLE_IDENTITY"
-    BUNDLER_ARGS+=("--sign")
+    # NOTE: Python bundler does not perform signing; app packaging does.
 fi
 
 "$PYTHON_BIN" "${BUNDLER_ARGS[@]}"

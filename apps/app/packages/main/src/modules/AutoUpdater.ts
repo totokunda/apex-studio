@@ -5,6 +5,25 @@ import electronUpdater, {
   type Logger,
 } from "electron-updater";
 
+function formatUpdateErrMessage(msg: unknown, maxLen = 220): string {
+  const raw = typeof msg === "string" ? msg : msg instanceof Error ? msg.message : "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "Something went wrong.";
+  const normalized = trimmed.replace(/\r\n/g, "\n");
+  const lines = normalized
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => !/^at\s+\S+/i.test(l));
+  const headline = (lines[0] ?? trimmed).replace(
+    /^(\w*Error|Error|UnhandledPromiseRejection\w*|Uncaught)\s*:\s*/i,
+    "",
+  );
+  const oneLine = headline.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLen) return oneLine;
+  return `${oneLine.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
+}
+
 type DownloadNotification = Parameters<
   AppUpdater["checkForUpdatesAndNotify"]
 >[0];
@@ -126,10 +145,11 @@ export class AutoUpdater implements AppModule {
 
         return updateInfo;
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to check for updates";
+        const message = formatUpdateErrMessage(error, 220) || "Failed to check for updates";
         lastKnownState = { ...lastKnownState, status: "error", errorMessage: message };
-        throw error;
+        broadcastAppUpdateEvent({ type: "error", message });
+        // Do not throw: the renderer should read `getAppUpdateState()` and show a compact message.
+        return null;
       }
     });
 
@@ -194,8 +214,7 @@ export class AutoUpdater implements AppModule {
     });
 
     updater.on("error", (error: unknown) => {
-      const message =
-        error instanceof Error ? error.message : "Auto-update error";
+      const message = formatUpdateErrMessage(error, 220) || "Auto-update error";
       lastKnownState = { ...lastKnownState, status: "error", errorMessage: message };
       broadcastAppUpdateEvent({ type: "error", message });
     });

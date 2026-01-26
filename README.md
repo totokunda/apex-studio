@@ -25,7 +25,10 @@ git lfs install
 
 # Clone + init submodules
 git clone --recurse-submodules https://github.com/totokunda/apex-studio.git
+
 cd apex-studio
+
+# Or git submodule update --init --recursive
 
 # Fetch LFS files (recommended after cloning)
 git lfs pull
@@ -36,6 +39,11 @@ git lfs pull
 - **Node.js 24.x** (required; see `apps/app/package.json` → `engines.node`)
 - **Python 3.12** (recommended/tested for `apex-engine`; required for CUDA builds)
 - **FFmpeg** (required for media processing; see **Install FFmpeg** below)
+
+#### GPU acceleration notes (CUDA / ROCm)
+
+- **NVIDIA / CUDA**: you must have **NVIDIA device drivers 12.8** installed before using the CUDA requirements / installer paths.
+- **AMD / ROCm**: ROCm support currently **requires building from source** and is **not tested** (expect rough edges). The prebuilt app/release artifacts are not validated for ROCm.
 
 Notes:
 - **Windows**: use **PowerShell 7+**. If `python` isn’t on PATH, try `py -V` (Python Launcher).
@@ -131,7 +139,7 @@ source .venv/bin/activate
 # pick one:
 python3 scripts/dev/dev_pip_install.py --machine cpu --venv .venv
 # python3 scripts/dev/dev_pip_install.py --machine linux --venv .venv # NVIDIA CUDA on Linux
-# python3 scripts/dev/dev_pip_install.py --machine rocm --venv .venv  # AMD ROCm on Linux
+# python3 scripts/dev/dev_pip_install.py --machine rocm --venv .venv  # AMD ROCm on Linux (source build; not tested)
 ```
 
 Windows (PowerShell):
@@ -180,8 +188,8 @@ python3 -m pip install -r requirements/cpu/requirements.txt
 # python3 -m pip install -r requirements/mps/requirements.txt          # macOS / MPS
 # python3 -m pip install -r requirements/cuda/linux.txt                # Linux / CUDA
 # python3 -m pip install -r requirements/cuda/windows.txt              # Windows / CUDA
-# python3 -m pip install -r requirements/rocm/linux.txt                # Linux / ROCm
-# python3 -m pip install -r requirements/rocm/windows.txt              # Windows / ROCm (experimental)
+# python3 -m pip install -r requirements/rocm/linux.txt                # Linux / ROCm (source build; not tested)
+# python3 -m pip install -r requirements/rocm/windows.txt              # Windows / ROCm (experimental; source build; not tested)
 
 # Install the CLI entrypoint
 python3 -m pip install -e . --no-deps

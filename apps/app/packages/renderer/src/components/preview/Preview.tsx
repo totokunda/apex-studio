@@ -461,6 +461,8 @@ const Preview: React.FC<PreviewProps> = () => {
     sortClips,
     filterClips,
     clipWithinFrame,
+    selectedClipIds,
+    
     timelines,
   ]);
 

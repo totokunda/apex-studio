@@ -13,6 +13,8 @@ export class HardwareAccelerationModule implements AppModule {
       app.disableHardwareAcceleration();
     }
   }
+
+  
 }
 
 export function hardwareAccelerationMode(
