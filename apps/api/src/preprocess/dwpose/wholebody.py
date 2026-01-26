@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import torch
 import cv2
 import numpy as np
 
@@ -19,7 +20,8 @@ from .util import (
     get_ort_providers,
     is_model_torchscript,
 )
-import torch
+
+import onnxruntime as ort
 
 
 class Wholebody:
@@ -53,8 +55,6 @@ class Wholebody:
             pass
         elif self.det_model_type == "ort":
             try:
-                import onnxruntime as ort
-
                 self.det = ort.InferenceSession(det_model_path, providers=ort_providers)
             except:
                 print(
@@ -73,8 +73,6 @@ class Wholebody:
                     "TopK operators may not work on your OpenCV, try use onnxruntime with CPUExecutionProvider"
                 )
                 try:
-                    import onnxruntime as ort
-
                     self.det = ort.InferenceSession(
                         det_model_path, providers=["CPUExecutionProvider"]
                     )
@@ -90,8 +88,6 @@ class Wholebody:
             pass
         elif self.pose_model_type == "ort":
             try:
-                import onnxruntime as ort
-
                 self.pose = ort.InferenceSession(
                     pose_model_path, providers=ort_providers
                 )

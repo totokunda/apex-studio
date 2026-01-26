@@ -21,6 +21,8 @@ router = APIRouter(prefix="/mask", tags=["mask"])
 # In-memory registry for cooperative cancellation of tracking streams
 # Keyed by mask id provided by the client
 CANCEL_TRACKING: set[str] = set()
+# Best-effort registry for currently active tracking ids (for /system/free-memory cancellation).
+ACTIVE_TRACKING: set[str] = set()
 
 
 class MaskRequest(BaseModel):
@@ -67,6 +69,14 @@ class MaskRequest(BaseModel):
         None,
         description="Optional shape type for shape bounds from the provided box/points",
     )
+    persist: Optional[bool] = Field(
+        None,
+        description=(
+            "If True, keep the SAM2 predictor loaded in-process after this call so a subsequent "
+            "track call can reuse it (faster). If False, unload after the call. "
+            "Default: True when an id is provided, otherwise False."
+        ),
+    )
 
 
 class MaskTrackingRequest(BaseModel):
@@ -91,12 +101,43 @@ class MaskTrackingRequest(BaseModel):
         None,
         description="Tracking direction: forward, backward, or both. Defaults inferred from frame range",
     )
+    # Optional: model selection (used by /track/shapes, and may be passed by clients)
+    model_type: Optional[str] = Field(
+        None,
+        description="Optional mask model type override (e.g. sam2_base_plus). Defaults to MASK_MODEL env var.",
+    )
+
+    # Optional: seed inputs so the server can recreate the anchor mask if SAM2 state
+    # was cleared (e.g. after /system/free-memory) before starting propagation.
+    tool: Optional[Literal["touch", "lasso", "shape"]] = Field(
+        None, description="Optional seed tool used to create the anchor mask"
+    )
+    points: Optional[List[Dict[str, float]]] = Field(
+        None, description="Optional seed points (touch/lasso)"
+    )
+    point_labels: Optional[List[int]] = Field(
+        None, description="Optional seed point labels (touch): 1=pos, 0=neg"
+    )
+    box: Optional[Dict[str, float]] = Field(
+        None, description="Optional seed bounding box (shape or touch constraint)"
+    )
+    simplify_tolerance: Optional[float] = Field(
+        None, description="Optional contour simplification tolerance for seeding"
+    )
+    
     shape_type: Optional[
         Literal["rectangle", "ellipse", "polygon", "triangle", "star"]
     ] = Field(None, description="Optional shape type for shape bounds normalization")
     debug: bool = Field(
         False,
         description="Enable debug visualization - saves input points/bbox and output contours as images",
+    )
+    persist: Optional[bool] = Field(
+        None,
+        description=(
+            "If True, keep the SAM2 predictor loaded in-process after tracking completes. "
+            "If False, unload after completion. Default: True."
+        ),
     )
 
 
@@ -385,6 +426,7 @@ async def create_mask(request: MaskRequest):
     - Returns contour polygon points for rendering on the frontend
     - Uses unified SAM2VideoPredictor for both images and videos with lazy frame loading
     """
+    predictor = None
     try:
         # Validate input file
         input_path, is_video = validate_input_file(request.input_path)
@@ -424,7 +466,13 @@ async def create_mask(request: MaskRequest):
                 detail=f"Invalid model_type: {os.environ.get('MASK_MODEL', 'sam2_base_plus')}. Must be one of: sam2_tiny, sam2_small, sam2_base_plus, sam2_large",
             )
 
-        predictor = get_sam2_predictor(model_type=model_type_enum)
+        # IMPORTANT: do not persist/warm mask models for API calls.
+        persist = (
+            bool(request.persist)
+            if request.persist is not None
+            else bool(request.id)  # persist by default when an id is provided
+        )
+        predictor = get_sam2_predictor(model_type=model_type_enum, persist=persist)
 
         # Generate mask directly (seed with lasso polygon if tool is lasso)
         logger.info(f"Generating mask with unified SAM2 predictor...")
@@ -515,6 +563,22 @@ async def create_mask(request: MaskRequest):
             frame_number=request.frame_number,
             tool=request.tool,
         )
+    finally:
+        # Only hard-clean when we're not persisting the predictor for follow-up tracking.
+        try:
+            persist = (
+                bool(request.persist)
+                if request.persist is not None
+                else bool(request.id)
+            )
+        except Exception:
+            persist = bool(getattr(request, "id", None))
+        if not persist:
+            try:
+                if predictor is not None:
+                    predictor.cleanup(hard=True)
+            except Exception:
+                pass
 
 
 @router.post("/track")
@@ -547,8 +611,6 @@ async def track_mask(request: MaskTrackingRequest):
                 detail=f"Invalid model_type: {os.environ.get('MASK_MODEL', 'sam2_base_plus')}",
             )
 
-        predictor = get_sam2_predictor(model_type=model_type_enum)
-
         # Resolve direction
         direction = request.direction or (
             "forward" if request.frame_end >= request.frame_start else "backward"
@@ -578,14 +640,134 @@ async def track_mask(request: MaskTrackingRequest):
         except Exception:
             pass
 
+        # IMPORTANT: do not persist/warm mask models for API calls.
+        # Only create the predictor after we've validated input/ranges to avoid
+        # leaking a large model instance on early validation errors.
+        persist = bool(request.persist) if request.persist is not None else True
+        predictor = get_sam2_predictor(model_type=model_type_enum, persist=persist)
+
+        # If SAM2 state was cleared (e.g. /system/free-memory), ensure the anchor
+        # object exists by re-seeding from the request's seed inputs.
+        def _ensure_seeded() -> None:
+            try:
+                st = predictor._maybe_restore_state(
+                    input_path=str(input_path), frame_start=int(anchor), id=request.id
+                )
+                if st and len(st.get("obj_idx_to_id") or {}) > 0:
+                    return
+            except Exception:
+                # If anything about state reuse fails, fall back to explicit seeding below.
+                pass
+
+            if not request.tool:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Mask tracking state is missing (likely cleared by /system/free-memory). "
+                        "Recreate the anchor mask first, or pass seed inputs (tool/points/box) to /mask/track."
+                    ),
+                )
+
+            # Build seed for predictor.predict_mask (expects pixel coords in media space)
+            seed_simplify = (
+                float(request.simplify_tolerance)
+                if request.simplify_tolerance is not None
+                else 1.0
+            )
+
+            lasso_points_flat = None
+            if request.tool == "lasso" and request.points:
+                lasso_points_flat = []
+                for p in request.points:
+                    lasso_points_flat.extend([float(p["x"]), float(p["y"])])
+
+            point_coords = None
+            point_labels = None
+            if request.tool == "touch" and request.points:
+                point_coords = np.array(
+                    [[p["x"], p["y"]] for p in request.points], dtype=np.float32
+                )
+                if request.point_labels:
+                    point_labels = np.array(request.point_labels, dtype=np.int32)
+                else:
+                    point_labels = np.ones(len(point_coords), dtype=np.int32)
+
+            box_arr = None
+            if request.box:
+                box_arr = np.array(
+                    [
+                        request.box["x1"],
+                        request.box["y1"],
+                        request.box["x2"],
+                        request.box["y2"],
+                    ],
+                    dtype=np.float32,
+                )
+
+            init_shape_mask = None
+            if request.tool == "shape" and request.shape_type and box_arr is not None:
+                try:
+                    _ = predictor.get_predictor()
+                    inference_state = predictor._get_or_create_inference_state(
+                        input_path=str(input_path),
+                        frame_number=int(anchor),
+                        id=request.id,
+                    )
+                    from src.mask.mask import _bounds_from_box_and_shape, _rasterize_shape
+
+                    bounds = _bounds_from_box_and_shape(box_arr, request.shape_type)
+                    H = int(inference_state.get("video_height"))
+                    W = int(inference_state.get("video_width"))
+                    init_shape_mask = _rasterize_shape(
+                        bounds, request.shape_type, height=H, width=W
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to build shape seed mask during track init: {e}")
+
+            
+            # Seed at the anchor frame so propagate_in_video has an object to track.
+            predictor.predict_mask(
+                id=request.id,
+                input_path=str(input_path),
+                frame_number=int(anchor),
+                obj_id=1,
+                simplify_tolerance=seed_simplify,
+                lasso_points=lasso_points_flat,
+                init_mask=init_shape_mask,
+                point_coords=(
+                    None
+                    if (lasso_points_flat is not None or init_shape_mask is not None)
+                    else point_coords
+                ),
+                point_labels=(
+                    None
+                    if (lasso_points_flat is not None or init_shape_mask is not None)
+                    else point_labels
+                ),
+                box=(
+                    None
+                    if (lasso_points_flat is not None or init_shape_mask is not None)
+                    else box_arr
+                ),
+            )
+
+        _ensure_seeded()
+        
+
         # Single-direction streaming
         if direction in ("forward", "backward"):
 
             def ndjson_generator_single():
                 try:
+                    try:
+                        ACTIVE_TRACKING.add(request.id)
+                    except Exception:
+                        pass
                     for item in predictor.iter_track_masks(
                         input_path=str(input_path),
-                        frame_start=int(request.frame_start),
+                        # Use anchor as the state key to avoid recreating an empty state when
+                        # frame_start != anchor_frame (e.g. direction="both").
+                        frame_start=int(anchor),
                         frame_end=int(request.frame_end),
                         anchor_frame=int(anchor),
                         max_frames=request.max_frames,
@@ -614,6 +796,15 @@ async def track_mask(request: MaskTrackingRequest):
                         logger.warning(
                             f"Predictor state clear failed after track_mask: {e}"
                         )
+                    try:
+                        ACTIVE_TRACKING.discard(request.id)
+                    except Exception:
+                        pass
+                    if not persist:
+                        try:
+                            predictor.cleanup(hard=True)
+                        except Exception:
+                            pass
 
             return StreamingResponse(
                 ndjson_generator_single(), media_type="application/x-ndjson"
@@ -625,6 +816,10 @@ async def track_mask(request: MaskTrackingRequest):
 
         def ndjson_generator_both():
             try:
+                try:
+                    ACTIVE_TRACKING.add(request.id)
+                except Exception:
+                    pass
                 # backward first if applicable
                 for item in predictor.iter_track_masks(
                     input_path=str(input_path),
@@ -667,6 +862,15 @@ async def track_mask(request: MaskTrackingRequest):
                     logger.warning(
                         f"Predictor state clear failed after track_mask (both): {e}"
                     )
+                try:
+                    ACTIVE_TRACKING.discard(request.id)
+                except Exception:
+                    pass
+                if not persist:
+                    try:
+                        predictor.cleanup(hard=True)
+                    except Exception:
+                        pass
 
         return StreamingResponse(
             ndjson_generator_both(), media_type="application/x-ndjson"
@@ -699,13 +903,14 @@ async def track_shapes(request: MaskTrackingRequest):
             )
 
         try:
-            model_type_enum = ModelType[request.model_type.upper()]
+            model_type_enum = ModelType[
+                os.environ.get("MASK_MODEL", "sam2_base_plus").upper()
+            ]
         except KeyError:
             raise HTTPException(
-                status_code=400, detail=f"Invalid model_type: {request.model_type}"
+                status_code=400, detail=f"Invalid model_type: {os.environ.get('MASK_MODEL', 'sam2_base_plus')}"
             )
 
-        predictor = get_sam2_predictor(model_type=model_type_enum)
         direction = request.direction or (
             "forward" if request.frame_end >= request.frame_start else "backward"
         )
@@ -731,14 +936,124 @@ async def track_shapes(request: MaskTrackingRequest):
         except Exception:
             pass
 
+        # IMPORTANT: do not persist/warm mask models for API calls.
+        persist = bool(request.persist) if request.persist is not None else True
+        predictor = get_sam2_predictor(model_type=model_type_enum, persist=persist)
+
+        # Ensure seed exists if SAM2 state was cleared before tracking.
+        def _ensure_seeded() -> None:
+            try:
+                st = predictor._maybe_restore_state(
+                    input_path=str(input_path), frame_start=int(anchor), id=request.id
+                )
+                if st and len(st.get("obj_idx_to_id") or {}) > 0:
+                    return
+            except Exception:
+                pass
+
+            if not request.tool:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Shape tracking state is missing (likely cleared by /system/free-memory). "
+                        "Recreate the anchor mask first, or pass seed inputs (tool/points/box) to /mask/track/shapes."
+                    ),
+                )
+
+            seed_simplify = (
+                float(request.simplify_tolerance)
+                if request.simplify_tolerance is not None
+                else 1.0
+            )
+
+            lasso_points_flat = None
+            if request.tool == "lasso" and request.points:
+                lasso_points_flat = []
+                for p in request.points:
+                    lasso_points_flat.extend([float(p["x"]), float(p["y"])])
+
+            point_coords = None
+            point_labels = None
+            if request.tool == "touch" and request.points:
+                point_coords = np.array(
+                    [[p["x"], p["y"]] for p in request.points], dtype=np.float32
+                )
+                if request.point_labels:
+                    point_labels = np.array(request.point_labels, dtype=np.int32)
+                else:
+                    point_labels = np.ones(len(point_coords), dtype=np.int32)
+
+            box_arr = None
+            if request.box:
+                box_arr = np.array(
+                    [
+                        request.box["x1"],
+                        request.box["y1"],
+                        request.box["x2"],
+                        request.box["y2"],
+                    ],
+                    dtype=np.float32,
+                )
+
+            init_shape_mask = None
+            if request.tool == "shape" and request.shape_type and box_arr is not None:
+                try:
+                    _ = predictor.get_predictor()
+                    inference_state = predictor._get_or_create_inference_state(
+                        input_path=str(input_path),
+                        frame_number=int(anchor),
+                        id=request.id,
+                    )
+                    from src.mask.mask import _bounds_from_box_and_shape, _rasterize_shape
+
+                    bounds = _bounds_from_box_and_shape(box_arr, request.shape_type)
+                    H = int(inference_state.get("video_height"))
+                    W = int(inference_state.get("video_width"))
+                    init_shape_mask = _rasterize_shape(
+                        bounds, request.shape_type, height=H, width=W
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to build shape seed mask during track init: {e}")
+
+            predictor.predict_mask(
+                id=request.id,
+                input_path=str(input_path),
+                frame_number=int(anchor),
+                obj_id=1,
+                simplify_tolerance=seed_simplify,
+                lasso_points=lasso_points_flat,
+                init_mask=init_shape_mask,
+                point_coords=(
+                    None
+                    if (lasso_points_flat is not None or init_shape_mask is not None)
+                    else point_coords
+                ),
+                point_labels=(
+                    None
+                    if (lasso_points_flat is not None or init_shape_mask is not None)
+                    else point_labels
+                ),
+                box=(
+                    None
+                    if (lasso_points_flat is not None or init_shape_mask is not None)
+                    else box_arr
+                ),
+            )
+
+        _ensure_seeded()
+
         if direction in ("forward", "backward"):
 
             def ndjson_generator_single():
                 results = []
                 try:
+                    try:
+                        ACTIVE_TRACKING.add(request.id)
+                    except Exception:
+                        pass
                     for item in predictor.iter_track_shapes(
                         input_path=str(input_path),
-                        frame_start=int(request.frame_start),
+                        frame_start=int(anchor),
                         frame_end=int(request.frame_end),
                         anchor_frame=int(anchor),
                         max_frames=request.max_frames,
@@ -767,6 +1082,15 @@ async def track_shapes(request: MaskTrackingRequest):
                         logger.warning(
                             f"Predictor state clear failed after track_shapes: {e}"
                         )
+                    try:
+                        ACTIVE_TRACKING.discard(request.id)
+                    except Exception:
+                        pass
+                    if not persist:
+                        try:
+                            predictor.cleanup(hard=True)
+                        except Exception:
+                            pass
 
             return StreamingResponse(
                 ndjson_generator_single(), media_type="application/x-ndjson"
@@ -778,6 +1102,10 @@ async def track_shapes(request: MaskTrackingRequest):
         def ndjson_generator_both():
             results = []
             try:
+                try:
+                    ACTIVE_TRACKING.add(request.id)
+                except Exception:
+                    pass
                 for item in predictor.iter_track_shapes(
                     input_path=str(input_path),
                     frame_start=int(anchor),
@@ -825,6 +1153,15 @@ async def track_shapes(request: MaskTrackingRequest):
                     logger.warning(
                         f"Predictor state clear failed after track_shapes (both): {e}"
                     )
+                try:
+                    ACTIVE_TRACKING.discard(request.id)
+                except Exception:
+                    pass
+                if not persist:
+                    try:
+                        predictor.cleanup(hard=True)
+                    except Exception:
+                        pass
 
         return StreamingResponse(
             ndjson_generator_both(), media_type="application/x-ndjson"

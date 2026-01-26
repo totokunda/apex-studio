@@ -15,6 +15,7 @@ import { spawn, ChildProcess, exec, execFile } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import net from "node:net";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -22,6 +23,13 @@ import { promisify } from "node:util";
 import { getSettingsModule } from "./SettingsModule.js";
 
 const require = createRequire(import.meta.url);
+
+type KillPortFn = (port: number, protocol?: "tcp" | "udp") => Promise<unknown>;
+const killPort: KillPortFn = (() => {
+  // `kill-port` is CommonJS; in NodeNext/ESM we load it via `createRequire`.
+  const mod = require("kill-port");
+  return (mod?.default ?? mod) as KillPortFn;
+})();
 
 // Configuration constants
 const DEFAULT_API_PORT = 8765;
@@ -101,6 +109,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   private expectedExitUntilMs: number = 0;
   private autoRestartSuppressed: boolean = false;
   private autoRestartSuppressedReason: string | null = null;
+  private installerActive: boolean = false;
+  private installerActiveReason: string | null = null;
+  private installerActiveSinceMs: number | null = null;
   private runtimeVerifyCache:
     | { at: number; ok: boolean; reason?: string }
     | null = null;
@@ -146,11 +157,61 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       await this.app.whenReady();
       // Small delay to ensure window is ready
       setTimeout(() => {
+        if (this.installerActive) {
+          this.appendSupervisorLog(
+            `[PythonProcess] Skipping auto-start while installer is active${this.installerActiveReason ? ` (${this.installerActiveReason})` : ""}`,
+          );
+          return;
+        }
         this.start().catch((err) => {
           console.error("Failed to auto-start Python API:", err);
           this.emit("error", err);
         });
       }, 1000);
+    }
+  }
+
+  /**
+   * While installer is active, we suppress any attempts to start the backend (auto-start,
+   * launcher auto-start, user start) to avoid racing with extraction/setup operations.
+   */
+  isInstallerActive(): boolean {
+    return this.installerActive;
+  }
+
+  async setInstallerActive(active: boolean, reason?: string): Promise<void> {
+    const next = Boolean(active);
+    if (next === this.installerActive) {
+      // Update reason if provided (best-effort).
+      if (next && reason) this.installerActiveReason = String(reason);
+      return;
+    }
+
+    this.installerActive = next;
+    if (next) {
+      this.installerActiveSinceMs = Date.now();
+      this.installerActiveReason = reason ? String(reason) : "installer";
+      this.appendSupervisorLog(
+        `[PythonProcess] Installer active; suppressing backend start/restart${this.installerActiveReason ? ` (${this.installerActiveReason})` : ""}`,
+      );
+      // Ensure watchdog won't restart while we are modifying the runtime.
+      this.desiredRunning = false;
+      this.clearRestartTimer();
+      // Best-effort: stop any running backend so extraction/setup can safely mutate files on disk.
+      try {
+        await this.stop();
+      } catch {}
+    } else {
+      const dur =
+        this.installerActiveSinceMs != null
+          ? `${Math.max(0, Date.now() - this.installerActiveSinceMs)}ms`
+          : null;
+      this.appendSupervisorLog(
+        `[PythonProcess] Installer inactive; backend start allowed${dur ? ` (held ${dur})` : ""}`,
+      );
+      this.installerActiveSinceMs = null;
+      this.installerActiveReason = null;
+      // Note: we do not auto-start here; the installer/launcher decides when to start.
     }
   }
 
@@ -259,33 +320,24 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       const resourcesPath = process.resourcesPath!;
       
       if (platform === "darwin") {
-        // macOS: venv-based bundle
-        return path.join(
-          resourcesPath,
-          "python-api",
-          "apex-engine",
-          "apex-studio",
-          "bin",
-          "python"
-        );
+        // macOS: portable Python bundle (no venv)
+        const base = path.join(resourcesPath, "python-api", "apex-engine", "apex-studio", "bin");
+        const py = path.join(base, "python");
+        const py3 = path.join(base, "python3");
+        return fs.existsSync(py3) && !fs.existsSync(py) ? py3 : py;
       } else if (platform === "win32") {
         return path.join(
           resourcesPath,
           "python-api",
           "apex-engine",
           "apex-studio",
-          "Scripts",
           "python.exe"
         );
       } else {
-        return path.join(
-          resourcesPath,
-          "python-api",
-          "apex-engine",
-          "apex-studio",
-          "bin",
-          "python"
-        );
+        const base = path.join(resourcesPath, "python-api", "apex-engine", "apex-studio", "bin");
+        const py = path.join(base, "python");
+        const py3 = path.join(base, "python3");
+        return fs.existsSync(py3) && !fs.existsSync(py) ? py3 : py;
       }
     } else {
       // Development: use system Python or virtual environment
@@ -395,8 +447,18 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     const base = path.join(bundleRoot, "apex-studio");
     const candidates =
       process.platform === "win32"
-        ? [path.join(base, "Scripts", "python.exe")]
-        : [path.join(base, "bin", "python"), path.join(base, "bin", "python3")];
+        ? [
+            // New portable runtime layout (preferred)
+            path.join(base, "python.exe"),
+            // Legacy venv layout (older bundles)
+            path.join(base, "Scripts", "python.exe"),
+            // Some extracted layouts
+            path.join(base, "install", "python.exe"),
+          ]
+        : [
+            path.join(base, "bin", "python"),
+            path.join(base, "bin", "python3"),
+          ];
     for (const p of candidates) {
       try {
         if (fs.existsSync(p)) return p;
@@ -726,17 +788,37 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   async start(): Promise<void> {
-    return await this.startWithOptions();
+    try {
+
+      return await this.startWithOptions();
+    } catch (error) {
+      console.error("Python API startup failed", error);
+      throw error;
+    }
+     
   }
 
   async startWithOptions(opts?: { startupWaitMs?: number }): Promise<void> {
+    
     return await this.enqueue(() => this.startInternal(opts));
   }
 
   private async startInternal(opts?: { startupWaitMs?: number }): Promise<void> {
+    if (this.installerActive) {
+      this.appendSupervisorLog(
+        `[PythonProcess] Ignoring start request while installer is active${this.installerActiveReason ? ` (${this.installerActiveReason})` : ""}`,
+      );
+      return;
+    }
     // The moment start is requested, we consider the backend "desired".
     // This allows fast auto-restart if it crashes during startup.
     this.desiredRunning = true;
+
+    // Reset to the preferred/default port at the start of each start attempt.
+    // If that port is occupied and cannot be freed, we will automatically fall back
+    // to any available port (user indicated any port is acceptable).
+    this.state.port = this.config.port!;
+   
 
     if (this.state.status === "running") {
       console.log("Python API is already running");
@@ -750,6 +832,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
 
     this.state.status = "starting";
     this.emit("status", this.state);
+    
 
     // In production, we may be using either:
     // - a python-api shipped inside app resources, OR
@@ -775,6 +858,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       }
     }
 
+
     if (!this.config.devMode && !fs.existsSync(this.bundledPythonPath)) {
       this.state.status = "error";
       this.state.error = `Python runtime not found: ${this.bundledPythonPath}`;
@@ -784,7 +868,9 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     }
 
     try {
+
       await this.spawnProcess();
+
       await this.waitForHealthy(opts?.startupWaitMs);
       this.startHealthChecks();
 
@@ -792,7 +878,31 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       this.state.error = undefined;
       this.emit("status", this.state);
       console.log(`Python API started on ${this.state.host}:${this.state.port}`);
+
+      // If the app is using the default local backend URL, but we had to fall back to a
+      // dynamic port, sync the settings so the rest of the app talks to the correct backend.
+      try {
+        const settings = getSettingsModule();
+        const current = settings.getBackendUrl();
+        const desired = `http://${this.state.host}:${this.state.port}`;
+        const default127 = `http://127.0.0.1:${this.config.port}`;
+        const defaultLocalhost = `http://localhost:${this.config.port}`;
+        const defaultConfiguredHost = `http://${this.config.host}:${this.config.port}`;
+        const shouldSync =
+          current === default127 ||
+          current === defaultLocalhost ||
+          current === defaultConfiguredHost;
+        if (shouldSync && current !== desired) {
+          await settings.setBackendUrl(desired);
+          this.appendSupervisorLog(
+            `[PythonProcess] Synced backendUrl from ${current} -> ${desired} (dynamic port)`,
+          );
+        }
+      } catch {
+        // ignore
+      }
     } catch (error) {
+      console.error("Python API startup failed", error);
       // If startup fails, keep desiredRunning=true so the watchdog can retry.
       this.state.status = "error";
       this.state.error = error instanceof Error ? error.message : "Unknown error";
@@ -841,12 +951,24 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     sessionStream.on("error", () => {});
 
     writeLog(`\n\n=== Starting Python API at ${new Date().toISOString()} ===\n`);
-    // Ensure the target port is free before spawning. This prevents "address already in use"
-    // situations when a previous backend crashed or a stale process is still listening.
-    await this.freePortIfOccupied(this.config.port!, (msg) => {
+    // Prefer the configured port, but if we can't reliably free it, fall back to any free port.
+    // This makes startup robust even when another process refuses to release the port.
+    const logger = (msg: string) => {
       writeLog(`${msg}\n`);
       if (mirrorPythonLogsToStdout) process.stdout.write(`${msg}\n`);
-    });
+    };
+
+    const preferredPort = this.state.port;
+    await this.freePortIfOccupied(preferredPort, logger);
+    const preferredAvailable = await this.isPortBindable(preferredPort, this.state.host);
+    if (!preferredAvailable) {
+      const fallback = await this.pickFreePort(this.state.host);
+      logger(
+        `[PythonProcess] Preferred port ${preferredPort} is still unavailable; falling back to free port ${fallback}`,
+      );
+      this.state.port = fallback;
+      this.emit("status", this.state);
+    }
 
     let cmd: string;
     let args: string[];
@@ -870,13 +992,11 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       this.bundledBundleRoot = bundleRoot;
       this.bundledPythonPath = pythonExe;
 
-      cmd = pythonExe;
+      cmd = pythonExe
       args = [
         "-m",
         "src",
-        // Avoid Procfile/Honcho indirection; run the API server directly so the
-        // Electron-spawned process remains the true owner of the server tree.
-        "serve",
+        "serve"
       ];
     
     const env = this.buildEnvironment();
@@ -890,6 +1010,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       detached: process.platform !== "win32",
     });
 
+  
     this.state.pid = this.process.pid;
     this.lastSpawnedPid = this.process.pid ?? null;
     const spawnedPid = this.process.pid ?? null;
@@ -976,6 +1097,19 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     if (!Number.isFinite(port) || port <= 0) return;
 
     const execAsync = promisify(exec);
+
+    // First attempt: use `kill-port` to free the port (best-effort).
+    // We still keep the OS-specific fallback below as a backstop.
+    try {
+      await killPort(port, "tcp");
+      logger(`[PythonProcess] kill-port: ensured port ${port} is free (tcp)`);
+      // Give the OS a brief moment to release the socket.
+      await this.sleep(100);
+    } catch (e) {
+      logger(
+        `[PythonProcess] kill-port error on port ${port}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
 
     const listListeningPids = async (): Promise<Set<number>> => {
       const pids = new Set<number>();
@@ -1067,7 +1201,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
     
     // Set API configuration
     env.APEX_HOST = this.config.host;
-    env.APEX_PORT = String(this.config.port);
+    env.APEX_PORT = String(this.state.port);
     // Ownership: allow the server to self-terminate if the Electron parent dies.
     env.APEX_PARENT_PID = String(process.pid);
     env.APEX_HIDE_POLLING_LOGS = "true";
@@ -1146,7 +1280,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
 
       const response = await fetch(
-        `http://${this.config.host}:${this.config.port}/health`,
+        `http://${this.state.host}:${this.state.port}/health`,
         { 
           method: "GET",
           signal: controller.signal,
@@ -1280,7 +1414,7 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
       const controller = new AbortController();
       setTimeout(() => controller.abort(), 5000);
       
-      await fetch(`http://${this.config.host}:${this.config.port}/shutdown`, {
+      await fetch(`http://${this.state.host}:${this.state.port}/shutdown`, {
         method: "POST",
         signal: controller.signal,
       }).catch(() => {});
@@ -1489,7 +1623,62 @@ export class PythonProcessManager extends EventEmitter implements AppModule {
   }
 
   getApiUrl(): string {
-    return `http://${this.config.host}:${this.config.port}`;
+    return `http://${this.state.host}:${this.state.port}`;
+  }
+
+  private async isPortBindable(port: number, host: string): Promise<boolean> {
+    if (!Number.isFinite(port) || port <= 0) return false;
+    const h = String(host || DEFAULT_API_HOST);
+    return await new Promise<boolean>((resolve) => {
+      const server = net.createServer();
+      // Prevent keeping the event loop alive just for this check.
+      try {
+        server.unref();
+      } catch {
+        // ignore
+      }
+      server.once("error", (err: unknown) => {
+        try {
+          server.close();
+        } catch {}
+        const code = (err as any)?.code;
+        if (code === "EADDRINUSE" || code === "EACCES") return resolve(false);
+        return resolve(false);
+      });
+      server.listen({ port, host: h }, () => {
+        server.close(() => resolve(true));
+      });
+    });
+  }
+
+  private async pickFreePort(host: string): Promise<number> {
+    const h = String(host || DEFAULT_API_HOST);
+    return await new Promise<number>((resolve, reject) => {
+      const server = net.createServer();
+      try {
+        server.unref();
+      } catch {
+        // ignore
+      }
+      server.once("error", (err) => {
+        try {
+          server.close();
+        } catch {}
+        reject(err);
+      });
+      server.listen({ port: 0, host: h }, () => {
+        const addr = server.address();
+        if (!addr || typeof addr === "string") {
+          try {
+            server.close();
+          } catch {}
+          reject(new Error("Failed to resolve ephemeral port from server.address()"));
+          return;
+        }
+        const p = addr.port;
+        server.close(() => resolve(p));
+      });
+    });
   }
 
   /**

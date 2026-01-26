@@ -24,6 +24,11 @@ interface DiamondProps {
   shadowColor?: string;
   shadowBlur?: number;
   shadowOpacity?: number;
+  /**
+   * When true, caches the diamond into a bitmap via Konva's `node.cache()` to
+   * reduce draw cost when many keyframes are on screen.
+   */
+  cache?: boolean;
 }
 
 export const Diamond: React.FC<DiamondProps> = ({
@@ -39,6 +44,7 @@ export const Diamond: React.FC<DiamondProps> = ({
   shadowColor = "#000000",
   shadowBlur = 12,
   shadowOpacity = 0.3,
+  cache = true,
 }) => {
   // Define diamond points relative to center
   const points = [
@@ -54,6 +60,40 @@ export const Diamond: React.FC<DiamondProps> = ({
   const lineRef = useRef<Konva.Line>(null);
   const { selectedClipIds } = useControlsStore();
   const isDragging = useClipStore((s) => s.isDragging);
+
+  // Cache this shape as a bitmap to improve renderability when many keyframes are present.
+  // Re-cache when visual appearance changes.
+  useEffect(() => {
+    const node = lineRef.current;
+    if (!node) return;
+    if (!cache) {
+      try {
+        node.clearCache();
+      } catch {}
+      return;
+    }
+
+    // If the shape changes (fill/stroke/shadow/points), refresh the cache.
+    try {
+      node.cache({
+        pixelRatio: Math.min(
+          2,
+          Math.max(1, (window.devicePixelRatio ?? 1) as number),
+        ),
+      });
+      node.getLayer()?.batchDraw();
+    } catch {}
+  }, [
+    cache,
+    fill,
+    height,
+    shadowBlur,
+    shadowColor,
+    shadowOpacity,
+    stroke,
+    strokeWidth,
+    width,
+  ]);
 
   useEffect(() => {
     if (selectedClipIds.includes(clipId) && lineRef.current) {
@@ -93,6 +133,10 @@ export const Diamond: React.FC<DiamondProps> = ({
       lineCap="round"
       // add bending
       tension={0.1}
+      // Events are handled by the parent <Group>; disabling hit-testing on the shape
+      // reduces work on the Konva hit canvas.
+      // Slightly faster drawing for small shapes; visuals here don't need perfect strokes.
+      perfectDrawEnabled={false}
     />
   );
 };
@@ -147,6 +191,72 @@ const toSortedEntries = (
 
 const replaceMask = (masks: MaskClipProps[], updatedMask: MaskClipProps) =>
   masks.map((mask) => (mask.id === updatedMask.id ? updatedMask : mask));
+
+type KeyframeMarkerProps = {
+  id: string;
+  frame: number;
+  x: number;
+  y: number;
+  isHighlighted: boolean;
+  clipId: string;
+  dragBoundFunc: (pos: Konva.Vector2d) => Konva.Vector2d;
+  onDragStart: (e: Konva.KonvaEventObject<DragEvent>) => void;
+  onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
+  onClick: (e: Konva.KonvaEventObject<MouseEvent>) => void;
+};
+
+const KeyframeMarker = React.memo<KeyframeMarkerProps>(
+  ({
+    id,
+    frame,
+    x,
+    y,
+    isHighlighted,
+    clipId,
+    dragBoundFunc,
+    onDragStart,
+    onDragEnd,
+    onClick,
+  }) => {
+    const fill = isHighlighted ? "#4C8DFF" : "#ffffff";
+    const stroke = isHighlighted ? "#CFE2FF" : "rgba(180, 180, 180, 0.9)";
+    const strokeWidth = 1.5;
+    const glowColor = isHighlighted ? "#4C8DFF" : "#000000";
+    const glowBlur = isHighlighted ? 18 : 10;
+    const glowOpacity = isHighlighted ? 0.55 : 0.25;
+
+    return (
+      <Group
+        key={`${id}-${frame}`}
+        x={x}
+        y={y}
+        draggable
+        dragBoundFunc={dragBoundFunc}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onMouseDown={(e) => {
+          e.cancelBubble = true;
+        }}
+        onClick={onClick}
+      >
+        <Diamond
+          x={0}
+          y={0}
+          width={KEYFRAME_RADIUS}
+          height={KEYFRAME_RADIUS * 1.2}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+          clipId={clipId}
+          shadowColor={glowColor}
+          shadowBlur={glowBlur}
+          shadowOpacity={glowOpacity}
+          cache
+        />
+      </Group>
+    );
+  },
+);
 
 export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   clip,
@@ -223,6 +333,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   const keyframeY = visualBaseY + timelineHeight / 2;
 
   const activeFrame = useMemo(() => {
+    
     if (!keyframes.length) return null;
     const localFocus = Math.max(0, Math.round(getLocalFrame(focusFrame, clip)));
 
@@ -241,10 +352,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     return candidate;
   }, [clip, focusFrame, keyframes]);
 
-  // Only one keyframe should be visually active at a time: prefer selected, else focus-derived
-  const displayActiveFrame = useMemo(() => {
-    return selectedFrame != null ? selectedFrame : activeFrame;
-  }, [selectedFrame, activeFrame]);
+
 
   const visibleKeyframes = useMemo(() => {
     if (keyframes.length <= 1) return keyframes;
@@ -260,7 +368,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     const keep = new Set<number>();
     keep.add(keyframes[0].frame);
     keep.add(keyframes[keyframes.length - 1].frame);
-    if (displayActiveFrame != null) keep.add(displayActiveFrame);
+    if (activeFrame != null) keep.add(activeFrame);
     if (selectedFrame != null) keep.add(selectedFrame);
 
     let lastKeptFrame = keyframes[0].frame;
@@ -278,7 +386,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
     }
 
     return keyframes.filter(({ frame }) => keep.has(frame));
-  }, [displayActiveFrame, keyframes, pxPerFrame, selectedFrame]);
+  }, [activeFrame, keyframes, pxPerFrame, selectedFrame]);
 
   useEffect(() => {
     if (selectedFrame == null) return;
@@ -437,6 +545,7 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   }
 
   const handleKeyframeClick = (frame: number) => {
+    console.log("handleKeyframeClick", frame);
     setSelectedMaskId(mask.id);
     setSelectedFrame(frame);
     setFocusFrame(getGlobalFrame(frame, clip));
@@ -480,46 +589,25 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   return (
     <Group ref={containerRef} listening>
       {visibleKeyframes.map(({ frame }) => {
-        const isHighlighted = frame === displayActiveFrame;
-        const fill = isHighlighted ? "#4C8DFF" : "#ffffff";
-        const stroke = isHighlighted ? "#CFE2FF" : "rgba(180, 180, 180, 0.9)";
-        const strokeWidth = isHighlighted ? 1.5 : 1.5;
-        const glowColor = isHighlighted ? "#4C8DFF" : "#000000";
-        const glowBlur = isHighlighted ? 18 : 10;
-        const glowOpacity = isHighlighted ? 0.55 : 0.25;
+        const isHighlighted = frame === activeFrame;
 
         return (
-          <Group
+          <KeyframeMarker
             key={`${mask.id}-${frame}`}
+            id={mask.id}
+            frame={frame}
             x={frameToX(frame)}
             y={keyframeY}
-            draggable
+            isHighlighted={isHighlighted}
+            clipId={clip.clipId}
             dragBoundFunc={dragBoundFunc}
             onDragStart={handleDragStart(frame)}
             onDragEnd={handleDragEnd(frame)}
-            onMouseDown={(e) => {
-              e.cancelBubble = true;
-            }}
             onClick={(e) => {
               e.cancelBubble = true;
-
               handleKeyframeClick(frame);
             }}
-          >
-            <Diamond
-              x={0}
-              y={0}
-              width={KEYFRAME_RADIUS}
-              height={KEYFRAME_RADIUS * 1.2}
-              fill={fill}
-              stroke={stroke}
-              strokeWidth={strokeWidth}
-              clipId={clip.clipId}
-              shadowColor={glowColor}
-              shadowBlur={glowBlur}
-              shadowOpacity={glowOpacity}
             />
-          </Group>
         );
       })}
     </Group>

@@ -26,6 +26,9 @@ import {
   installAppUpdate,
   onAppUpdateEvent,
   previewBackendUrl,
+  startPythonApi,
+  getPythonStatus,
+  onPythonStatusChange,
   verifyBackendUrlAndFetchSettings,
   setMemorySettings,
 } from "@app/preload";
@@ -49,6 +52,7 @@ import {
     TabsTrigger,
   } from "@/components/ui/tabs";
 import { useQueryClient } from "@tanstack/react-query";
+import { formatErrMessage, looksLikeSslCertError } from "@/lib/formatErrMessage";
 
 interface SettingsModalProps {
   open: boolean;
@@ -68,6 +72,49 @@ const normalizeUrl = (value: string | null | undefined): string => {
     return trimmed.replace(/\/$/, "");
   }
 };
+
+function InlineUpdateError({
+  message,
+  expanded,
+  onToggle,
+}: {
+  message: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const raw = String(message || "").trim();
+  const summary = formatErrMessage(raw, { maxLen: 220 });
+  const hasDetails = raw.length > 220 || raw.includes("\n");
+  const isSsl = looksLikeSslCertError(raw);
+
+  return (
+    <div className="text-[10px] text-red-400">
+      <div>{summary}</div>
+      {isSsl ? (
+        <div className="mt-1 text-[10px] text-brand-light/60">
+          SSL certificate verification failed. If you&apos;re behind a proxy, install your root CA / configure your
+          system certificates (Windows Update can refresh root certs).
+        </div>
+      ) : null}
+
+      {hasDetails ? (
+        <button
+          type="button"
+          className="mt-1 text-[10px] text-brand-light/70 underline underline-offset-2 hover:text-brand-light"
+          onClick={onToggle}
+        >
+          {expanded ? "Hide details" : "Show details"}
+        </button>
+      ) : null}
+
+      {expanded ? (
+        <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md border border-white/10 bg-black/30 p-2 text-[9.5px] leading-snug text-brand-light/70">
+          {raw}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
@@ -139,6 +186,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   >(null);
   const [isVerifyingBackendUrl, setIsVerifyingBackendUrl] =
     useState<boolean>(false);
+  const [isSwitchingToLocalBackend, setIsSwitchingToLocalBackend] =
+    useState<boolean>(false);
+  const [appManagedBackendUrl, setAppManagedBackendUrl] = useState<string | null>(
+    null,
+  );
   const [cacheSizeLabel, setCacheSizeLabel] = useState<string | null>(null);
   const [componentsSizeLabel, setComponentsSizeLabel] = useState<string | null>(
     null,
@@ -173,6 +225,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     useState<boolean>(false);
   const [isApplyingApiUpdate, setIsApplyingApiUpdate] =
     useState<boolean>(false);
+  const [appUpdateErrorExpanded, setAppUpdateErrorExpanded] =
+    useState<boolean>(false);
+  const [apiUpdateErrorExpanded, setApiUpdateErrorExpanded] =
+    useState<boolean>(false);
 
   const [memoryKnobs, setMemoryKnobs] = useState<Record<string, any> | null>(null);
   const [isLoadingMemoryKnobs, setIsLoadingMemoryKnobs] = useState<boolean>(false);
@@ -184,11 +240,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const normalizedBackendUrl = normalizeUrl(backendUrl);
   const normalizedBackendUrlGlobal = normalizeUrl(backendUrlGlobal);
+  const normalizedAppManagedBackendUrl = normalizeUrl(appManagedBackendUrl);
   const backendUrlChanged = normalizedBackendUrl !== normalizedBackendUrlGlobal;
   const backendUrlIsVerified = backendUrlVerifiedFor === normalizedBackendUrl;
   const backendUrlRequiresVerify = backendUrlChanged && !!normalizedBackendUrl;
   const saveDisabled =
     isVerifyingBackendUrl || (backendUrlRequiresVerify && !backendUrlIsVerified);
+
+  const showUseLocalButton =
+    !!normalizedAppManagedBackendUrl &&
+    normalizedBackendUrl !== normalizedAppManagedBackendUrl;
 
   const refreshAppUpdate = async () => {
     try {
@@ -214,9 +275,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await checkForAppUpdates();
       await refreshAppUpdate();
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : "Failed to check for app updates.",
-      );
+      const msg = e instanceof Error ? e.message : "Failed to check for app updates.";
+      toast.error(formatErrMessage(msg), {
+        description: looksLikeSslCertError(msg)
+          ? "SSL certificate verification failed. If you're behind a corporate proxy, install your root CA / configure system certificates."
+          : undefined,
+      });
     } finally {
       setIsCheckingAppUpdate(false);
     }
@@ -228,7 +292,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await downloadAppUpdate();
       await refreshAppUpdate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to download update.");
+      const msg = e instanceof Error ? e.message : "Failed to download update.";
+      toast.error(formatErrMessage(msg), {
+        description: looksLikeSslCertError(msg)
+          ? "SSL certificate verification failed. Check your system certificate store / proxy configuration."
+          : undefined,
+      });
     } finally {
       setIsDownloadingAppUpdate(false);
     }
@@ -239,7 +308,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       await installAppUpdate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to restart and install.");
+      const msg = e instanceof Error ? e.message : "Failed to restart and install.";
+      toast.error(formatErrMessage(msg));
       setIsInstallingAppUpdate(false);
     }
   };
@@ -256,9 +326,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await checkForApiUpdates();
       await refreshApiUpdate();
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : "Failed to check for engine updates.",
-      );
+      const msg = e instanceof Error ? e.message : "Failed to check for engine updates.";
+      toast.error(formatErrMessage(msg), {
+        description: looksLikeSslCertError(msg)
+          ? "SSL certificate verification failed while checking for engine updates."
+          : undefined,
+      });
     } finally {
       setIsCheckingApiUpdate(false);
     }
@@ -281,7 +354,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
       await refreshApiUpdate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to update engine.");
+      const msg = e instanceof Error ? e.message : "Failed to update engine.";
+      toast.error(formatErrMessage(msg), {
+        description: looksLikeSslCertError(msg)
+          ? "SSL certificate verification failed while downloading the update."
+          : undefined,
+      });
     } finally {
       setIsApplyingApiUpdate(false);
     }
@@ -292,11 +370,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await setApiAllowNightlyUpdates(Boolean(checked));
       await refreshApiUpdate();
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : "Failed to update nightly setting.",
-      );
+      const msg = e instanceof Error ? e.message : "Failed to update nightly setting.";
+      toast.error(formatErrMessage(msg));
     }
   };
+
+  // Collapse error details when the underlying error clears/changes.
+  useEffect(() => {
+    if (!appUpdateState?.errorMessage) setAppUpdateErrorExpanded(false);
+  }, [appUpdateState?.errorMessage]);
+
+  useEffect(() => {
+    if (!apiUpdateState?.errorMessage) setApiUpdateErrorExpanded(false);
+  }, [apiUpdateState?.errorMessage]);
 
   const updateStatusLabel = (lastCheckedAt?: number) => {
     if (!lastCheckedAt) return null;
@@ -461,6 +547,100 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleUseLocalBackend = async () => {
+    setBackendUrlVerifyError(null);
+    setIsSwitchingToLocalBackend(true);
+    try {
+      // Ensure the local engine is running (best-effort).
+      let st = await getPythonStatus();
+      if (!st?.success || !st.data) {
+        // Try starting, then re-check.
+        await startPythonApi();
+        st = await getPythonStatus();
+      }
+
+      // Wait briefly for startup if needed.
+      const deadline = Date.now() + 60_000;
+      while (
+        st?.success &&
+        st.data &&
+        st.data.status !== "running" &&
+        Date.now() < deadline
+      ) {
+        await new Promise((r) => setTimeout(r, 500));
+        st = await getPythonStatus();
+      }
+
+      const data = st?.success ? st.data : null;
+      if (!data || data.status !== "running") {
+        throw new Error(
+          "Local engine is not running. Please start the engine and try again.",
+        );
+      }
+
+      const url = normalizeUrl(`http://${data.host}:${data.port}`);
+      if (!url) throw new Error("Failed to resolve local engine URL");
+
+      // Switch runtime immediately (non-persisted preview), so the app uses it right away.
+      const previewRes = await previewBackendUrl(url);
+      if (!previewRes?.success) {
+        throw new Error(previewRes?.error || "Failed to switch to local engine");
+      }
+
+      // Verify and sync form fields from backend.
+      const res = await verifyBackendUrlAndFetchSettings(url);
+      if (!res?.success || !res.data) {
+        throw new Error(res?.error || "Failed to verify local engine URL");
+      }
+
+      setBackendUrlLocal(url);
+      setBackendUrlVerifiedFor(url);
+      setCachePath(res.data.cachePath ?? "");
+      setComponentsPath(res.data.componentsPath ?? "");
+      setConfigPath(res.data.configPath ?? "");
+      setLoraPath(res.data.loraPath ?? "");
+      setPreprocessorPath(res.data.preprocessorPath ?? "");
+      setPostprocessorPath(res.data.postprocessorPath ?? "");
+      setMaskModel(res.data.maskModel ?? "sam2_base_plus");
+      setRenderImageSteps(Boolean(res.data.renderImageSteps));
+      setRenderVideoSteps(Boolean(res.data.renderVideoSteps));
+      setUseFastDownload(Boolean(res.data.useFastDownload));
+      setAutoUpdateEnabled(Boolean(res.data.autoUpdateEnabled));
+      setDisableAutoMemoryManagement(Boolean(res.data.disableAutoMemoryManagement));
+
+      await queryClient.invalidateQueries({ queryKey: ["manifest"] });
+      await queryClient.invalidateQueries({ queryKey: ["modelTypes"] });
+
+      // Persist this selection as the active backend URL.
+      await setBackendUrlGlobal(url || null);
+
+      // Refresh remote/local flag and size labels for the active backend.
+      try {
+        const remoteRes = await getBackendIsRemote();
+        const isRemote = !!(
+          remoteRes &&
+          remoteRes.success &&
+          remoteRes.data &&
+          typeof remoteRes.data.isRemote === "boolean" &&
+          remoteRes.data.isRemote
+        );
+        setIsBackendRemote(isRemote);
+      } catch {
+        setIsBackendRemote(false);
+      }
+      void refreshBackendPathSizes(null);
+
+      toast.success("Switched to local engine backend.");
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Failed to switch to local engine.";
+      toast.error(formatErrMessage(msg));
+      setBackendUrlVerifyError(msg);
+    } finally {
+      setIsSwitchingToLocalBackend(false);
+    }
+  };
+
 
   useEffect(() => {
     if (!initialized && !initializing) {
@@ -533,6 +713,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, backendUrlGlobal]);
+
+  // Track the backend URL controlled by the app-managed Python process.
+  // This is the "reset target" for the "Use local" button, and supports dynamic ports.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const updateFromStatus = (st: any) => {
+      if (cancelled) return;
+      const host = st && typeof st.host === "string" ? st.host : null;
+      const port =
+        st && typeof st.port === "number" && Number.isFinite(st.port) ? st.port : null;
+      if (!host || port == null) return;
+      setAppManagedBackendUrl(`http://${host}:${port}`);
+    };
+
+    (async () => {
+      try {
+        const res = await getPythonStatus();
+        if (res?.success && res.data) updateFromStatus(res.data);
+      } catch {
+        // ignore
+      }
+    })();
+
+    const off = onPythonStatusChange((st) => updateFromStatus(st));
+    return () => {
+      cancelled = true;
+      try {
+        off();
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -953,6 +1166,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="http://127.0.0.1:8765"
                     className="h-7.5 text-[11.5px]! rounded-[6px] flex-1"
                   />
+                  {showUseLocalButton ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={isSwitchingToLocalBackend || isVerifyingBackendUrl}
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px] flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                      onClick={() => void handleUseLocalBackend()}
+                      title="Switch backend URL to the app-managed local engine (handles dynamic ports)"
+                    >
+                      {isSwitchingToLocalBackend ? (
+                        <LuLoader className="w-3.5 h-3.5 text-brand-light/70 animate-spin" />
+                      ) : null}
+                      <span>
+                        {isSwitchingToLocalBackend
+                          ? "Switching..."
+                          : "Use local"}
+                      </span>
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     variant="outline"
@@ -1256,9 +1488,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   ) : null}
                 </div>
                 {appUpdateState?.errorMessage ? (
-                  <div className="text-[10px] text-red-400">
-                    {appUpdateState.errorMessage}
-                  </div>
+                  <InlineUpdateError
+                    message={appUpdateState.errorMessage}
+                    expanded={appUpdateErrorExpanded}
+                    onToggle={() => setAppUpdateErrorExpanded((v) => !v)}
+                  />
                 ) : null}
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1323,9 +1557,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   ) : null}
                 </div>
                 {apiUpdateState?.errorMessage ? (
-                  <div className="text-[10px] text-red-400">
-                    {apiUpdateState.errorMessage}
-                  </div>
+                  <InlineUpdateError
+                    message={apiUpdateState.errorMessage}
+                    expanded={apiUpdateErrorExpanded}
+                    onToggle={() => setApiUpdateErrorExpanded((v) => !v)}
+                  />
                 ) : null}
                 {apiUpdateState?.status === "updating" ? (
                   <div className="text-[10px] text-brand-light/70">

@@ -1245,8 +1245,17 @@ class UnifiedSAM2Predictor:
             custom_predictor.__dict__.update(predictor.__dict__)
             self._predictor = custom_predictor
 
-            # Pre-warm the model with a dummy forward pass
-            self._warmup_model()
+            # NOTE: We intentionally default to *no* warmup.
+            # The API's mask endpoints are expected to be non-persistent and should not
+            # pre-allocate extra caches or compile kernels ahead of time.
+            try:
+                warmup_env = str(os.environ.get("MASK_WARMUP", "0") or "0").strip().lower()
+                do_warmup = warmup_env not in ("0", "false", "no", "off")
+            except Exception:
+                do_warmup = False
+            if do_warmup:
+                # Pre-warm the model with a dummy forward pass (CUDA-only; see _warmup_model)
+                self._warmup_model()
 
             self.logger.info("Unified SAM2 video predictor loaded and optimized")
         return self._predictor
@@ -1948,6 +1957,16 @@ class UnifiedSAM2Predictor:
             except Exception:
                 pass
 
+            # Release MPS allocator memory if available
+            try:
+                if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+                    try:
+                        torch.mps.empty_cache()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
             # Encourage Python to free any remaining refs
             try:
                 gc.collect()
@@ -1958,19 +1977,91 @@ class UnifiedSAM2Predictor:
 
 
 _PREDICTOR_SINGLETONS: dict = {}
+# Track last access time for persisted predictors so we can auto-evict when idle.
+_PREDICTOR_SINGLETON_LAST_USED: dict = {}
+
+
+def _mask_persist_ttl_seconds() -> float:
+    """
+    Time-to-live for a *persisted* SAM2 predictor singleton when idle.
+
+    This is separate from the per-inference-state TTL inside UnifiedSAM2Predictor.
+    Default is conservative to avoid surprise unloads during short editing sessions.
+
+    Set to 0 to disable auto-eviction (predictor persists until /system/free-memory).
+    """
+    try:
+        return float(os.environ.get("MASK_PERSIST_TTL_SECONDS", "300") or "300")
+    except Exception:
+        return 300.0
+
+
+def _evict_idle_persisted_predictors() -> int:
+    """
+    Best-effort: evict any persisted predictor singletons that have been idle longer
+    than MASK_PERSIST_TTL_SECONDS.
+
+    Eviction is triggered opportunistically on subsequent mask requests (no background
+    thread), so it is deterministic and simple.
+    """
+    try:
+        ttl = float(_mask_persist_ttl_seconds())
+    except Exception:
+        ttl = 300.0
+    if ttl <= 0:
+        return 0
+    evicted = 0
+    try:
+        now = time.monotonic()
+        for key in list(_PREDICTOR_SINGLETONS.keys()):
+            try:
+                last = float(_PREDICTOR_SINGLETON_LAST_USED.get(key, 0.0) or 0.0)
+            except Exception:
+                last = 0.0
+            # If we have no timestamp, consider it "just used" (avoid surprise evictions).
+            if last <= 0:
+                _PREDICTOR_SINGLETON_LAST_USED[key] = now
+                continue
+            if now - last > ttl:
+                predictor = _PREDICTOR_SINGLETONS.get(key)
+                try:
+                    if predictor is not None:
+                        predictor.cleanup(hard=True)
+                except Exception:
+                    pass
+                _PREDICTOR_SINGLETONS.pop(key, None)
+                _PREDICTOR_SINGLETON_LAST_USED.pop(key, None)
+                evicted += 1
+    except Exception:
+        return 0
+    return evicted
 
 
 def get_sam2_predictor(
     model_type: ModelType = ModelType.SAM2_SMALL,
     use_compile: bool = False,
     use_tf32: bool = True,
+    persist: bool = False,
 ) -> UnifiedSAM2Predictor:
     """
-    Get or create a singleton UnifiedSAM2Predictor in-process.
+    Get a UnifiedSAM2Predictor.
+
+    By default we return a *fresh* predictor per call (persist=False) so the caller can
+    unload it after use and avoid any warming/persistence.
     """
     _require_sam2()
+    # Opportunistically evict idle persisted predictors before serving this request.
+    if persist:
+        try:
+            _evict_idle_persisted_predictors()
+        except Exception:
+            pass
     key = (model_type.value, use_compile, use_tf32)
-    if key in _PREDICTOR_SINGLETONS:
+    if persist and key in _PREDICTOR_SINGLETONS:
+        try:
+            _PREDICTOR_SINGLETON_LAST_USED[key] = time.monotonic()
+        except Exception:
+            pass
         return _PREDICTOR_SINGLETONS[key]
 
     logger.info("Creating new unified SAM2 predictor (in-process)")
@@ -1988,5 +2079,44 @@ def get_sam2_predictor(
         use_tf32=use_tf32,
     )
 
-    _PREDICTOR_SINGLETONS[key] = predictor
+    if persist:
+        _PREDICTOR_SINGLETONS[key] = predictor
+        try:
+            _PREDICTOR_SINGLETON_LAST_USED[key] = time.monotonic()
+        except Exception:
+            pass
     return predictor
+
+
+def free_mask_memory(*, hard: bool = True) -> dict:
+    """
+    Best-effort cleanup for any in-process SAM2 predictors and caches.
+
+    This is intended to be called from `/system/free-memory` so the server can free
+    mask-related GPU/CPU memory as well.
+    """
+    cleared = 0
+    errors: list[str] = []
+    try:
+        for _, predictor in list(_PREDICTOR_SINGLETONS.items()):
+            try:
+                predictor.cleanup(hard=hard)
+                cleared += 1
+            except Exception as e:
+                errors.append(str(e))
+    except Exception as e:
+        errors.append(str(e))
+    try:
+        _PREDICTOR_SINGLETONS.clear()
+    except Exception:
+        pass
+    try:
+        _PREDICTOR_SINGLETON_LAST_USED.clear()
+    except Exception:
+        pass
+    # Also clear any global caches even if no singletons exist
+    try:
+        LazyFrameLoader.clear_cache()
+    except Exception:
+        pass
+    return {"cleared_predictors": cleared, "hard": bool(hard), "errors": errors}

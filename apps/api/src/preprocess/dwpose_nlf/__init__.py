@@ -1,7 +1,7 @@
+import torch
 from src.preprocess.dwpose import DwposeDetector, Wholebody
 from src.types import InputImage, OutputImage
 from typing import List, Tuple
-import torch
 import numpy as np
 import math
 import random

@@ -1,0 +1,135 @@
+name: Publish (electron-builder)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_timeout_ms:
+        description: "Upload/API request timeout in milliseconds"
+        required: false
+        default: "3600000"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-windows:
+    name: Publish (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "apps/app/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: apps/app
+        run: npm ci
+
+      - name: Publish
+        working-directory: apps/app
+        env:
+          # Avoid Node "JavaScript heap out of memory" (~2GB default limit).
+          NODE_OPTIONS: --max-old-space-size=8192
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          # Used by our electron-builder config to set upload/API timeouts.
+          ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
+        run: npm run publish
+
+  publish-macos:
+    name: Publish (macOS)
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "apps/app/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: apps/app
+        run: npm ci
+      
+      - name: Import Apple signing certs
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+
+      - name: Publish
+        working-directory: apps/app
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          # Avoid Node "JavaScript heap out of memory" (~2GB default limit).
+          NODE_OPTIONS: --max-old-space-size=8192
+          CSC_LINK: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          # electron-builder notarization (Apple ID + app-specific password)
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Used by our electron-builder config to set upload/API timeouts.
+          ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
+
+        run: npm run publish
+
+  publish-linux:
+    name: Publish (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "apps/app/package-lock.json"
+
+      - name: Install system dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 build-essential python3
+
+      - name: Install dependencies
+        working-directory: apps/app
+        run: npm ci
+
+      - name: Publish
+        working-directory: apps/app
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          # Used by our electron-builder config to set upload/API timeouts.
+          ELECTRON_PUBLISH_TIMEOUT_MS: ${{ github.event.inputs.publish_timeout_ms || '3600000' }}
+        run: npm run publish

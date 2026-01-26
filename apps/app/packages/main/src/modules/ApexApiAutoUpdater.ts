@@ -7,6 +7,29 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { pythonProcess } from "./PythonProcess.js";
 
+function formatUpdateErrMessage(msg: unknown, maxLen = 260): string {
+  const raw = typeof msg === "string" ? msg : msg instanceof Error ? msg.message : "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "Something went wrong.";
+
+  const normalized = trimmed.replace(/\r\n/g, "\n");
+  const lines = normalized
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  // Prefer a non-stack, headline-like line.
+  const nonStack = lines.filter((l) => !/^at\s+\S+/i.test(l));
+  const headline = (nonStack[0] ?? lines[0] ?? trimmed).replace(
+    /^(\w*Error|Error|UnhandledPromiseRejection\w*|Uncaught)\s*:\s*/i,
+    "",
+  );
+
+  const oneLine = headline.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLen) return oneLine;
+  return `${oneLine.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
+}
+
 type ApiUpdateEvent =
   | { type: "checking" }
   | { type: "available"; info: unknown }
@@ -390,13 +413,27 @@ export class ApexApiAutoUpdater implements AppModule {
           }
         })();
         if (code !== 0) {
-          const message = (stderr || stdout || "Failed to check for API updates").trim();
+          const raw = (stderr || stdout || "Failed to check for API updates").trim();
+          const message = formatUpdateErrMessage(raw);
           lastKnownState = { ...lastKnownState, status: "error", errorMessage: message, lastCheckedAt: Date.now() };
           broadcastApiUpdateEvent({ type: "error", message });
           return null;
         }
 
         const parsed = safeJsonParseFromStdout(stdout);
+        const remoteErr = (parsed as any)?.error;
+        if (remoteErr) {
+          const rawMsg =
+            typeof remoteErr === "string"
+              ? remoteErr
+              : typeof remoteErr?.message === "string"
+                ? remoteErr.message
+                : "Failed to check for API updates";
+          const message = formatUpdateErrMessage(rawMsg);
+          lastKnownState = { ...lastKnownState, status: "error", errorMessage: message, lastCheckedAt: Date.now() };
+          broadcastApiUpdateEvent({ type: "error", message });
+          return null;
+        }
         const updates = (parsed as any)?.updates;
         const hasUpdates = Array.isArray(updates) && updates.length > 0;
 
@@ -412,8 +449,8 @@ export class ApexApiAutoUpdater implements AppModule {
         );
         return parsed;
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to check for API updates";
+        const raw = error instanceof Error ? error.message : "Failed to check for API updates";
+        const message = formatUpdateErrMessage(raw);
         lastKnownState = { ...lastKnownState, status: "error", errorMessage: message, lastCheckedAt: Date.now() };
         broadcastApiUpdateEvent({ type: "error", message });
         return null;
@@ -530,7 +567,8 @@ export class ApexApiAutoUpdater implements AppModule {
         })();
 
         if (code !== 0) {
-          const message = (stderr || stdout || "Failed to update API").trim();
+          const raw = (stderr || stdout || "Failed to update API").trim();
+          const message = formatUpdateErrMessage(raw);
           lastKnownState = { ...lastKnownState, status: "error", errorMessage: message };
           broadcastApiUpdateEvent({ type: "error", message });
           return { ok: false, message };
@@ -545,8 +583,8 @@ export class ApexApiAutoUpdater implements AppModule {
         updateOk = true;
         return { ok: true };
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to update API";
+        const raw = error instanceof Error ? error.message : "Failed to update API";
+        const message = formatUpdateErrMessage(raw);
         lastKnownState = { ...lastKnownState, status: "error", errorMessage: message };
         broadcastApiUpdateEvent({ type: "error", message });
         return { ok: false, message };
@@ -562,8 +600,8 @@ export class ApexApiAutoUpdater implements AppModule {
             broadcastApiUpdateEvent({ type: "updated", ...(updateOutput ? { info: updateOutput } : {}) });
           }
         } catch (e) {
-          const message =
-            e instanceof Error ? e.message : "Failed to restart API after update";
+          const raw = e instanceof Error ? e.message : "Failed to restart API after update";
+          const message = formatUpdateErrMessage(raw);
           lastKnownState = { ...lastKnownState, status: "error", errorMessage: message };
           broadcastApiUpdateEvent({ type: "error", message });
         } finally {
