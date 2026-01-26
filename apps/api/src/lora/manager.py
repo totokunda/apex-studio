@@ -569,6 +569,8 @@ class LoraManager(DownloadMixin):
                     if metadata is not None and prefix is not None:
                         # diffusers filters metadata keys by prefix and strips it, so prefix these keys to keep them.
                         metadata = {f"{prefix}.{k}": v for k, v in metadata.items()}
+                        
+                    
 
                     model.load_lora_adapter(
                         local_path_state_dict,
