@@ -49,6 +49,8 @@ class WanVaceEngine(WanShared):
         **kwargs,
     ):
 
+        mask_provided = mask is not None
+
         use_cfg_guidance = guidance_scale > 1.0 and negative_prompt is not None
 
         safe_emit_progress(
@@ -264,6 +266,19 @@ class WanVaceEngine(WanShared):
         num_reference_images = len(reference_images_preprocessed[0])
 
         mask = torch.where(preprocessed_mask > 0.5, 1.0, 0.0)
+
+        # If both a video and a mask are provided, overwrite masked (white) pixels in
+        # the conditioning video with mid-gray (127.5 in 8-bit) while leaving unmasked
+        # (black) pixels untouched.
+        #
+        # Note: `VideoProcessor` normalizes inputs to [-1, 1], where 0.0 maps to 127.5
+        # after denormalization.
+        if video is not None and mask_provided:
+            gray = torch.tensor(
+                0.0, device=preprocessed_video.device, dtype=preprocessed_video.dtype
+            )
+            preprocessed_video = preprocessed_video * (1 - mask) + gray * mask
+
         inactive = preprocessed_video * (1 - mask)
         reactive = preprocessed_video * mask
 
