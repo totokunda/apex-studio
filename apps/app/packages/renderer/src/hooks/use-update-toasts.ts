@@ -23,6 +23,7 @@ import {
   getApiUpdateState,
   onApiUpdateEvent,
   suppressApiUpdateToast,
+  getLauncherStatus,
 } from "@app/preload";
 import { formatErrMessage } from "@/lib/formatErrMessage";
 
@@ -48,6 +49,36 @@ function safeSetLocalStorage(key: string, value: string) {
   }
 }
 
+function safeGetLocalStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+async function shouldEnableApiUpdateToasts(): Promise<boolean> {
+  // If the user chose to bypass installing the local engine in dev mode,
+  // don't show engine update UI/errors (there's nothing to update).
+  const devSkip = safeGetLocalStorage("apex.dev.skipServerInstall") === "1";
+  if (devSkip) return false;
+
+  try {
+    const res = await getLauncherStatus();
+    if (!res?.success) return false;
+    const st: any = res.data;
+    // If we have neither a reachable backend nor a local runtime available,
+    // treat the engine as "not installed" and skip engine update checks.
+    const backendConnected = Boolean(st?.hasBackend);
+    const runtimeAvailable = Boolean(st?.canStartLocal);
+    const backendStarting = Boolean(st?.backendStarting);
+    return backendConnected || runtimeAvailable || backendStarting;
+  } catch {
+    // Conservative default: if we can't determine, avoid showing engine update errors.
+    return false;
+  }
+}
+
 export function useUpdateToasts(): void {
   const lastShownRef = useRef<{ appKey: string | null; apiKey: string | null }>({
     appKey: null,
@@ -63,6 +94,8 @@ export function useUpdateToasts(): void {
   useEffect(() => {
     let cancelled = false;
     const timers = new Set<ReturnType<typeof setTimeout>>();
+    let offApp: (() => void) | null = null;
+    let offApi: (() => void) | null = null;
 
     const showUpdateToast = (opts: {
       id: string;
@@ -428,7 +461,10 @@ export function useUpdateToasts(): void {
       );
     };
 
-    const refreshAndMaybeToast = async (origin: "startup" | "reminder") => {
+    const refreshAndMaybeToast = async (
+      origin: "startup" | "reminder",
+      { enableApi }: { enableApi: boolean },
+    ) => {
       // Fetch current snapshots first (fast), then run checks (slower) in the background.
       try {
         const st = await getAppUpdateState();
@@ -436,22 +472,24 @@ export function useUpdateToasts(): void {
       } catch (e) {
       }
 
-      try {
-        const st = await getApiUpdateState();
-        if (cancelled) return;
-        // If another window already started updating, show the updating toast immediately.
-        if (st?.status === "updating") {
-          apiProgressRef.current = st.updateProgress ?? {
-            stage: "stopping",
-            percent: 0,
-            message: "Stopping engine…",
-          };
-          // Render the updating toast (single toast id) for continuity across windows.
-          showApiUpdatingToast();
-        } else {
-          showApiToastFromState(st, origin);
+      if (enableApi) {
+        try {
+          const st = await getApiUpdateState();
+          if (cancelled) return;
+          // If another window already started updating, show the updating toast immediately.
+          if (st?.status === "updating") {
+            apiProgressRef.current = st.updateProgress ?? {
+              stage: "stopping",
+              percent: 0,
+              message: "Stopping engine…",
+            };
+            // Render the updating toast (single toast id) for continuity across windows.
+            showApiUpdatingToast();
+          } else {
+            showApiToastFromState(st, origin);
+          }
+        } catch (e) {
         }
-      } catch (e) {
       }
 
       // Kick checks to ensure we show on startup when updates exist.
@@ -464,167 +502,181 @@ export function useUpdateToasts(): void {
         }
       })();
 
-      void (async () => {
-        try {
-          await checkForApiUpdates();
-          const st = await getApiUpdateState();
-          if (!cancelled) showApiToastFromState(st, origin);
-        } catch (e) {
-        }
-      })();
+      if (enableApi) {
+        void (async () => {
+          try {
+            await checkForApiUpdates();
+            const st = await getApiUpdateState();
+            if (!cancelled) showApiToastFromState(st, origin);
+          } catch (e) {
+          }
+        })();
+      }
     };
 
-    refreshAndMaybeToast("startup");
-
-    const offApp = onAppUpdateEvent((ev: AppUpdateEvent) => {
+    void (async () => {
+      const enableApi = await shouldEnableApiUpdateToasts();
       if (cancelled) return;
-      if (ev.type === "available" || ev.type === "downloaded" || ev.type === "not-available") {
-        void (async () => {
-          try {
-            const st = await getAppUpdateState();
-            showAppToastFromState(st, "event");
-          } catch {}
-        })();
-        return;
-      }
-      if (ev.type === "error") {
-        toast.error("App update error", {
-          id: "app-update-toast-error",
-          description: formatErrMessage(ev.message),
-        });
-      }
-    });
 
-    const offApi = onApiUpdateEvent((ev: ApiUpdateEvent) => {
-      if (cancelled) return;
-      if (ev.type === "available" || ev.type === "not-available") {
-        // While updating, ignore "available" refreshes (main may re-check in background).
-        if (apiModeRef.current === "updating") return;
-        void (async () => {
-          try {
-            const st = await getApiUpdateState();
-            showApiToastFromState(st, "event");
-          } catch {}
-        })();
-        return;
-      }
-      if (ev.type === "updating") {
-        apiProgressRef.current = { stage: "stopping", percent: 0, message: "Stopping engine…" };
-        showApiUpdatingToast();
-        return;
-      }
-      if (ev.type === "progress") {
-        apiModeRef.current = "updating";
-        apiProgressRef.current = { stage: ev.stage, percent: ev.percent, message: ev.message };
-        // Re-render the updating toast (single id, single state).
-        showApiUpdatingToast();
-        return;
-      }
-      if (ev.type === "updated") {
-        apiModeRef.current = "idle";
-        toast.custom(
-          () => {
-            const iconOk = createElement(LuCheck, { className: "h-[18px] w-[18px]" });
-            return createElement(
-              "div",
-              { className: "w-full max-w-[420px] p-4 " },
-              createElement(
+      // Always allow app update toasts.
+      void refreshAndMaybeToast("startup", { enableApi });
+
+      offApp = onAppUpdateEvent((ev: AppUpdateEvent) => {
+        if (cancelled) return;
+        if (ev.type === "available" || ev.type === "downloaded" || ev.type === "not-available") {
+          void (async () => {
+            try {
+              const st = await getAppUpdateState();
+              showAppToastFromState(st, "event");
+            } catch {}
+          })();
+          return;
+        }
+        if (ev.type === "error") {
+          toast.error("App update error", {
+            id: "app-update-toast-error",
+            description: formatErrMessage(ev.message),
+          });
+        }
+      });
+
+      if (!enableApi) return;
+
+      offApi = onApiUpdateEvent((ev: ApiUpdateEvent) => {
+        if (cancelled) return;
+        if (ev.type === "available" || ev.type === "not-available") {
+          // While updating, ignore "available" refreshes (main may re-check in background).
+          if (apiModeRef.current === "updating") return;
+          void (async () => {
+            try {
+              const st = await getApiUpdateState();
+              showApiToastFromState(st, "event");
+            } catch {}
+          })();
+          return;
+        }
+        if (ev.type === "updating") {
+          apiProgressRef.current = { stage: "stopping", percent: 0, message: "Stopping engine…" };
+          showApiUpdatingToast();
+          return;
+        }
+        if (ev.type === "progress") {
+          apiModeRef.current = "updating";
+          apiProgressRef.current = { stage: ev.stage, percent: ev.percent, message: ev.message };
+          // Re-render the updating toast (single id, single state).
+          showApiUpdatingToast();
+          return;
+        }
+        if (ev.type === "updated") {
+          apiModeRef.current = "idle";
+          toast.custom(
+            () => {
+              const iconOk = createElement(LuCheck, { className: "h-[18px] w-[18px]" });
+              return createElement(
                 "div",
-                { className: "flex items-start gap-3 " },
+                { className: "w-full max-w-[420px] p-4 " },
                 createElement(
                   "div",
-                  {
-                    className:
-                      "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-emerald-500/20 via-emerald-500/10 to-transparent p-2 text-brand-light",
-                  },
-                  iconOk,
-                ),
-                createElement(
-                  "div",
-                  { className: "min-w-0 flex-1" },
+                  { className: "flex items-start gap-3 " },
                   createElement(
                     "div",
-                    { className: "text-[12.5px] font-semibold tracking-tight text-brand-light" },
-                    "Engine updated",
+                    {
+                      className:
+                        "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-emerald-500/20 via-emerald-500/10 to-transparent p-2 text-brand-light",
+                    },
+                    iconOk,
                   ),
                   createElement(
                     "div",
-                    { className: "mt-1 text-[10.5px] leading-snug text-brand-light/70" },
-                    "The engine was updated and restarted.",
+                    { className: "min-w-0 flex-1" },
+                    createElement(
+                      "div",
+                      { className: "text-[12.5px] font-semibold tracking-tight text-brand-light" },
+                      "Engine updated",
+                    ),
+                    createElement(
+                      "div",
+                      { className: "mt-1 text-[10.5px] leading-snug text-brand-light/70" },
+                      "The engine was updated and restarted.",
+                    ),
                   ),
                 ),
-              ),
-            );
-          },
-          ({
-            id: API_UPDATE_TOAST_ID,
-            duration: 4500,
-            dismissible: true,
-            className:
-              "!p-0 !text-start !shadow-xl !border !border-white/10 !bg-linear-to-br from-slate-950 via-black to-slate-900",
-          } as any),
-        );
-        return;
-      }
-      if (ev.type === "error") {
-        apiModeRef.current = "idle";
-        toast.custom(
-          () => {
-            const iconErr = createElement(LuX, { className: "h-[18px] w-[18px]" });
-            return createElement(
-              "div",
-              { className: "w-full max-w-[420px] p-4 " },
-              createElement(
+              );
+            },
+            ({
+              id: API_UPDATE_TOAST_ID,
+              duration: 4500,
+              dismissible: true,
+              className:
+                "!p-0 !text-start !shadow-xl !border !border-white/10 !bg-linear-to-br from-slate-950 via-black to-slate-900",
+            } as any),
+          );
+          return;
+        }
+        if (ev.type === "error") {
+          apiModeRef.current = "idle";
+          toast.custom(
+            () => {
+              const iconErr = createElement(LuX, { className: "h-[18px] w-[18px]" });
+              return createElement(
                 "div",
-                { className: "flex items-start gap-3 " },
+                { className: "w-full max-w-[420px] p-4 " },
                 createElement(
                   "div",
-                  {
-                    className:
-                      "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-red-500/20 via-red-500/10 to-transparent p-2 text-brand-light",
-                  },
-                  iconErr,
-                ),
-                createElement(
-                  "div",
-                  { className: "min-w-0 flex-1" },
+                  { className: "flex items-start gap-3 " },
                   createElement(
                     "div",
-                    { className: "text-[12.5px] font-semibold tracking-tight text-brand-light" },
-                    "Engine update error",
+                    {
+                      className:
+                        "mt-0.5 shrink-0 rounded-md border border-white/10 bg-linear-to-br from-red-500/20 via-red-500/10 to-transparent p-2 text-brand-light",
+                    },
+                    iconErr,
                   ),
                   createElement(
                     "div",
-                    { className: "mt-1 text-[10.5px] leading-snug text-brand-light/70" },
-                    formatErrMessage(ev.message),
+                    { className: "min-w-0 flex-1" },
+                    createElement(
+                      "div",
+                      { className: "text-[12.5px] font-semibold tracking-tight text-brand-light" },
+                      "Engine update error",
+                    ),
+                    createElement(
+                      "div",
+                      { className: "mt-1 text-[10.5px] leading-snug text-brand-light/70" },
+                      formatErrMessage(ev.message),
+                    ),
                   ),
                 ),
-              ),
-            );
-          },
-          ({
-            id: API_UPDATE_TOAST_ID,
-            duration: 6000,
-            dismissible: true,
-            className:
-              "!p-0 !text-start !shadow-xl !border !border-white/10 !bg-linear-to-br from-slate-950 via-black to-slate-900",
-          } as any),
-        );
-      }
-    });
+              );
+            },
+            ({
+              id: API_UPDATE_TOAST_ID,
+              duration: 6000,
+              dismissible: true,
+              className:
+                "!p-0 !text-start !shadow-xl !border !border-white/10 !bg-linear-to-br from-slate-950 via-black to-slate-900",
+            } as any),
+          );
+        }
+      });
+    })();
 
     const reminderId = setInterval(() => {
       if (cancelled) return;
-      void refreshAndMaybeToast("reminder");
+      void (async () => {
+        const enableApi = await shouldEnableApiUpdateToasts();
+        if (cancelled) return;
+        void refreshAndMaybeToast("reminder", { enableApi });
+      })();
     }, REMIND_EVERY_MS);
 
     return () => {
       cancelled = true;
       try {
-        offApp();
+        offApp?.();
       } catch {}
       try {
-        offApi();
+        offApi?.();
       } catch {}
       for (const t of timers) clearTimeout(t);
       timers.clear();
