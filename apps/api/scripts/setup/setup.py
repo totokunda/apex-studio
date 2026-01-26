@@ -12,34 +12,57 @@ from typing import Any, Dict, Optional, Tuple
 from pathlib import Path
 
 
-def _update_persisted_config(updates: dict, config_store_path: Path) -> None:
-    import json
-
+def _ensure_src_importable() -> None:
     """
-    Persist config-related values (paths, hf_token, etc.) so they survive backend restarts.
+    Ensure `import src` works in both repo and bundled layouts.
+
+    Repo layout:
+    - this script: `apps/api/scripts/setup/setup.py`
+    - package root: `apps/api/` (contains `src/`)
+
+    Bundled layout:
+    - installer runs this script from a bundle root that typically also contains `src/`
     """
     try:
-        data = {}
-        if config_store_path.exists():
-            try:
-                with config_store_path.open("r", encoding="utf-8") as f:
-                    existing = json.load(f)
-                    if isinstance(existing, dict):
-                        data = existing
-            except Exception:
-                data = {}
+        import src  # noqa: F401
 
-        for key, value in updates.items():
-            if value is not None:
-                data[key] = value
+        return
+    except Exception:
+        pass
 
-        config_store_path.parent.mkdir(parents=True, exist_ok=True)
-        with config_store_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        # Silently ignore persistence errors; API behavior should not depend on disk writes.
-        # For debugging, you may want to log this error.
-        print(f"Warning: failed to persist config settings: {e}")
+    candidates: list[str] = []
+
+    bundle_root = os.environ.get("APEX_BUNDLE_ROOT")
+    if bundle_root:
+        try:
+            candidates.append(str(Path(bundle_root).expanduser().resolve()))
+        except Exception:
+            candidates.append(str(bundle_root))
+
+    # `.../scripts/setup/setup.py` -> `.../apps/api`
+    try:
+        candidates.append(str(Path(__file__).resolve().parents[2]))
+    except Exception:
+        pass
+
+    for c in candidates:
+        if not c:
+            continue
+        if c not in sys.path:
+            sys.path.insert(0, c)
+        try:
+            import src  # noqa: F401
+
+            return
+        except Exception:
+            continue
+
+
+_ensure_src_importable()
+
+
+
+
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -488,6 +511,46 @@ def main(argv: Optional[list[str]] = None) -> int:
         md: Dict[str, Any] = metadata or {}
         emit("config", max(0.0, min(1.0, float(p_task))), message, md)
 
+    def _persist_config_updates_best_effort(updates: Dict[str, Any]) -> None:
+        """
+        Persist config updates so they survive backend restarts.
+
+        Prefer the canonical `_update_persisted_config` implementation used by the API.
+        If it can't be imported (e.g. packaging/path differences), fall back to a small
+        local writer that uses the same persisted JSON config store.
+        """
+        # Filter None values to match the API behavior.
+        safe_updates = {k: v for k, v in (updates or {}).items() if v is not None}
+        if not safe_updates:
+            return
+
+        try:
+            # Canonical implementation (may import FastAPI/Pydantic modules).
+            from src.api.config import _update_persisted_config as _official_update
+
+            _official_update(**safe_updates)
+            return
+        except Exception:
+            pass
+
+        # Fallback: best-effort update of the persisted config store JSON.
+        try:
+            from src.utils.config_store import (
+                config_store_lock,
+                read_json_dict,
+                write_json_dict_atomic,
+            )
+
+            p = Path(str(config_store_path))
+            with config_store_lock(p):
+                data = read_json_dict(p)
+                for k, v in safe_updates.items():
+                    data[k] = v
+                write_json_dict_atomic(p, data, indent=2)
+        except Exception as e:
+            # Keep parity with the API helper: do not fail setup on persistence errors.
+            print(f"Warning: failed to persist config settings: {e}", flush=True)
+
     def mask_progress_cb(
         current: int, total: Optional[int], label: Optional[str] = None
     ):
@@ -628,8 +691,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "Enabling image render steps…",
                     {"key": "ENABLE_IMAGE_RENDER_STEP"},
                 )
-                _update_persisted_config(
-                    {"ENABLE_IMAGE_RENDER_STEP": "true"}, config_store_path
+                _persist_config_updates_best_effort(
+                    {"ENABLE_IMAGE_RENDER_STEP": "true"}
                 )
             if args.enable_video_render_steps:
                 emit_config_step(
@@ -637,8 +700,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "Enabling video render steps…",
                     {"key": "ENABLE_VIDEO_RENDER_STEP"},
                 )
-                _update_persisted_config(
-                    {"ENABLE_VIDEO_RENDER_STEP": "true"}, config_store_path
+                _persist_config_updates_best_effort(
+                    {"ENABLE_VIDEO_RENDER_STEP": "true"}
                 )
             completed["config"] = 1.0
             send_update(
