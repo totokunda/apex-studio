@@ -1,20 +1,19 @@
 api_version: apex/v1
 kind: Model
 metadata:
-  id: zimage-turbo
+  id: zimage
   model: zimage
-  name: ZImage Turbo
+  name: ZImage
   version: 1.0.0
-  description: ZImage Turbo is a 6B parameter model for text-to-image for efficient
-    image generation.
+  description: ZImage is a 6B parameter model for text-to-image for efficient image
+    generation.
   tags:
   - zimage
   - turbo
-  - zimage-turbo
   - t2i
   author: Tongy-MAI
   license: Apache-2.0
-  demo_path: models/zimage-turbo.png
+  demo_path: models/zimage.png
   categories:
   - text-to-image
 spec:
@@ -71,59 +70,28 @@ spec:
       resource_requirements:
         min_vram_gb: 12
         recommended_vram_gb: 16
-   
+      file_size: 8045015784
+
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: Tongyi-MAI/Z-Image-Turbo
     tokenizer_kwargs:
       subfolder: tokenizer
   - type: transformer
-    label: ZImage Turbo Transformer
+    label: ZImage Transformer
     base: zimage.base
     model_path:
-    - path: Tongyi-MAI/Z-Image-Turbo/transformer
+    - path: Tongyi-MAI/Z-Image/transformer
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 12309923341
       resource_requirements:
-        min_vram_gb: 23
-        recommended_vram_gb: 31
-      file_size: 24619740330
-    - path: T5B/Z-Image-Turbo-FP8/z-image-turbo-fp8-e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
-      type: safetensors
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-      file_size: 6154974440
-    - path: jayn7/Z-Image-Turbo-GGUF/z_image_turbo-Q8_0.gguf
-      variant: GGUF_Q8_0
-      precision: q8_0
-      type: gguf
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-      file_size: 7224707136
-    - path: jayn7/Z-Image-Turbo-GGUF/z_image_turbo-Q6_K.gguf
-      variant: GGUF_Q6_K
-      precision: q6_k
-      type: gguf
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-      file_size: 5910505536
-    - path: jayn7/Z-Image-Turbo-GGUF/z_image_turbo-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-      file_size: 4658972736
+        min_vram_gb: 14
+        recommended_vram_gb: 19
   defaults:
     run:
-      num_inference_steps: 9
-      guidance_scale: 0.0
+      num_inference_steps: 50
+      guidance_scale: 4.0
       return_latents: false
       attention_kwargs: {}
   ui:
@@ -136,6 +104,14 @@ spec:
         flow: column
         rows:
         - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
     - name: size
       label: Size
       collapsible: true
@@ -164,6 +140,14 @@ spec:
       type: text
       panel: prompting
       required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: The negative prompt for text-to-image generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: prompting
+      default: ' '
+      required: false
     - id: resolution
       label: Resolution
       description: Select the resolution of the output image
@@ -244,7 +228,7 @@ spec:
       value_type: integer
       panel: sampling
       required: false
-      default: 9
+      default: 50
       min: 1
       max: 100
       step: 1
