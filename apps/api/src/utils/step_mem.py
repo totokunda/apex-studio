@@ -281,7 +281,7 @@ def step_mem(
     log_tensors: bool = False,
     tensors_top_k: int = 15,
     tensors_min_bytes: int = 0,
-    tensors_device: Optional[str] = None,
+    tensors_device: Optional[str] = "cuda",
     stream: Optional[IO[str]] = None,
     cuda_only: bool = True,
 ) -> None:
