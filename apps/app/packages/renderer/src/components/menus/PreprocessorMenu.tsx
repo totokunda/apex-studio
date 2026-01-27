@@ -22,6 +22,7 @@ import {
 } from "react-icons/lu";
 import { TbWorldDownload } from "react-icons/tb";
 import { cn } from "@/lib/utils";
+import { ensureExternalAssetUrl } from "@/lib/externalAssets";
 import {
   PREPROCESSOR_QUERY_KEY,
   PREPROCESSORS_LIST_QUERY_KEY,
@@ -74,6 +75,28 @@ export const PreprocessorItem: React.FC<{
   const mappedJobId = getSourceToJobId(preprocessor.id) || null;
   const jobId = mappedJobId || localJobId;
   const jobUpdates = getJobUpdates(jobId ?? undefined) ?? [];
+
+  const defaultProcessorUrl = useMemo(
+    () => `/preprocessors/${preprocessor.id}.png`,
+    [preprocessor.id],
+  );
+  const [processorUrl, setProcessorUrl] = useState<string>(defaultProcessorUrl);
+  const triedProcessorAssetFallbackRef = useRef(false);
+
+  useEffect(() => {
+    triedProcessorAssetFallbackRef.current = false;
+    setProcessorUrl(defaultProcessorUrl);
+  }, [defaultProcessorUrl]);
+
+  const ensureProcessorImageFallback = async () => {
+    if (triedProcessorAssetFallbackRef.current) return;
+    triedProcessorAssetFallbackRef.current = true;
+    const url = await ensureExternalAssetUrl({
+      folder: "preprocessors",
+      filePath: `${preprocessor.id}.png`,
+    });
+    if (url) setProcessorUrl(url);
+  };
 
   const { mutateAsync: startDownload } = useStartUnifiedDownloadMutation({
     onSuccess(data, variables) {
@@ -256,12 +279,15 @@ export const PreprocessorItem: React.FC<{
               )}
             />
             <img
-              src={`/preprocessors/${preprocessor.id}.png`}
+              src={processorUrl}
               alt={preprocessor.name}
               className={cn(" h-48 aspect-square object-cover rounded-t-md", {
                 "h-48": !isDragging,
                 "h-44": isDragging,
               })}
+              onError={() => {
+                void ensureProcessorImageFallback();
+              }}
             />
           </div>
           <div className="w-full bg-brand p-2 rounded-b-md">
@@ -302,7 +328,7 @@ export const PreprocessorItem: React.FC<{
           data={{
             ...preprocessor,
             type: "preprocessor",
-            processor_url: `/preprocessors/${preprocessor.id}.png`,
+            processor_url: processorUrl,
           }}
           id={preprocessor.id}
           disabled={addDisabled || !isDownloaded}
@@ -325,12 +351,15 @@ export const PreprocessorItem: React.FC<{
                 )}
               />
               <img
-                src={`/preprocessors/${preprocessor.id}.png`}
+                src={processorUrl}
                 alt={preprocessor.name}
                 className={cn(" h-48 aspect-square object-cover rounded-t-md", {
                   "h-48": !isDragging,
                   "h-44": isDragging,
                 })}
+                onError={() => {
+                  void ensureProcessorImageFallback();
+                }}
               />
             </div>
             <div className="w-full bg-brand p-2 rounded-b-md">
