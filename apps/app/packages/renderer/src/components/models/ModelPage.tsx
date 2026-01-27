@@ -14,6 +14,7 @@ import { refreshManifest, useManifestQuery } from "@/lib/manifest/queries";
 import ComponentCard, { LoraCard } from "./ComponentCard2";
 import { useQueryClient } from "@tanstack/react-query";
 import { getOffloadDefaultsForManifest } from "@app/preload";
+import FallbackAsset from "../common/FallbackAsset";
 
 interface ModelPageProps {
   manifestId: string;
@@ -104,7 +105,8 @@ const ModelPage: React.FC<ModelPageProps> = ({
           <div className="mt-4 flex flex-row gap-x-4 w-full">
             <div className="rounded-md overflow-hidden flex items-center w-44 aspect-square justify-start shrink-0">
               {isVideoDemo ? (
-                <video
+                <FallbackAsset
+                  type="video"
                   src={manifest.demo_path}
                   className="h-full w-full object-cover rounded-md"
                   autoPlay
@@ -113,7 +115,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
                   playsInline
                 />
               ) : (
-                <img
+                <FallbackAsset
                   src={manifest.metadata.demo_path}
                   alt={manifest.metadata.name}
                   className="h-full object-cover rounded-md"
