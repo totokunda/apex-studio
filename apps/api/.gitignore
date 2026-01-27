@@ -151,3 +151,4 @@ test_lynx_wan_21_14b
 test_vace_wan_22_fun_a14b/*
 Procfile
 apps/api/Procfile
+train/*
