@@ -58,10 +58,6 @@ export async function initApp(initConfig: AppInitConfig) {
     .init(
       createWindowManagerModule({
         initConfig,
-        // main/preload are built even in dev-mode, so import.meta.env.DEV isn't reliable here.
-        // Auto-open devtools only for dev-server renderer URLs.
-        // You can still force it for debugging by setting APEX_OPEN_DEVTOOLS=1.
-        openDevTools: isDev || process.env.APEX_OPEN_DEVTOOLS === "1",
       }),
     )
     .init(terminateAppOnLastWindowClose())
