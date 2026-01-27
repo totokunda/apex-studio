@@ -34,6 +34,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
 import { useStartUnifiedDownloadMutation } from "@/lib/download/mutations";
 import { fetchRayJobs, type RayJobStatus } from "@/lib/jobs/api";
+import FallbackAsset from "../common/FallbackAsset";
 
 export const PreprocessorItem: React.FC<{
   preprocessor: Preprocessor;
@@ -255,7 +256,7 @@ export const PreprocessorItem: React.FC<{
                 },
               )}
             />
-            <img
+            <FallbackAsset
               src={`/preprocessors/${preprocessor.id}.png`}
               alt={preprocessor.name}
               className={cn(" h-48 aspect-square object-cover rounded-t-md", {
@@ -324,7 +325,7 @@ export const PreprocessorItem: React.FC<{
                   },
                 )}
               />
-              <img
+              <FallbackAsset
                 src={`/preprocessors/${preprocessor.id}.png`}
                 alt={preprocessor.name}
                 className={cn(" h-48 aspect-square object-cover rounded-t-md", {
