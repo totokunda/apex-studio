@@ -35,7 +35,22 @@ from typing import (
     Union,
 )
 
-import torch
+try:
+    import torch
+except OSError as e:
+    # Common on Windows when system commit (RAM + pagefile) is exhausted while
+    # loading CUDA DLLs (e.g. cufft64_11.dll). This is frequently surfaced as:
+    #   OSError: [WinError 1455] The paging file is too small ...
+    if getattr(e, "winerror", None) == 1455:
+        raise RuntimeError(
+            "PyTorch failed to load CUDA libraries due to low Windows virtual memory "
+            "(WinError 1455: paging file too small). "
+            "Fix: increase your system pagefile size (System-managed is fine, or set a "
+            "larger custom size on an SSD), then restart the app. "
+            "Mitigations: avoid starting many Ray workers/actors at once; keep only one "
+            "GPU EngineRunner per GPU; close other GPU-heavy apps."
+        ) from e
+    raise
 
 try:
     import psutil

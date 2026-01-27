@@ -158,6 +158,20 @@ async def free_memory(request: FreeMemoryRequest) -> Dict[str, Any]:
         except Exception:
             actor_killed = False
     except Exception as e:
+        msg = str(e)
+        lower = msg.lower()
+        if "winerror 1455" in lower or "paging file is too small" in lower:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Failed to free memory because PyTorch failed to load CUDA libraries "
+                    "due to low Windows virtual memory (WinError 1455: paging file too small). "
+                    "Fix: increase your Windows pagefile size (System managed is fine, or set a "
+                    "larger custom size on an SSD) and restart the app. "
+                    "Mitigations: avoid starting many Ray workers/actors at once; keep only one "
+                    "GPU EngineRunner per GPU."
+                ),
+            )
         raise HTTPException(status_code=500, detail=f"Failed to free memory: {e}")
 
     # Best-effort: cancel any active processor jobs and stop mask tracking streams.
