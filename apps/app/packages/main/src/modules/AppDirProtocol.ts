@@ -291,9 +291,141 @@ class AppDirProtocol implements AppModule {
   private rendererDistPath: string | null = null;
   // Cache in-flight remote file saves so we don't write the same file multiple times concurrently.
   private inflightRemoteFileSaves: Map<string, Promise<void>> = new Map();
+  // Cache in-flight external asset downloads (Hugging Face) by destination path.
+  private inflightExternalAssetDownloads: Map<string, Promise<string>> = new Map();
+
+  private static readonly HF_DATASET_BASE =
+    "https://huggingface.co/datasets/totoku/apex-studio-images/resolve/main";
 
   private stripLeadingSlashes(p: string): string {
     return (p || "").replace(/^\/+/, "");
+  }
+
+  private sanitizeRelativeAssetPath(rel: string): string | null {
+    // Accept a relative path like "foo.png" or "sub/dir/foo.mp4".
+    // Reject absolute paths, drive-letter paths, and traversal.
+    const raw = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!raw) return null;
+    const norm = path.posix.normalize(raw);
+    if (!norm || norm === "." || norm.startsWith("../") || norm === "..") return null;
+    if (path.posix.isAbsolute(norm)) return null;
+    // Extra guard: normalize can produce "../x" without the prefix check catching odd inputs.
+    if (norm.split("/").includes("..")) return null;
+    return norm;
+  }
+
+  private encodeUrlPathSegments(relPosix: string): string {
+    // Encode each segment independently so slashes remain slashes.
+    return relPosix
+      .split("/")
+      .filter((s) => s.length > 0)
+      .map((s) => encodeURIComponent(s))
+      .join("/");
+  }
+
+  private getExternalAssetAbsPath(folder: "models" | "preprocessors", relPosix: string): string | null {
+    const userDataDir = this.electronApp?.getPath("userData") ?? "";
+    if (!userDataDir) return null;
+    // Keep under userData so we can serve via app://user-data and persist across runs.
+    return path.join(userDataDir, "external-assets", folder, relPosix);
+  }
+
+  private async downloadExternalAssetToPath(options: {
+    folder: "models" | "preprocessors";
+    relPosix: string;
+    absPath: string;
+  }): Promise<string> {
+    const { folder, relPosix, absPath } = options;
+    const partPath = `${absPath}.part`;
+
+    await fsp.mkdir(path.dirname(absPath), { recursive: true });
+
+    const url = `${AppDirProtocol.HF_DATASET_BASE}/${folder}/${this.encodeUrlPathSegments(relPosix)}`;
+    const response = await fetch(url, { method: "GET" });
+    if (!response.ok || !response.body) {
+      throw new Error(
+        `Failed to download external asset (${response.status}): ${url}`,
+      );
+    }
+
+    // Best-effort completeness check when Content-Length is present.
+    const expectedBytes = parseExpectedBodyBytes(response.headers as any, response.status);
+
+    const ws = fs.createWriteStream(partPath, { flags: "w" });
+    ws.on("error", () => {
+      // handled by pipeline rejection
+    });
+
+    let written = 0;
+    const counter = new Transform({
+      transform(chunk: any, _enc, cb) {
+        try {
+          if (chunk) {
+            if (Buffer.isBuffer(chunk)) written += chunk.byteLength;
+            else if (chunk instanceof Uint8Array) written += chunk.byteLength;
+            else if (typeof chunk?.length === "number") written += Number(chunk.length) || 0;
+          }
+        } catch {
+          // ignore
+        }
+        cb(null, chunk);
+      },
+    });
+
+    try {
+      const body = Readable.fromWeb(response.body as any);
+      await pipeline(body, counter, ws);
+
+      if (expectedBytes !== null && written !== expectedBytes) {
+        throw new Error(
+          `Incomplete download for ${absPath}: expected ${expectedBytes} bytes, got ${written}`,
+        );
+      }
+
+      // Windows rename fails if destination exists.
+      try {
+        await fsp.rm(absPath, { force: true });
+      } catch {
+        // ignore
+      }
+      await fsp.rename(partPath, absPath);
+      return absPath;
+    } catch (e) {
+      try {
+        ws.destroy();
+      } catch {
+        // ignore
+      }
+      try {
+        await fsp.rm(partPath, { force: true });
+      } catch {
+        // ignore
+      }
+      throw e;
+    }
+  }
+
+  private async ensureExternalAsset(request: {
+    folder: "models" | "preprocessors";
+    filePath: string;
+  }): Promise<string> {
+    const folder = request.folder;
+    const relPosix = this.sanitizeRelativeAssetPath(request.filePath);
+    if (!relPosix) throw new Error("Invalid external asset path");
+
+    const absPath = this.getExternalAssetAbsPath(folder, relPosix);
+    if (!absPath) throw new Error("User data directory unavailable");
+
+    if (await exists(absPath)) return absPath;
+
+    const existing = this.inflightExternalAssetDownloads.get(absPath);
+    if (existing) return await existing;
+
+    const p = this.downloadExternalAssetToPath({ folder, relPosix, absPath }).finally(() => {
+      this.inflightExternalAssetDownloads.delete(absPath);
+    });
+    this.inflightExternalAssetDownloads.set(absPath, p);
+    return await p;
   }
 
   /**
@@ -1074,6 +1206,18 @@ class AppDirProtocol implements AppModule {
 
       return filePath;
     });
+
+    ipcMain.handle(
+      "external-assets:ensure",
+      async (_event, req: { folder: "models" | "preprocessors"; filePath: string }) => {
+        try {
+          const absPath = await this.ensureExternalAsset(req);
+          return { ok: true, absPath };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
+    );
     
 
     protocol.handle("app", async (request) => {
