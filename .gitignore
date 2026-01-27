@@ -218,3 +218,5 @@ apps/api/pytorch
 apps/api/vision
 apps/api/.venv*
 apps/api/dist*
+train/*
+apps/train/*
