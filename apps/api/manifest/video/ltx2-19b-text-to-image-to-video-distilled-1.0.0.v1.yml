@@ -579,9 +579,3 @@ spec:
       min: 1
       max: 512
       step: 1
-  loras:
-  - scale: 0.9
-    name: Image to Video
-    label: Image to Video
-    verified: true
-    source: https://huggingface.co/MachineDelusions/LTX-2_Image2Video_Adapter_LoRa/resolve/main/LTX-2-Image2Vid-Adapter.safetensors
