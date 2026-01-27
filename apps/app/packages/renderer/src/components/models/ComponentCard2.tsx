@@ -382,17 +382,6 @@ const SchedulerConfigPathItem: React.FC<{
     }
   }, [isDownloading, jobId]);
 
-  // If we never receive WS updates for this job, revert to idle so the UI can't get stuck.
-  useEffect(() => {
-    if (!jobId) return;
-    if (!startDownloading) return;
-    if ((jobUpdates?.length ?? 0) > 0) return;
-    const t = window.setTimeout(() => {
-      setStartDownloading(false);
-    }, STARTUP_TIMEOUT_MS);
-    return () => window.clearTimeout(t);
-  }, [jobId, jobUpdates?.length, startDownloading]);
-
   const { mutate: startDownload } = useStartUnifiedDownloadMutation({
     onSuccess(data, variables) {
       addSourceToJobId(variables.source, data.job_id);

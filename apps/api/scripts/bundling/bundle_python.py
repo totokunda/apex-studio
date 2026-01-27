@@ -20,10 +20,12 @@ import platform
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Optional, Set, List, Tuple
@@ -1467,6 +1469,11 @@ class PythonBundler:
         except Exception:
             pass
 
+        # Windows: ship VC++ runtime DLLs app-locally so torch can import without any
+        # system vc_redist install/upgrade (avoids UAC prompts for end users).
+        if self.platform_name == "win32":
+            self._bundle_windows_vc_runtime(dest_dir=Path(py_path).resolve().parent)
+
         return runtime_dir
 
     def _cleanup_bundle_tree(self, root: Path) -> tuple[int, int]:
@@ -1526,6 +1533,184 @@ class PythonBundler:
             pass
 
         return removed_files, removed_dirs
+
+    def _bundle_windows_vc_runtime(self, *, dest_dir: Path) -> None:
+        """
+        Windows: ship the VC++ runtime DLLs *app-locally* alongside the shipped Python.
+
+        Why:
+          - End users may have an old 14.x VC runtime installed (registry Installed=1),
+            which can still fail to load modern PyTorch DLLs (c10.dll dependencies).
+          - Installing/upgrading vc_redist requires elevation/UAC; app-local DLLs avoid that.
+
+        IMPORTANT:
+          - To keep builds reproducible, we do NOT copy DLLs from the build machine's System32.
+            Instead, we extract the official redist payload:
+              vc_redist.x64.exe /layout -> MSI payloads
+              msiexec /a (administrative install) -> extracted DLLs
+
+        This step only runs when the bundler itself is running on Windows.
+        """
+        if self.platform_name != "win32":
+            return
+
+        dest_dir = Path(dest_dir).resolve()
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Only supported when bundling on a Windows host.
+        if os.name != "nt":
+            print(
+                f"Skipping VC++ runtime extraction: host os.name={os.name!r} (platform_name={self.platform_name})"
+            )
+            return
+
+        # If the required DLLs are already present, don't re-extract.
+        required = ["vcruntime140_1.dll", "msvcp140.dll", "vcruntime140.dll"]
+        if all((dest_dir / name).exists() for name in required):
+            print(f"VC++ runtime DLLs already present next to python.exe: {dest_dir}")
+            return
+
+        VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+
+        # Prefer a repo-local copy (downloaded by apps/app/scripts/ensure-vc-redist.js),
+        # but fall back to downloading into the bundler output cache.
+        repo_root = self.project_root.parent.parent
+        candidate = repo_root / "apps" / "app" / "buildResources" / "vc_redist.x64.exe"
+        vc_redist_dir = (self.output_dir / "_vc-redist").resolve()
+        vc_redist_dir.mkdir(parents=True, exist_ok=True)
+        vc_redist_exe = (vc_redist_dir / "vc_redist.x64.exe").resolve()
+
+        try:
+            if candidate.exists() and candidate.stat().st_size > 1024 * 1024:
+                vc_redist_exe = candidate.resolve()
+            else:
+                # Download into the bundler output cache (local builds).
+                if not vc_redist_exe.exists() or vc_redist_exe.stat().st_size < 1024 * 1024:
+                    print(f"Downloading vc_redist.x64.exe for extraction: {VC_REDIST_URL}")
+                    self._http_download(VC_REDIST_URL, vc_redist_exe)
+        except Exception as e:
+            raise RuntimeError(f"Failed to obtain vc_redist.x64.exe: {e}") from e
+
+        layout_dir = (vc_redist_dir / "layout").resolve()
+        msi_out_dir = (vc_redist_dir / "msi").resolve()
+
+        # Clean previous extractions to avoid stale/corrupt outputs.
+        try:
+            if layout_dir.exists():
+                shutil.rmtree(layout_dir)
+            if msi_out_dir.exists():
+                shutil.rmtree(msi_out_dir)
+        except Exception:
+            pass
+
+        ps1 = (vc_redist_dir / "extract-vc-runtime.ps1").resolve()
+        ps1.write_text(
+            r"""param(
+  [Parameter(Mandatory=$true)][string]$VcRedist,
+  [Parameter(Mandatory=$true)][string]$LayoutDir,
+  [Parameter(Mandatory=$true)][string]$MsiOutDir,
+  [Parameter(Mandatory=$true)][string]$DestDir
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+New-Item -ItemType Directory -Force -Path $LayoutDir, $MsiOutDir, $DestDir | Out-Null
+
+Write-Host "Extracting vc_redist payload (layout)..." -ForegroundColor Cyan
+#
+# IMPORTANT: Some vc_redist builds are "web bootstrappers" where `/layout` downloads
+# payloads from the network. In offline environments this can "succeed" but produce
+# no MSI payloads. We handle this by:
+#  1) running layout and checking it produced MSIs,
+#  2) falling back to ProgramData\Package Cache (if present),
+#  3) final fallback: copy DLLs from System32 (non-reproducible, but unblocks bundling).
+#
+$layoutProc = Start-Process -FilePath $VcRedist -Wait -PassThru -ArgumentList @("/layout", $LayoutDir, "/quiet")
+if ($layoutProc.ExitCode -ne 0) {
+  throw "vc_redist /layout failed: exitcode=$($layoutProc.ExitCode) vc_redist=$VcRedist layout=$LayoutDir"
+}
+
+function Find-VcMsi([string]$root, [string]$name) {
+  if (-not (Test-Path $root)) { return $null }
+  return (Get-ChildItem -Recurse -File -Path $root -Filter $name -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1)
+}
+
+$msiMin = Find-VcMsi $LayoutDir "vc_runtimeMinimum_x64.msi"
+$msiAdd = Find-VcMsi $LayoutDir "vc_runtimeAdditional_x64.msi"
+
+if (-not $msiMin -or -not $msiAdd) {
+  $cacheRoot = Join-Path $env:ProgramData "Package Cache"
+  Write-Host "VC MSIs not found under layout dir; searching Package Cache: $cacheRoot" -ForegroundColor Yellow
+  if (-not $msiMin) { $msiMin = Find-VcMsi $cacheRoot "vc_runtimeMinimum_x64.msi" }
+  if (-not $msiAdd) { $msiAdd = Find-VcMsi $cacheRoot "vc_runtimeAdditional_x64.msi" }
+}
+
+Write-Host "Extracting MSI payloads (administrative install)..." -ForegroundColor Cyan
+if ($msiMin -and $msiAdd) {
+  Start-Process msiexec -Wait -ArgumentList "/a `"$($msiMin.FullName)`" /qn TARGETDIR=`"$MsiOutDir`""
+  Start-Process msiexec -Wait -ArgumentList "/a `"$($msiAdd.FullName)`" /qn TARGETDIR=`"$MsiOutDir`""
+
+  # The admin install layout is not consistent across redist versions.
+  # Instead of assuming `Windows\System32`, locate a known DLL and use its directory.
+  $probe = Get-ChildItem -Recurse -File -Path $MsiOutDir -Filter "vcruntime140_1.dll" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+  if (-not $probe) {
+    throw "Could not find vcruntime140_1.dll under MSI extraction dir: $MsiOutDir"
+  }
+  $sys32 = Split-Path -Parent $probe.FullName
+
+  Write-Host "Copying VC runtime DLLs into bundle..." -ForegroundColor Cyan
+  Copy-Item -Force -Path (Join-Path $sys32 "vcruntime140*.dll") -Destination $DestDir
+  Copy-Item -Force -Path (Join-Path $sys32 "msvcp140*.dll") -Destination $DestDir
+  Copy-Item -Force -Path (Join-Path $sys32 "concrt140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path (Join-Path $sys32 "vcomp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path (Join-Path $sys32 "vcamp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+} else {
+  Write-Host "Could not locate VC runtime MSIs after layout; falling back to system DLLs (System32)." -ForegroundColor Yellow
+  $sys32 = Join-Path $env:WINDIR "System32"
+  if (-not (Test-Path $sys32)) { throw "System32 not found: $sys32" }
+  Copy-Item -Force -Path (Join-Path $sys32 "vcruntime140*.dll") -Destination $DestDir
+  Copy-Item -Force -Path (Join-Path $sys32 "msvcp140*.dll") -Destination $DestDir
+  Copy-Item -Force -Path (Join-Path $sys32 "concrt140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path (Join-Path $sys32 "vcomp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path (Join-Path $sys32 "vcamp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+}
+
+if (-not (Test-Path (Join-Path $DestDir "vcruntime140_1.dll"))) { throw "vcruntime140_1.dll missing after extraction" }
+if (-not (Test-Path (Join-Path $DestDir "msvcp140.dll"))) { throw "msvcp140.dll missing after extraction" }
+if (-not (Test-Path (Join-Path $DestDir "vcruntime140.dll"))) { throw "vcruntime140.dll missing after extraction" }
+
+Write-Host "VC runtime DLLs bundled successfully." -ForegroundColor Green
+""",
+            encoding="utf-8",
+        )
+
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ps1),
+                "-VcRedist",
+                str(vc_redist_exe),
+                "-LayoutDir",
+                str(layout_dir),
+                "-MsiOutDir",
+                str(msi_out_dir),
+                "-DestDir",
+                str(dest_dir),
+            ],
+            check=True,
+        )
+
+        copied = sorted({p.name for p in dest_dir.glob("*.dll")})
+        print(f"Bundled VC++ runtime DLLs next to python.exe: dest={dest_dir} dlls={copied}")
 
     def _remove_obsolete_typing_backport(self, py_path: Path) -> None:
         """
@@ -2478,6 +2663,49 @@ if __name__ == "__main__":
         except Exception:
             pass
 
+    def _safe_rmtree(self, path: Path, *, retries: int = 12, base_delay_s: float = 0.5) -> None:
+        """
+        Best-effort recursive delete that is robust on Windows.
+
+        Windows can transiently lock files (AV scanning, explorer previews, loaded .pyd/.dll),
+        which makes `shutil.rmtree` fail with PermissionError. We retry a few times and also
+        clear the read-only bit when possible.
+        """
+        path = Path(path).resolve()
+        if not path.exists():
+            return
+
+        def _onerror(func, p, exc_info):
+            # Try to clear read-only and retry once.
+            try:
+                os.chmod(p, stat.S_IWRITE)
+                func(p)
+                return
+            except Exception:
+                # Re-raise original exception to trigger retry loop below.
+                raise exc_info[1]
+
+        last_err: Exception | None = None
+        for i in range(max(1, int(retries))):
+            try:
+                shutil.rmtree(path, onerror=_onerror)
+                return
+            except PermissionError as e:
+                last_err = e
+                if os.name != "nt":
+                    raise
+                time.sleep(base_delay_s * (i + 1))
+            except OSError as e:
+                # On Windows, EPERM/EBUSY can surface as generic OSError.
+                last_err = e
+                if os.name != "nt":
+                    raise
+                time.sleep(base_delay_s * (i + 1))
+
+        raise PermissionError(
+            f"Failed to delete {path} after {retries} attempts; a file is likely locked. Last error: {last_err}"
+        )
+
     def bundle(self) -> Path:
         """Run the full bundling process (full env bundle + code-only update bundle)."""
         print(f"Bundling Python API for platform: {self.platform_name}")
@@ -2485,7 +2713,7 @@ if __name__ == "__main__":
         # Create output directory
         # if path exists remove it
         if self.output_dir.exists():
-            shutil.rmtree(self.output_dir)
+            self._safe_rmtree(self.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=False)
 
         # Detect GPU support

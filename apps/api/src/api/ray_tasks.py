@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 import ray
 import traceback
 from loguru import logger
-from src.memory_management import MemoryConfig, get_memory_manager
 from src.preprocess.aux_cache import AuxillaryCache
 import importlib
 import hashlib
@@ -16,7 +15,6 @@ import os
 import re
 import shutil
 from src.utils.save_audio_video import save_video_ovi, save_video_ltx2
-import torch
 import inspect
 import yaml
 import numpy as np
@@ -24,7 +22,6 @@ import json
 from src.utils.cache import empty_cache
 from src.utils.warm_pool import EngineWarmPool, stable_hash_dict
 from src.api.preprocessor_registry import get_preprocessor_info
-from src.engine.registry import UniversalEngine
 from src.mixins.download_mixin import DownloadMixin
 from src.utils.defaults import (
     get_components_path,
@@ -34,10 +31,6 @@ from src.utils.defaults import (
     get_cache_path,
 )
 from src.utils.config_store import read_json_dict
-from diffusers.utils import export_to_video
-from src.lora.manager import LoraManager
-from src.api.manifest import get_manifest, MANIFEST_BASE_PATH
-from src.lora.manager import LoraManager
 from src.api.manifest import get_manifest, MANIFEST_BASE_PATH
 import gc
 import ctypes
@@ -287,6 +280,22 @@ def get_engine_runner_actor(
             opts["num_cpus"] = min(1.0, float(base.get("num_cpus", 1.0)))
         except Exception:
             opts["num_cpus"] = 1.0
+
+        # Ensure Ray worker process has safer CUDA/PyTorch env defaults before torch import.
+        # This is especially helpful on Windows where low commit can raise WinError 1455
+        # while loading CUDA DLLs during worker startup.
+        try:
+            runtime_env = dict(opts.get("runtime_env") or {})
+            env_vars = dict(runtime_env.get("env_vars") or {})
+            env_vars.setdefault("CUDA_MODULE_LOADING", "LAZY")
+            env_vars.setdefault(
+                "PYTORCH_CUDA_ALLOC_CONF",
+                "expandable_segments:True,max_split_size_mb:128",
+            )
+            runtime_env["env_vars"] = env_vars
+            opts["runtime_env"] = runtime_env
+        except Exception:
+            pass
 
         actor = EngineRunner.options(name=actor_name, **opts).remote()
 
@@ -640,7 +649,22 @@ def _free_unused_modules_in_warm_pool_impl(
         requested_target = str(target or "disk").strip().lower()
         offload_type = "cpu" if requested_target == "cpu" else "discard"
 
-        manager = get_memory_manager()
+        # Lazy import to avoid importing torch/CUDA DLLs on Ray workers that don't
+        # do engine work (and to avoid actor import failures on Windows when commit
+        # is temporarily low).
+        try:
+            os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
+            from src.memory_management import get_memory_manager
+
+            manager = get_memory_manager()
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": (
+                    "Failed to initialize memory manager (torch import). "
+                    f"{type(e).__name__}: {e}"
+                ),
+            }
 
         # Only act on idle entries (never interfere with active runs).
         entries = pool.snapshot_entries()
@@ -957,6 +981,8 @@ def _aggressive_ram_cleanup(*, clear_torch_cache: bool = True) -> None:
             pass
         # Extra CUDA cleanup (beyond empty_cache) when available
         try:
+            import torch  # lazy import (avoid importing torch on every Ray worker)
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
@@ -1502,6 +1528,8 @@ def _mark_lora_verified_in_manifests(
             return None
         # Build engine once per manifest for validation
         try:
+            from src.engine.registry import UniversalEngine
+
             engine = UniversalEngine(
                 yaml_path=str(manifest_path),
                 should_download=False,
@@ -1686,8 +1714,13 @@ def download_unified(
                 # Force CPU in worker to avoid MPS/CUDA fork issues
                 os.environ["CUDA_VISIBLE_DEVICES"] = ""
                 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-                if hasattr(torch, "set_default_device"):
-                    torch.set_default_device("cpu")
+                try:
+                    import torch  # lazy import
+
+                    if hasattr(torch, "set_default_device"):
+                        torch.set_default_device("cpu")
+                except Exception:
+                    pass
 
                 send_progress(0.0, f"Starting download of preprocessor '{source}'")
                 send_progress(0.1, "Loading preprocessor module")
@@ -1731,6 +1764,7 @@ def download_unified(
         elif norm_type == "lora" and isinstance(source, str):
             try:
                 from src.preprocess.download_tracker import DownloadProgressTracker
+                from src.lora.manager import LoraManager
 
                 lora_manager = LoraManager()
 
@@ -3100,6 +3134,8 @@ def _run_engine_from_manifest_impl(
                     fps = fps_for_video or 16
                     result_path = str(job_dir / f"{filename_prefix}.mp4")
 
+                    from diffusers.utils import export_to_video
+
                     export_to_video(
                         output_obj,
                         result_path,
@@ -3620,6 +3656,8 @@ def run_frame_interpolation(
         final_out_path = str(job_dir / "result.mp4")
 
         fps_to_write = int(max(1, round(target_fps)))
+        from diffusers.utils import export_to_video
+
         export_to_video(frames, video_only_path, fps=fps_to_write, quality=8.0)
 
         # Post-pass: generate a seek/editor-friendly MP4 before we mux original audio.
