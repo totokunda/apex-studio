@@ -1555,6 +1555,14 @@ async function getPreviewPath(
   return targetPath;
 }
 
+async function resolveAssetPath(p: string): Promise<string | null> {
+  try {
+    return await ipcRenderer.invoke("appdir:resolve-path", p);
+  } catch {
+    return null;
+  }
+}
+
 export {
   ensurePreviewDir,
   cleanupOldPreviews,
@@ -1570,6 +1578,7 @@ export {
   exportVideoAbort,
   savePreviewVideoFromFrames,
   getPreviewPath,
+  resolveAssetPath,
 };
 
 

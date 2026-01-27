@@ -17,7 +17,7 @@ metadata:
   - extension
   author: Wan AI
   license: Apache-2.0
-  demo_path: models/vace-expand-anything.mov
+  demo_path: models/vace-expand-anything.mp4
   categories:
   - inpaint
 spec:

@@ -47,6 +47,7 @@ import {
 } from "@/lib/manifest/queries";
 import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
 import { getOffloadDefaultsForManifest } from "@app/preload";
+import FallbackAsset from "../common/FallbackAsset";
 
 export const ModelItem: React.FC<{
   manifest: ManifestDocument;
@@ -199,7 +200,8 @@ export const ModelItem: React.FC<{
         )}
       >
         {isVideoDemo ? (
-          <video
+          <FallbackAsset
+            type="video"
             ref={videoRef}
             src={demoPath}
             poster={posterPath}
@@ -212,7 +214,7 @@ export const ModelItem: React.FC<{
             onMouseLeave={stopDemo}
           />
         ) : (
-          <img
+          <FallbackAsset
             src={demoPath}
             alt={manifest.metadata?.name}
             className="h-full w-full object-cover rounded-t-md"
