@@ -20,10 +20,12 @@ import platform
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Optional, Set, List, Tuple
@@ -1616,26 +1618,67 @@ $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path $LayoutDir, $MsiOutDir, $DestDir | Out-Null
 
 Write-Host "Extracting vc_redist payload (layout)..." -ForegroundColor Cyan
-& $VcRedist /layout $LayoutDir /quiet | Out-Null
+#
+# IMPORTANT: Some vc_redist builds are "web bootstrappers" where `/layout` downloads
+# payloads from the network. In offline environments this can "succeed" but produce
+# no MSI payloads. We handle this by:
+#  1) running layout and checking it produced MSIs,
+#  2) falling back to ProgramData\Package Cache (if present),
+#  3) final fallback: copy DLLs from System32 (non-reproducible, but unblocks bundling).
+#
+$layoutProc = Start-Process -FilePath $VcRedist -Wait -PassThru -ArgumentList @("/layout", $LayoutDir, "/quiet")
+if ($layoutProc.ExitCode -ne 0) {
+  throw "vc_redist /layout failed: exitcode=$($layoutProc.ExitCode) vc_redist=$VcRedist layout=$LayoutDir"
+}
 
-$msiMin = Get-ChildItem -Recurse -File -Path $LayoutDir -Filter "vc_runtimeMinimum_x64.msi" | Select-Object -First 1
-$msiAdd = Get-ChildItem -Recurse -File -Path $LayoutDir -Filter "vc_runtimeAdditional_x64.msi" | Select-Object -First 1
-if (-not $msiMin) { throw "Could not find vc_runtimeMinimum_x64.msi under layout dir: $LayoutDir" }
-if (-not $msiAdd) { throw "Could not find vc_runtimeAdditional_x64.msi under layout dir: $LayoutDir" }
+function Find-VcMsi([string]$root, [string]$name) {
+  if (-not (Test-Path $root)) { return $null }
+  return (Get-ChildItem -Recurse -File -Path $root -Filter $name -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1)
+}
+
+$msiMin = Find-VcMsi $LayoutDir "vc_runtimeMinimum_x64.msi"
+$msiAdd = Find-VcMsi $LayoutDir "vc_runtimeAdditional_x64.msi"
+
+if (-not $msiMin -or -not $msiAdd) {
+  $cacheRoot = Join-Path $env:ProgramData "Package Cache"
+  Write-Host "VC MSIs not found under layout dir; searching Package Cache: $cacheRoot" -ForegroundColor Yellow
+  if (-not $msiMin) { $msiMin = Find-VcMsi $cacheRoot "vc_runtimeMinimum_x64.msi" }
+  if (-not $msiAdd) { $msiAdd = Find-VcMsi $cacheRoot "vc_runtimeAdditional_x64.msi" }
+}
 
 Write-Host "Extracting MSI payloads (administrative install)..." -ForegroundColor Cyan
-Start-Process msiexec -Wait -ArgumentList "/a `"$($msiMin.FullName)`" /qn TARGETDIR=`"$MsiOutDir`""
-Start-Process msiexec -Wait -ArgumentList "/a `"$($msiAdd.FullName)`" /qn TARGETDIR=`"$MsiOutDir`""
+if ($msiMin -and $msiAdd) {
+  Start-Process msiexec -Wait -ArgumentList "/a `"$($msiMin.FullName)`" /qn TARGETDIR=`"$MsiOutDir`""
+  Start-Process msiexec -Wait -ArgumentList "/a `"$($msiAdd.FullName)`" /qn TARGETDIR=`"$MsiOutDir`""
 
-$sys32 = Join-Path $MsiOutDir "Windows\System32"
-if (-not (Test-Path $sys32)) { throw "Expected extracted System32 folder not found: $sys32" }
+  # The admin install layout is not consistent across redist versions.
+  # Instead of assuming `Windows\System32`, locate a known DLL and use its directory.
+  $probe = Get-ChildItem -Recurse -File -Path $MsiOutDir -Filter "vcruntime140_1.dll" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+  if (-not $probe) {
+    throw "Could not find vcruntime140_1.dll under MSI extraction dir: $MsiOutDir"
+  }
+  $sys32 = Split-Path -Parent $probe.FullName
 
-Write-Host "Copying VC runtime DLLs into bundle..." -ForegroundColor Cyan
-Copy-Item -Force -Path (Join-Path $sys32 "vcruntime140*.dll") -Destination $DestDir
-Copy-Item -Force -Path (Join-Path $sys32 "msvcp140*.dll") -Destination $DestDir
-Copy-Item -Force -Path (Join-Path $sys32 "concrt140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
-Copy-Item -Force -Path (Join-Path $sys32 "vcomp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
-Copy-Item -Force -Path (Join-Path $sys32 "vcamp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Write-Host "Copying VC runtime DLLs into bundle..." -ForegroundColor Cyan
+  Copy-Item -Force -Path (Join-Path $sys32 "vcruntime140*.dll") -Destination $DestDir
+  Copy-Item -Force -Path (Join-Path $sys32 "msvcp140*.dll") -Destination $DestDir
+  Copy-Item -Force -Path (Join-Path $sys32 "concrt140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path (Join-Path $sys32 "vcomp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path (Join-Path $sys32 "vcamp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+} else {
+  Write-Host "Could not locate VC runtime MSIs after layout; falling back to system DLLs (System32)." -ForegroundColor Yellow
+  $sys32 = Join-Path $env:WINDIR "System32"
+  if (-not (Test-Path $sys32)) { throw "System32 not found: $sys32" }
+  Copy-Item -Force -Path (Join-Path $sys32 "vcruntime140*.dll") -Destination $DestDir
+  Copy-Item -Force -Path (Join-Path $sys32 "msvcp140*.dll") -Destination $DestDir
+  Copy-Item -Force -Path (Join-Path $sys32 "concrt140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path (Join-Path $sys32 "vcomp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path (Join-Path $sys32 "vcamp140.dll") -Destination $DestDir -ErrorAction SilentlyContinue
+}
 
 if (-not (Test-Path (Join-Path $DestDir "vcruntime140_1.dll"))) { throw "vcruntime140_1.dll missing after extraction" }
 if (-not (Test-Path (Join-Path $DestDir "msvcp140.dll"))) { throw "msvcp140.dll missing after extraction" }
@@ -2620,6 +2663,49 @@ if __name__ == "__main__":
         except Exception:
             pass
 
+    def _safe_rmtree(self, path: Path, *, retries: int = 12, base_delay_s: float = 0.5) -> None:
+        """
+        Best-effort recursive delete that is robust on Windows.
+
+        Windows can transiently lock files (AV scanning, explorer previews, loaded .pyd/.dll),
+        which makes `shutil.rmtree` fail with PermissionError. We retry a few times and also
+        clear the read-only bit when possible.
+        """
+        path = Path(path).resolve()
+        if not path.exists():
+            return
+
+        def _onerror(func, p, exc_info):
+            # Try to clear read-only and retry once.
+            try:
+                os.chmod(p, stat.S_IWRITE)
+                func(p)
+                return
+            except Exception:
+                # Re-raise original exception to trigger retry loop below.
+                raise exc_info[1]
+
+        last_err: Exception | None = None
+        for i in range(max(1, int(retries))):
+            try:
+                shutil.rmtree(path, onerror=_onerror)
+                return
+            except PermissionError as e:
+                last_err = e
+                if os.name != "nt":
+                    raise
+                time.sleep(base_delay_s * (i + 1))
+            except OSError as e:
+                # On Windows, EPERM/EBUSY can surface as generic OSError.
+                last_err = e
+                if os.name != "nt":
+                    raise
+                time.sleep(base_delay_s * (i + 1))
+
+        raise PermissionError(
+            f"Failed to delete {path} after {retries} attempts; a file is likely locked. Last error: {last_err}"
+        )
+
     def bundle(self) -> Path:
         """Run the full bundling process (full env bundle + code-only update bundle)."""
         print(f"Bundling Python API for platform: {self.platform_name}")
@@ -2627,7 +2713,7 @@ if __name__ == "__main__":
         # Create output directory
         # if path exists remove it
         if self.output_dir.exists():
-            shutil.rmtree(self.output_dir)
+            self._safe_rmtree(self.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=False)
 
         # Detect GPU support
