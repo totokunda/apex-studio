@@ -1,5 +1,5 @@
 import { useManifestStore } from "@/lib/manifest/store";
-import React, { useLayoutEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { LuChevronLeft, LuPlus, LuRefreshCw } from "react-icons/lu";
 import { ScrollArea } from "../ui/scroll-area";
 import { useControlsStore } from "@/lib/control";
@@ -14,7 +14,11 @@ import { refreshManifest, useManifestQuery } from "@/lib/manifest/queries";
 import ComponentCard, { LoraCard } from "./ComponentCard2";
 import { useQueryClient } from "@tanstack/react-query";
 import { getOffloadDefaultsForManifest } from "@app/preload";
-import FallbackAsset from "../common/FallbackAsset";
+import {
+  ensureExternalAssetUrl,
+  getLastPathSegment,
+  inferExternalFolderFromPath,
+} from "@/lib/externalAssets";
 
 interface ModelPageProps {
   manifestId: string;
@@ -33,6 +37,29 @@ const ModelPage: React.FC<ModelPageProps> = ({
   const [isRefreshingManifest, setIsRefreshingManifest] = React.useState(false);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   if (!manifest) return null;
+
+  const demoPath = manifest.metadata?.demo_path || manifest.demo_path;
+
+  const [resolvedDemoPath, setResolvedDemoPath] = useState<string | undefined>(
+    demoPath,
+  );
+  const triedDemoFallbackRef = useRef(false);
+
+  useEffect(() => {
+    triedDemoFallbackRef.current = false;
+    setResolvedDemoPath(demoPath);
+  }, [demoPath]);
+
+  const ensureDemoFallback = async () => {
+    if (triedDemoFallbackRef.current) return;
+    triedDemoFallbackRef.current = true;
+    if (!demoPath) return;
+    const folder = inferExternalFolderFromPath(demoPath);
+    const seg = getLastPathSegment(demoPath);
+    if (!seg) return;
+    const url = await ensureExternalAssetUrl({ folder, filePath: seg });
+    if (url) setResolvedDemoPath(url);
+  };
 
   
 
@@ -63,7 +90,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
   }, [manifestId, scrollCache, scrollKey]);
 
   const isVideoDemo = React.useMemo(() => {
-    const value = (manifest.metadata?.demo_path || "").toLowerCase();
+    const value = (demoPath || "").toLowerCase();
     try {
       const url = new URL(value);
       const pathname = url.pathname;
@@ -79,7 +106,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
         value.endsWith(".m3u8")
       );
     }
-  }, [manifest.metadata?.demo_path]);
+  }, [demoPath]);
 
   const components = manifest?.spec?.components || [];
 
@@ -105,20 +132,25 @@ const ModelPage: React.FC<ModelPageProps> = ({
           <div className="mt-4 flex flex-row gap-x-4 w-full">
             <div className="rounded-md overflow-hidden flex items-center w-44 aspect-square justify-start shrink-0">
               {isVideoDemo ? (
-                <FallbackAsset
-                  type="video"
-                  src={manifest.demo_path}
+                <video
+                  src={resolvedDemoPath}
                   className="h-full w-full object-cover rounded-md"
                   autoPlay
                   muted
                   loop
                   playsInline
+                  onError={() => {
+                    void ensureDemoFallback();
+                  }}
                 />
               ) : (
-                <FallbackAsset
-                  src={manifest.metadata.demo_path}
+                <img
+                  src={resolvedDemoPath}
                   alt={manifest.metadata.name}
                   className="h-full object-cover rounded-md"
+                  onError={() => {
+                    void ensureDemoFallback();
+                  }}
                 />
               )}
             </div>

@@ -51,6 +51,9 @@ export * from "./media/previews.js";
 // Explicit re-export to ensure the virtual browser shim includes this new API.
 export { exportVideoTranscodeWithFfmpeg } from "./media/previews.js";
 
+// External (non-bundled) UI assets (downloaded on-demand)
+export * from "./externalAssets.js";
+
 // Configuration/system settings
 export * from "./config.js";
 

@@ -27,6 +27,11 @@ import { TbWorldDownload } from "react-icons/tb";
 import Draggable from "../dnd/Draggable";
 import { useManifestStore } from "@/lib/manifest/store";
 import { extractAllDownloadablePaths } from "@/lib/manifest/api";
+import {
+  ensureExternalAssetUrl,
+  getLastPathSegment,
+  inferExternalFolderFromPath,
+} from "@/lib/externalAssets";
 
 import ModelPage from "../models/ModelPage";
 // check
@@ -47,7 +52,6 @@ import {
 } from "@/lib/manifest/queries";
 import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
 import { getOffloadDefaultsForManifest } from "@app/preload";
-import FallbackAsset from "../common/FallbackAsset";
 
 export const ModelItem: React.FC<{
   manifest: ManifestDocument;
@@ -103,6 +107,54 @@ export const ModelItem: React.FC<{
       return replaceExt(base) + search + hash;
     }
   }, [demoPath]);
+
+  const [resolvedDemoPath, setResolvedDemoPath] = useState<string | undefined>(
+    demoPath,
+  );
+  const [resolvedPosterPath, setResolvedPosterPath] = useState<
+    string | undefined
+  >(posterPath);
+  const triedDemoFallbackRef = useRef(false);
+
+  useEffect(() => {
+    triedDemoFallbackRef.current = false;
+    setResolvedDemoPath(demoPath);
+    setResolvedPosterPath(posterPath);
+  }, [demoPath, posterPath]);
+
+  const ensureDemoFallback = async () => {
+    if (triedDemoFallbackRef.current) return;
+    triedDemoFallbackRef.current = true;
+    if (!demoPath) return;
+
+    const folder = inferExternalFolderFromPath(demoPath);
+    const demoSeg = getLastPathSegment(demoPath);
+    const posterSeg =
+      isVideoDemo && posterPath ? getLastPathSegment(posterPath) : null;
+
+    // For video previews, prioritize the poster (fast) so UI updates quickly,
+    // while the (potentially large) video downloads in the background.
+    const posterPromise = posterSeg
+      ? ensureExternalAssetUrl({ folder, filePath: posterSeg })
+      : Promise.resolve<string | null>(null);
+    const demoPromise = demoSeg
+      ? ensureExternalAssetUrl({ folder, filePath: demoSeg })
+      : Promise.resolve<string | null>(null);
+
+    try {
+      const posterUrl = await posterPromise;
+      if (posterUrl) setResolvedPosterPath(posterUrl);
+    } catch {
+      // ignore
+    }
+
+    try {
+      const demoUrl = await demoPromise;
+      if (demoUrl) setResolvedDemoPath(demoUrl);
+    } catch {
+      // ignore
+    }
+  };
 
   const playDemo = () => {
     const v = videoRef.current;
@@ -200,24 +252,42 @@ export const ModelItem: React.FC<{
         )}
       >
         {isVideoDemo ? (
-          <FallbackAsset
-            type="video"
-            ref={videoRef}
-            src={demoPath}
-            poster={posterPath}
-            className="h-full w-full object-cover rounded-t-md"
-            preload="none"
-            muted
-            loop
-            playsInline
-            onMouseEnter={playDemo}
-            onMouseLeave={stopDemo}
-          />
+          <div className="relative h-full w-full">
+            {resolvedPosterPath ? (
+              <img
+                src={resolvedPosterPath}
+                alt={manifest.metadata?.name}
+                className="absolute inset-0 h-full w-full object-cover rounded-t-md"
+                onError={() => {
+                  void ensureDemoFallback();
+                }}
+              />
+            ) : null}
+            <video
+              key={`${resolvedDemoPath ?? ""}|${resolvedPosterPath ?? ""}`}
+              ref={videoRef}
+              src={resolvedDemoPath}
+              poster={resolvedPosterPath}
+              className="absolute inset-0 h-full w-full object-cover rounded-t-md"
+              preload="none"
+              muted
+              loop
+              playsInline
+              onMouseEnter={playDemo}
+              onMouseLeave={stopDemo}
+              onError={() => {
+                void ensureDemoFallback();
+              }}
+            />
+          </div>
         ) : (
-          <FallbackAsset
-            src={demoPath}
+          <img
+            src={resolvedDemoPath}
             alt={manifest.metadata?.name}
             className="h-full w-full object-cover rounded-t-md"
+            onError={() => {
+              void ensureDemoFallback();
+            }}
           />
         )}
       </div>
