@@ -17,6 +17,12 @@ os.environ.setdefault("ABSL_FLAGS_symbolize_stacktrace", "0")
 os.environ.setdefault("GLOG_minloglevel", "3")  # Only log fatal errors (3 = FATAL, 2 = ERROR)
 os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
 
+# Reduce peak CUDA init pressure in spawned Ray workers (helps avoid Windows
+# WinError 1455 "paging file too small" during torch CUDA DLL/module loading).
+os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
+# Safer allocator defaults (no-op on non-CUDA builds).
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:128")
+
 # Ray init is not thread-safe. We must prevent concurrent init *and* provide a way for
 # other threads to wait until init is fully finished (ray.is_initialized() can become
 # True before the core worker is ready).
