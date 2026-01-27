@@ -92,4 +92,3 @@ wsproto==1.2.0
 xfuser==0.4.5; sys_platform != "darwin" or platform_machine != "x86_64"
 yacs==0.1.8
 yapf==0.40.2
-pillow-avif-plugin==1.5.3
