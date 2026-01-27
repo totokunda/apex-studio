@@ -15,20 +15,9 @@ import importlib.machinery
 import threading
 from typing import Any
 
-# Add CUDNN to PATH on Windows for DLL discovery (e.g. for ONNX Runtime / PyTorch)
-if sys.platform == "win32":
-    _cudnn_path = r"C:\Program Files\NVIDIA\CUDNN\v9.18\bin\12.9\x64"
-    if os.path.exists(_cudnn_path):
-        os.environ["PATH"] = _cudnn_path + os.pathsep + os.environ.get("PATH", "")
-        if hasattr(os, "add_dll_directory"):
-            try:
-                os.add_dll_directory(_cudnn_path)
-            except Exception:
-                pass
-
 # Mitigate CUDA allocator fragmentation across long-lived processes.
 # Keep user overrides intact.
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 
 def _patch_torch_cuda_queries(torch_mod: Any) -> None:
