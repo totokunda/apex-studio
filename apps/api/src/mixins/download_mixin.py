@@ -665,6 +665,7 @@ class DownloadMixin:
                     filename=file_label,
                     # ensure resume across different signed URLs
                     dest_path=destination_file_path,
+                    expected_size=int(blob.size) if blob.size else None,
                 )
 
                 # Update aggregated progress after file completes
@@ -898,6 +899,7 @@ class DownloadMixin:
                     progress_callback=_agg_progress,
                     filename=os.path.basename(file_path),
                     dest_path=file_path,
+                    expected_size=int(blob.size) if blob.size else None,
                 )
                 # Update aggregate counter: prefer reported blob size, fallback to actual file size
                 try:
@@ -1063,6 +1065,13 @@ class DownloadMixin:
                         )
                         head.raise_for_status()
                         signed_url = head.url
+                        expected_size_for_file: Optional[int] = None
+                        try:
+                            content_length = head.headers.get("content-length")
+                            if content_length:
+                                expected_size_for_file = int(content_length)
+                        except Exception:
+                            expected_size_for_file = None
                         # Download directly to deterministic path with resume support
                         os.makedirs(os.path.dirname(deterministic_path), exist_ok=True)
 
@@ -1077,6 +1086,7 @@ class DownloadMixin:
                                     session=sess,
                                     filename=file_name,
                                     dest_path=deterministic_path,
+                                    expected_size=expected_size_for_file,
                                 )
 
                                 # Verify file
@@ -1438,6 +1448,7 @@ class DownloadMixin:
                                             session=session,
                                             filename=filename,
                                             dest_path=dest_file,
+                                            expected_size=expected_size,
                                         )
 
                                         # Verification
@@ -1716,6 +1727,7 @@ class DownloadMixin:
         max_chunk_size: int = 16 * 1024 * 1024,  # 16MB
         dest_path: Optional[str] = None,
         stable_id: Optional[str] = None,
+        expected_size: Optional[int] = None,
     ):
         """Downloads a single file from a URL with resume support.
 
@@ -1952,6 +1964,29 @@ class DownloadMixin:
                 except Exception:
                     is_empty = False
 
+                # If caller supplied an expected size, enforce it even for existing files.
+                # This prevents us from "skipping" a truncated/corrupt artifact.
+                try:
+                    if expected_size is not None and os.path.getsize(file_path) != int(
+                        expected_size
+                    ):
+                        self.logger.warning(
+                            f"Existing file {file_path} size mismatch; expected {expected_size} bytes, "
+                            f"got {os.path.getsize(file_path)} bytes. Deleting and re-downloading."
+                        )
+                        try:
+                            os.remove(file_path)
+                        except FileNotFoundError:
+                            pass
+                        try:
+                            if os.path.exists(part_path):
+                                os.remove(part_path)
+                        except Exception:
+                            pass
+                        is_empty = True  # force re-download path
+                except Exception:
+                    pass
+
                 if (
                     is_empty
                     or _looks_like_html_file(file_path)
@@ -1982,11 +2017,59 @@ class DownloadMixin:
             # Prepare directory
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
+            rust_fast_path_enabled = (
+                _rs_download_from_url is not None
+                and _bool_env("APEX_USE_RUST_DOWNLOAD", True)
+            )
+
+            # Best-effort probe for expected size for validation (especially for Rust fast-path).
+            # If caller supplies expected_size, we trust that; otherwise try HEAD Content-Length.
+            probed_remote_size: Optional[int] = None
+            if expected_size is None and rust_fast_path_enabled:
+                try:
+                    requester = session if session is not None else requests
+                    ratelimit_max_retries = int(
+                        os.environ.get("APEX_DOWNLOAD_RATELIMIT_MAX_RETRIES", "20")
+                    )
+                    rl_attempts = 0
+                    while True:
+                        head_resp = requester.head(
+                            url,
+                            timeout=request_timeout,
+                            verify=self._requests_verify(),
+                            headers=base_headers,
+                            allow_redirects=True,
+                        )
+                        if head_resp.status_code == 429:
+                            if (
+                                ratelimit_max_retries == 0
+                                or rl_attempts >= ratelimit_max_retries
+                            ):
+                                break
+                            info = _parse_ratelimit_headers(head_resp.headers)
+                            if info is not None:
+                                time.sleep(max(0, int(info.reset_in_seconds)))
+                                rl_attempts += 1
+                                continue
+                            secs = _parse_retry_after_seconds(head_resp.headers)
+                            if secs is not None:
+                                time.sleep(max(0, int(secs)))
+                                rl_attempts += 1
+                                continue
+                        break
+                    if getattr(head_resp, "ok", False):
+                        try:
+                            probed_remote_size = (
+                                int(head_resp.headers.get("content-length", "0")) or None
+                            )
+                        except Exception:
+                            probed_remote_size = None
+                except Exception:
+                    probed_remote_size = None
+
             # Prefer Rust implementation when available (can significantly reduce Python overhead).
             # Can be disabled via APEX_USE_RUST_DOWNLOAD=0
-            if _rs_download_from_url is not None and _bool_env(
-                "APEX_USE_RUST_DOWNLOAD", True
-            ):
+            if rust_fast_path_enabled:
                 # Merge base headers with session headers/cookies (best-effort).
                 headers_for_rust = dict(base_headers)
                 try:
@@ -2036,6 +2119,28 @@ class DownloadMixin:
                         callback_min_interval_secs=float(callback_interval),
                         callback_min_bytes=int(callback_min_bytes),
                     )
+                    # Strict size validation for Rust fast-path when we have an expected byte count.
+                    expected_total = (
+                        int(expected_size)
+                        if expected_size is not None
+                        else (int(probed_remote_size) if probed_remote_size else None)
+                    )
+                    if expected_total is not None:
+                        actual_total = None
+                        try:
+                            actual_total = os.path.getsize(file_path)
+                        except Exception:
+                            actual_total = None
+                        if actual_total is None or int(actual_total) != int(expected_total):
+                            try:
+                                # Remove invalid artifact so retries don't keep "succeeding" with a bad file.
+                                if os.path.exists(file_path):
+                                    os.remove(file_path)
+                            except Exception:
+                                pass
+                            raise RuntimeError(
+                                f"Invalid download size for {log_name} (rust): got {actual_total} bytes, expected {expected_total} bytes"
+                            )
                     self.logger.info(
                         f"Successfully downloaded {log_name} to {file_path} (rust)"
                     )
@@ -2110,6 +2215,46 @@ class DownloadMixin:
                 except OSError:
                     resume_size = 0
 
+            # If we know the expected total size, and the partial file is already larger,
+            # the partial is corrupt (or the expected size is wrong). Restart cleanly.
+            try:
+                if expected_size is not None and resume_size > int(expected_size):
+                    try:
+                        self.logger.warning(
+                            f"Partial file {part_path} is larger than expected ({resume_size} > {expected_size}); restarting download from scratch."
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        os.remove(part_path)
+                    except Exception:
+                        pass
+                    resume_size = 0
+            except Exception:
+                pass
+
+            # If we have an explicit expected size and the partial already matches it,
+            # finalize without doing any network requests.
+            try:
+                if (
+                    expected_size is not None
+                    and resume_size
+                    and resume_size == int(expected_size)
+                ):
+                    os.replace(part_path, file_path)
+                    self.logger.info(
+                        f"Finalized existing partial file to {file_path} (matched expected size)"
+                    )
+                    if progress_callback:
+                        progress_callback(
+                            int(expected_size),
+                            int(expected_size),
+                            os.path.basename(file_path),
+                        )
+                    return file_path
+            except Exception:
+                pass
+
             # Probe server for size/accept-ranges (best-effort)
             remote_size = None
             accept_ranges = False
@@ -2170,7 +2315,12 @@ class DownloadMixin:
                 self.logger.warning(f"Failed to get content length from {url}: {e}")
 
             # If partial already equals remote size, finalize without downloading
-            if resume_size and remote_size and resume_size >= remote_size:
+            if (
+                resume_size
+                and remote_size
+                and resume_size == remote_size
+                and (expected_size is None or resume_size == int(expected_size))
+            ):
                 try:
                     os.replace(part_path, file_path)
                     self.logger.info(
@@ -2184,6 +2334,20 @@ class DownloadMixin:
                 except Exception:
                     # If finalize fails, continue with resume flow
                     pass
+            elif resume_size and remote_size and resume_size > remote_size:
+                # Partial larger than remote expected size -> corrupt partial, restart cleanly.
+                try:
+                    self.logger.warning(
+                        f"Partial file {part_path} is larger than remote size ({resume_size} > {remote_size}); restarting download from scratch."
+                    )
+                except Exception:
+                    pass
+                try:
+                    if os.path.exists(part_path):
+                        os.remove(part_path)
+                except Exception:
+                    pass
+                resume_size = 0
 
             # Build headers; attempt Range resume if we have partial bytes
             headers = dict(base_headers)
@@ -2254,7 +2418,11 @@ class DownloadMixin:
                     and response.status_code == 200
                     and "Range" in headers
                 ):
-                    if remote_size and resume_size >= remote_size:
+                    if (
+                        remote_size
+                        and resume_size == remote_size
+                        and (expected_size is None or resume_size == int(expected_size))
+                    ):
                         try:
                             os.replace(part_path, file_path)
                             self.logger.info(
@@ -2269,6 +2437,14 @@ class DownloadMixin:
                             return file_path
                         except Exception:
                             pass
+                    elif remote_size and resume_size > remote_size:
+                        # Partial larger than remote expected size -> corrupt partial; restart cleanly.
+                        try:
+                            if os.path.exists(part_path):
+                                os.remove(part_path)
+                        except Exception:
+                            pass
+                        resume_size = 0
                     # Server does not support resume; restart download from scratch
                     self.logger.warning(
                         "Server did not honor Range header; restarting download from scratch."
@@ -2283,19 +2459,26 @@ class DownloadMixin:
                 response.raise_for_status()
 
                 # Determine total size for progress when possible
-                total_size = remote_size
+                total_size: Optional[int] = int(expected_size) if expected_size is not None else remote_size
                 content_range = response.headers.get("content-range")
                 if content_range:
                     # Format: bytes start-end/total
                     try:
-                        total_size = int(content_range.split("/")[-1])
+                        resp_total = int(content_range.split("/")[-1])
+                        if expected_size is None:
+                            total_size = resp_total
                     except Exception:
                         pass
                 if total_size is None:
                     try:
                         cl = int(response.headers.get("content-length", "0"))
-                        total_size = (
+                        computed_total = (
                             cl + resume_size if cl and resume_size else (cl or None)
+                        )
+                        total_size = (
+                            int(expected_size)
+                            if expected_size is not None
+                            else computed_total
                         )
                     except Exception:
                         total_size = None
@@ -2308,6 +2491,11 @@ class DownloadMixin:
 
                 mode = "ab" if resume_size > 0 else "wb"
                 downloaded_so_far = resume_size
+                expected_total_size: Optional[int] = None
+                try:
+                    expected_total_size = int(expected_size) if expected_size is not None else (int(total_size) if total_size is not None else None)
+                except Exception:
+                    expected_total_size = None
                 with (
                     open(part_path, mode) as out,
                     tqdm(
@@ -2339,6 +2527,13 @@ class DownloadMixin:
                             chunk_len = len(chunk)
                             bar.update(chunk_len)
                             downloaded_so_far += chunk_len
+                            if (
+                                expected_total_size is not None
+                                and downloaded_so_far > expected_total_size
+                            ):
+                                raise RuntimeError(
+                                    f"Download exceeded expected size for {log_name}: got {downloaded_so_far} bytes, expected {expected_total_size} bytes"
+                                )
                             if progress_callback:
                                 progress_callback(
                                     downloaded_so_far,
@@ -2370,6 +2565,13 @@ class DownloadMixin:
                                     chunk_len = len(chunk)
                                     bar.update(chunk_len)
                                     downloaded_so_far += chunk_len
+                                    if (
+                                        expected_total_size is not None
+                                        and downloaded_so_far > expected_total_size
+                                    ):
+                                        raise RuntimeError(
+                                            f"Download exceeded expected size for {log_name}: got {downloaded_so_far} bytes, expected {expected_total_size} bytes"
+                                        )
                                     if progress_callback:
                                         progress_callback(
                                             downloaded_so_far,
@@ -2383,6 +2585,13 @@ class DownloadMixin:
                             chunk_len = len(data)
                             bar.update(chunk_len)
                             downloaded_so_far += chunk_len
+                            if (
+                                expected_total_size is not None
+                                and downloaded_so_far > expected_total_size
+                            ):
+                                raise RuntimeError(
+                                    f"Download exceeded expected size for {log_name}: got {downloaded_so_far} bytes, expected {expected_total_size} bytes"
+                                )
                             if progress_callback:
                                 progress_callback(
                                     downloaded_so_far,
@@ -2409,18 +2618,46 @@ class DownloadMixin:
             # If the stream ended early without raising, avoid finalizing a corrupt file.
             # This can happen when a proxy/CDN closes the connection and urllib3 treats it
             # as EOF. Tenacity will retry, and we will resume from the `.part` size.
-            expected_size = None
+            expected_final_size: Optional[int] = None
             try:
-                expected_size = int(total_size) if total_size is not None else None
+                expected_final_size = (
+                    int(expected_size)
+                    if expected_size is not None
+                    else (int(total_size) if total_size is not None else None)
+                )
             except Exception:
-                expected_size = None
-            if expected_size is not None and downloaded_so_far < expected_size:
+                expected_final_size = None
+            if expected_final_size is not None and downloaded_so_far != expected_final_size:
+                # If we overshot, discard the partial: it's not safely resumable.
+                if downloaded_so_far > expected_final_size:
+                    try:
+                        if os.path.exists(part_path):
+                            os.remove(part_path)
+                    except Exception:
+                        pass
                 raise RuntimeError(
-                    f"Incomplete download for {log_name}: got {downloaded_so_far} bytes, expected {expected_size} bytes"
+                    f"Invalid download size for {log_name}: got {downloaded_so_far} bytes, expected {expected_final_size} bytes"
                 )
 
             # Finalize the downloaded file
             os.replace(part_path, file_path)
+            # Double-check file size on disk matches expectation (if known).
+            if expected_final_size is not None:
+                try:
+                    actual_final_size = os.path.getsize(file_path)
+                except Exception:
+                    actual_final_size = None
+                if actual_final_size is None or int(actual_final_size) != int(
+                    expected_final_size
+                ):
+                    try:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"Invalid finalized file size for {log_name}: got {actual_final_size} bytes, expected {expected_final_size} bytes"
+                    )
             self.logger.info(f"Successfully downloaded {log_name} to {file_path}")
         except Exception as e:
             traceback.print_exc()
@@ -2445,6 +2682,7 @@ class DownloadMixin:
         max_chunk_size: int = 16 * 1024 * 1024,
         dest_path: Optional[str] = None,
         stable_id: Optional[str] = None,
+        expected_size: Optional[int] = None,
     ):
         """Public wrapper to download a file from a URL with optional session and filename hint."""
         return self._download_from_url(
@@ -2461,4 +2699,5 @@ class DownloadMixin:
             max_chunk_size=max_chunk_size,
             dest_path=dest_path,
             stable_id=stable_id,
+            expected_size=expected_size,
         )
