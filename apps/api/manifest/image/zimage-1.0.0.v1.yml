@@ -132,6 +132,7 @@ spec:
         rows:
         - - seed
         - - num_inference_steps
+        - - guidance_scale
     inputs:
     - id: prompt
       label: Prompt
@@ -232,4 +233,14 @@ spec:
       min: 1
       max: 100
       step: 1
+    - id: guidance_scale
+      label: Guidance Scale
+      description: The guidance scale for the generation.
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
   loras: []

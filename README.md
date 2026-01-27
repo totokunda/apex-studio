@@ -75,6 +75,7 @@ The canonical list of shipped manifests lives under `apps/api/manifest/` (this R
   - [QwenImage Edit 2511](apps/api/manifest/image/qwenimage-edit-2511-1.0.0.v1.yml)
   - [SRPO Text To Image](apps/api/manifest/image/srpo-text-to-image-1.0.0.v1.yml)
   - [Wan 2.2 A14B Text To Image](apps/api/manifest/image/wan-2.2-a14b-text-to-image-1.0.0.v1.yml)
+  - [ZImage](apps/api/manifest/image/zimage-1.0.0.v1.yml)
   - [ZImage Turbo](apps/api/manifest/image/zimage-turbo-1.0.0.v1.yml)
   - [ZImage Turbo Control](apps/api/manifest/image/zimage-turbo-control-1.0.0.v1.yml)
 
