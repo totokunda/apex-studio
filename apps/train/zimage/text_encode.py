@@ -80,6 +80,7 @@ def main() -> None:
     device = torch.device(args.device)
 
     engine = UniversalEngine(yaml_path=str(args.yaml_path), components_to_load=["text_encoder"])
+    engine.text_encoder.enable_cache = False
 
     out_dict: dict[str, torch.Tensor] = {}
     with open(captions_csv, "r", encoding="utf-8") as f:
