@@ -562,6 +562,46 @@ class AppDirProtocol implements AppModule {
     return `${savePath}.meta.json`;
   }
 
+  private getDeletedServerMediaIndexPath(options: {
+    folderUuid: string | null;
+    localType: "generations" | "processors";
+  }): string | null {
+    const userDataDir = this.electronApp?.getPath("userData") ?? "";
+    const folderUuid = options.folderUuid ?? "";
+    if (!userDataDir || !folderUuid) return null;
+    return path.join(
+      userDataDir,
+      "media",
+      folderUuid,
+      "server",
+      options.localType,
+      ".deleted.json",
+    );
+  }
+
+  private async isServerMediaFolderTombstoned(
+    serverDetails: ServerDetails,
+  ): Promise<boolean> {
+    try {
+      const folderUuid = serverDetails.folderUuid ?? null;
+      const folderName = serverDetails.folderName ?? null;
+      if (!folderUuid || !folderName) return false;
+      const indexPath = this.getDeletedServerMediaIndexPath({
+        folderUuid,
+        localType: serverDetails.localType,
+      });
+      if (!indexPath) return false;
+      const raw = await fsp.readFile(indexPath, "utf8");
+      const parsed = JSON.parse(raw) as any;
+      const deleted: unknown =
+        Array.isArray(parsed) ? parsed : (parsed?.deletedFolders as unknown);
+      if (!Array.isArray(deleted)) return false;
+      return deleted.map((s) => String(s)).includes(String(folderName));
+    } catch {
+      return false;
+    }
+  }
+
   private async hasVerifiedServerCache(savePath: string): Promise<boolean> {
     const metaPath = this.getServerMetaPath(savePath);
     try {
@@ -670,10 +710,22 @@ class AppDirProtocol implements AppModule {
 
   }
 
-  private async saveLocalFileToServer(filePath: string, savePath: string): Promise<void> {
+  private async saveLocalFileToServer(
+    filePath: string,
+    savePath: string,
+    serverDetails: ServerDetails,
+  ): Promise<void> {
     // Copy a local file into our on-disk server cache and write the
     // corresponding verified meta marker so it won't be GC'd as "invalid cache".
     if (filePath === savePath) return;
+
+    // If this server-media folder has been tombstoned (user deleted it from the UI),
+    // do not rehydrate the cache entry.
+    try {
+      if (await this.isServerMediaFolderTombstoned(serverDetails)) return;
+    } catch {
+      // ignore (best-effort)
+    }
 
     await fsp.mkdir(path.dirname(savePath), { recursive: true });
 
@@ -750,7 +802,7 @@ class AppDirProtocol implements AppModule {
         if (savePath && !(await exists(savePath))) {
           try {
             // Copy the file to the save path (+ write verified meta marker).
-            void this.saveLocalFileToServer(filePath, savePath).catch((e) => {
+            void this.saveLocalFileToServer(filePath, savePath, serverDetails).catch((e) => {
               console.error("Error saving local file to server", e);
             });
           } catch (e) {
@@ -833,6 +885,10 @@ class AppDirProtocol implements AppModule {
     if (!response.body) return;
     // Only persist full responses. Range responses must not be published as "complete" files.
     if (response.status !== 200) return;
+
+    // If this server-media folder has been tombstoned (user deleted it from the UI),
+    // do not rehydrate the cache entry.
+    if (await this.isServerMediaFolderTombstoned(serverDetails)) return;
 
     const savePath = this.getServerSavePath(serverDetails);
     if (!savePath) return;

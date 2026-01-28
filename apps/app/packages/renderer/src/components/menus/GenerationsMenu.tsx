@@ -10,7 +10,7 @@ import { LuFolder, LuArrowUpDown, LuRefreshCw } from "react-icons/lu";
 import { cn } from "@/lib/utils";
 import { MediaItem, MediaThumb } from "@/components/media/Item";
 import { getMediaInfo } from "@/lib/media/utils";
-import { deleteFile, listServerMediaPage, revealPathInFolder } from "@app/preload";
+import { deleteServerMediaItem, listServerMediaPage, revealPathInFolder } from "@app/preload";
 import { useProjectsStore } from "@/lib/projects";
 import Draggable from "@/components/dnd/Draggable";
 import { RiAiGenerate } from "react-icons/ri";
@@ -460,7 +460,8 @@ const GenerationsMenu: React.FC = () => {
         const target = item.absPath || item.assetUrl;
         if (!target) return;
 
-        await deleteFile(target);
+        // This tombstones the server-media folder so cache rehydration can't resurrect it on refresh.
+        await deleteServerMediaItem(target);
 
         // Reload from disk to stay in sync with actual engine_results contents
         queryClient.removeQueries({
@@ -782,9 +783,9 @@ const GenerationsMenu: React.FC = () => {
       <DeleteAlertDialog
         open={deleteAlertOpen}
         onOpenChange={setDeleteAlertOpen}
-        onDelete={() => {
+        onDelete={async () => {
           if (deleteItem) {
-            void handleDelete(deleteItem);
+            await handleDelete(deleteItem);
             setDeleteItem(null);
           }
         }}
