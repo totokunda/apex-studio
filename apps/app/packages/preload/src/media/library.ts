@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import { basename, extname, join, dirname } from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { ipcRenderer } from "electron";
 import { spawn } from "node:child_process";
 import { resolveFfmpegCommand } from "./ffmpegBin.js";
@@ -97,6 +97,147 @@ function decodeGeneratedMediaCursor(encoded: string): GeneratedMediaCursor | nul
     } catch {
       return null;
     }
+  }
+}
+
+type DeletedServerMediaIndex =
+  | string[]
+  | {
+      deletedFolders?: string[];
+      updatedAtMs?: number;
+      version?: string;
+    };
+
+async function loadDeletedServerMediaFolders(
+  mediaTypeRootAbs: string,
+): Promise<Set<string>> {
+  try {
+    const indexPath = join(mediaTypeRootAbs, ".deleted.json");
+    const raw = await fsp.readFile(indexPath, "utf8");
+    const parsed = JSON.parse(raw) as DeletedServerMediaIndex;
+    const arr = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as any)?.deletedFolders)
+        ? ((parsed as any).deletedFolders as string[])
+        : [];
+    return new Set(arr.map((s) => String(s)).filter((s) => s.trim().length > 0));
+  } catch {
+    return new Set();
+  }
+}
+
+async function tombstoneServerMediaFolder(
+  mediaTypeRootAbs: string,
+  folderName: string,
+): Promise<void> {
+  const safeName = String(folderName ?? "").trim();
+  if (!safeName) return;
+  const indexPath = join(mediaTypeRootAbs, ".deleted.json");
+  const tmpPath = `${indexPath}.part`;
+
+  const existing = await loadDeletedServerMediaFolders(mediaTypeRootAbs);
+  if (existing.has(safeName)) return;
+  existing.add(safeName);
+
+  const payload = {
+    version: "1",
+    updatedAtMs: Date.now(),
+    deletedFolders: Array.from(existing),
+  };
+
+  try {
+    await fsp.mkdir(mediaTypeRootAbs, { recursive: true });
+  } catch {
+    // ignore
+  }
+
+  try {
+    await fsp.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+    try {
+      await fsp.rm(indexPath, { force: true });
+    } catch {
+      // ignore
+    }
+    await fsp.rename(tmpPath, indexPath);
+  } catch {
+    try {
+      await fsp.rm(tmpPath, { force: true });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function resolveToLocalFsPath(pathOrUrl: string): Promise<string> {
+  let p = String(pathOrUrl ?? "");
+  if (!p) return "";
+  if (p.startsWith("file://")) {
+    try {
+      return fileURLToPath(p);
+    } catch {
+      return p;
+    }
+  }
+  if (p.startsWith("app://")) {
+    try {
+      const resolved = await ipcRenderer.invoke("appdir:resolve-path", p);
+      if (typeof resolved === "string" && resolved.length > 0) return resolved;
+    } catch {
+      // fall through
+    }
+  }
+  return p;
+}
+
+function parseServerMediaPath(
+  absPath: string,
+  userDataDir: string,
+): {
+  folderUuid: string | null;
+  localType: "generations" | "processors";
+  folderName: string;
+} | null {
+  try {
+    const normalized = absPath.replace(/\\/g, "/");
+    const base = userDataDir.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (!base || !normalized.startsWith(base + "/")) return null;
+
+    const rel = normalized.slice(base.length + 1);
+    const segs = rel.split("/").filter(Boolean);
+
+    // Expected:
+    //   media/<folderUuid>/server/<localType>/<folderName>/...
+    //   media/server/<localType>/<folderName>/...
+    const mediaIdx = segs.indexOf("media");
+    if (mediaIdx < 0) return null;
+
+    const afterMedia = segs[mediaIdx + 1] ?? null;
+    if (!afterMedia) return null;
+
+    let folderUuid: string | null = null;
+    let serverIdx = -1;
+    if (afterMedia === "server") {
+      folderUuid = null;
+      serverIdx = mediaIdx + 1;
+    } else {
+      folderUuid = afterMedia;
+      serverIdx = segs[mediaIdx + 2] === "server" ? mediaIdx + 2 : -1;
+    }
+    if (serverIdx < 0) return null;
+
+    const localTypeRaw = segs[serverIdx + 1] ?? "";
+    const localType =
+      localTypeRaw === "generations" || localTypeRaw === "processors"
+        ? (localTypeRaw as "generations" | "processors")
+        : null;
+    if (!localType) return null;
+
+    const folderName = segs[serverIdx + 2] ?? "";
+    if (!folderName) return null;
+
+    return { folderUuid, localType, folderName };
+  } catch {
+    return null;
   }
 }
 
@@ -367,8 +508,13 @@ async function listServerMediaPage(
 
 
     const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
-    const serverPath = folderUuid ? join(userDataDir, "media", folderUuid, "server") : join(userDataDir, "media", "server");
+    const serverPath = folderUuid
+      ? join(userDataDir, "media", folderUuid, "server")
+      : join(userDataDir, "media", "server");
     const mediaPath = join(serverPath, params.type ?? "generations");
+
+    // Honor tombstones so deleted generations/processors never reappear due to cache rehydration.
+    const deletedFolders = await loadDeletedServerMediaFolders(mediaPath);
     // get all directories in generationsPath and get the files with result in their names
     
     const candidates: Candidate[] = [];
@@ -376,6 +522,7 @@ async function listServerMediaPage(
     if (directories.length > 0) {
       for (const directory of directories) {
         if (directory.isDirectory()) {
+          if (deletedFolders.has(directory.name)) continue;
           const dirPath = join(mediaPath, directory.name);
           try {
             const files = await fsp.readdir(dirPath, { withFileTypes: true });
@@ -477,10 +624,38 @@ async function listServerMediaPage(
         : null;
 
     return { items, nextCursor };
-} catch (e) {
-  console.error("Error listing generated media page", e);
-  return { items: [], nextCursor: null };
+  } catch (e) {
+    console.error("Error listing generated media page", e);
+    return { items: [], nextCursor: null };
+  }
 }
+
+async function deleteServerMediaItem(pathOrUrl: string): Promise<void> {
+  try {
+    const userDataDir = (await getUserDataPath())?.data?.user_data ?? "";
+    const absPath = await resolveToLocalFsPath(pathOrUrl);
+    if (!absPath) return;
+
+    const parsed = parseServerMediaPath(absPath, userDataDir);
+    if (!parsed) {
+      // Fallback: delete a single file (or folder) directly.
+      await fsp.rm(absPath, { force: true, recursive: true });
+      return;
+    }
+
+    const mediaTypeRootAbs = parsed.folderUuid
+      ? join(userDataDir, "media", parsed.folderUuid, "server", parsed.localType)
+      : join(userDataDir, "media", "server", parsed.localType);
+
+    // Mark folder as deleted first so even if rm fails, the UI won't resurrect it.
+    await tombstoneServerMediaFolder(mediaTypeRootAbs, parsed.folderName);
+
+    // Remove the whole folder (not just result.*) to avoid leaving thumbnails/sidecars.
+    const folderAbs = join(mediaTypeRootAbs, parsed.folderName);
+    await fsp.rm(folderAbs, { force: true, recursive: true });
+  } catch {
+    // swallow (best-effort)
+  }
 }
 
 
@@ -743,6 +918,7 @@ export {
   listConvertedMedia,
   listServerMedia,
   listServerMediaPage,
+  deleteServerMediaItem,
   importMediaPaths,
   ensureUniqueConvertedName,
   revealMediaItemInFolder,
