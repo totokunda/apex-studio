@@ -317,7 +317,6 @@ async function handleConfigure(
     }
   }
 
-  console.log("input", input);
   state.input = input;
 
   const audioTrack = await state.input.getPrimaryAudioTrack();

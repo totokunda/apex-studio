@@ -10,7 +10,7 @@ import { LuFolder, LuArrowUpDown, LuRefreshCw } from "react-icons/lu";
 import { cn } from "@/lib/utils";
 import { MediaItem, MediaThumb } from "@/components/media/Item";
 import { getMediaInfo } from "@/lib/media/utils";
-import { deleteFile, listServerMediaPage } from "@app/preload";
+import { deleteFile, listServerMediaPage, revealPathInFolder } from "@app/preload";
 import { useProjectsStore } from "@/lib/projects";
 import Draggable from "@/components/dnd/Draggable";
 import { RiAiGenerate } from "react-icons/ri";
@@ -37,7 +37,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { BsFilter } from "react-icons/bs";
-import { TbDots, TbTrash } from "react-icons/tb";
+import { TbDots, TbFolderOpen, TbTrash } from "react-icons/tb";
 import { toast } from "sonner";
 import { IoFileTrayOutline } from "react-icons/io5";
 
@@ -248,6 +248,27 @@ const GenerationsGridRow = ({
                   align="start"
                   className="dark w-40 flex flex-col text-brand-light bg-brand-background font-poppins"
                 >
+                  <DropdownMenuItem
+                    className="py-1 rounded"
+                    onClick={() => {
+                      const target = item.absPath || item.assetUrl;
+                      if (!target) return;
+                      void revealPathInFolder(target).catch((e) => {
+                        console.error("Failed to reveal generation path", e);
+                        toast.error("Failed to open file location", {
+                          position: "bottom-right",
+                          duration: 3000,
+                          style: { width: "fit-content" },
+                        });
+                      });
+                    }}
+                  >
+                    <TbFolderOpen className="w-3.5 h-3.5" />
+                    <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
+                      Open File Location
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="py-1 rounded"
                     onClick={() => {
