@@ -20,7 +20,7 @@ The fastest and easiest way to use Apex Studio is to download the latest release
 | :--- | :--- |
 | **Windows** | [Download .exe (x64)](https://github.com/totokunda/apex-studio/releases/download/v0.1.1/apex-studio-0.1.1-win-x64-setup.exe) |
 | **macOS** | [Download .dmg (Apple Silicon)](https://github.com/totokunda/apex-studio/releases/download/v0.1.1/apex-studio-0.1.1-mac-arm64.dmg) / [Download .dmg (Intel)](https://github.com/totokunda/apex-studio/releases/download/v0.1.1/apex-studio-0.1.1-mac-x64.dmg) |
-| **Linux** | [Download .deb](https://github.com/totokunda/apex-studio/releases/download/v0.1.0/apex-studio-0.1.0-linux-amd64.deb) / [Download .AppImage](https://github.com/totokunda/apex-studio/releases/download/v0.1.0/Apex-Studio-0.1.0-x86_64.AppImage) / [Download .tar.gz](https://github.com/totokunda/apex-studio/releases/download/v0.1.0/apex-studio-0.1.0-linux-x64.tar.gz) |
+| **Linux** | [Download .deb](https://github.com/totokunda/apex-studio/releases/download/v0.1.1/apex-studio-0.1.1-linux-amd64.deb) / [Download .AppImage](https://github.com/totokunda/apex-studio/releases/download/v0.1.1/Apex-Studio-0.1.1-x86_64.AppImage) / [Download .tar.gz](https://github.com/totokunda/apex-studio/releases/download/v0.1.1/apex-studio-0.1.1-linux-x64.tar.gz) |
 
 For other versions or to see the changelog, visit our [GitHub Releases](https://github.com/totokunda/apex-studio/releases).
 
