@@ -219,4 +219,18 @@ apps/api/vision
 apps/api/.venv*
 apps/api/dist*
 train/*
+# Training workspace (keep artifacts ignored, but track zimage scripts/docs)
 apps/train/*
+!apps/train/requirements.txt
+!apps/train/zimage/
+apps/train/zimage/*
+!apps/train/zimage/*.py
+!apps/train/zimage/*.sh
+!apps/train/zimage/*.bat
+!apps/train/zimage/README.md
+!apps/train/zimage/datasets/
+apps/train/zimage/datasets/*
+!apps/train/zimage/datasets/.gitkeep
+!apps/train/zimage/training_inputs/
+apps/train/zimage/training_inputs/*
+!apps/train/zimage/training_inputs/.gitkeep
