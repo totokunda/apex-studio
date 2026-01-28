@@ -18,8 +18,7 @@ const publishTimeoutMs = (() => {
 const pythonApiBundlePath = join(process.cwd(), "python-api-bundle");
 const hasPythonBundle = existsSync(pythonApiBundlePath);
 
-// electron-builder v26 expects `mac.notarize` to be a boolean.
-// Per schema: it controls whether to DISABLE electron-builder's notarization integration.
+// electron-builder v26: `mac.notarize` enables notarization when truthy.
 // We disable notarization when we don't have the required environment variables.
 const hasMacNotarizeEnv =
   // App Store Connect API key flow
@@ -89,8 +88,8 @@ export default /** @type import('electron-builder').Configuration */
       "python-api/**/*.pyc",
       "python-api/**/__pycache__/**",
     ],
-    // `true` disables notarization; `false` enables it (when env vars are set).
-    notarize: !Boolean(hasMacNotarizeEnv),
+    // Enable notarization only when required env vars are present.
+    notarize: Boolean(hasMacNotarizeEnv),
   },
   
   dmg: {
