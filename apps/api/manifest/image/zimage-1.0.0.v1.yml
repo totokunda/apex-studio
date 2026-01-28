@@ -71,7 +71,6 @@ spec:
         min_vram_gb: 12
         recommended_vram_gb: 16
       file_size: 8045015784
-
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: Tongyi-MAI/Z-Image-Turbo
     tokenizer_kwargs:
@@ -243,4 +242,3 @@ spec:
       default: 4.0
       min: 1.0
       max: 15.0
-  loras: []
