@@ -71,7 +71,7 @@ spec:
       resource_requirements:
         min_vram_gb: 12
         recommended_vram_gb: 16
-   
+      file_size: 8044982048
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: Tongyi-MAI/Z-Image-Turbo
     tokenizer_kwargs:
@@ -80,14 +80,14 @@ spec:
     label: ZImage Turbo Transformer
     base: zimage.base
     model_path:
-    - path: Tongyi-MAI/Z-Image-Turbo/transformer
+    - path: Comfy-Org/z_image_turbo/split_files/diffusion_models/z_image_turbo_bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 12309866400
       resource_requirements:
-        min_vram_gb: 23
-        recommended_vram_gb: 31
-      file_size: 24619740330
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     - path: T5B/Z-Image-Turbo-FP8/z-image-turbo-fp8-e4m3fn.safetensors
       variant: FP8
       precision: fp8

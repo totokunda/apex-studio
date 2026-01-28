@@ -287,10 +287,13 @@ def get_engine_runner_actor(
         try:
             runtime_env = dict(opts.get("runtime_env") or {})
             env_vars = dict(runtime_env.get("env_vars") or {})
-            env_vars.setdefault("CUDA_MODULE_LOADING", "LAZY")
             env_vars.setdefault(
                 "PYTORCH_CUDA_ALLOC_CONF",
-                "expandable_segments:True,max_split_size_mb:128",
+                "expandable_segments:True",
+            )
+            env_vars.setdefault(
+                "PYTORCH_ENABLE_MPS_FALLBACK",
+                "1",
             )
             runtime_env["env_vars"] = env_vars
             opts["runtime_env"] = runtime_env
@@ -653,7 +656,6 @@ def _free_unused_modules_in_warm_pool_impl(
         # do engine work (and to avoid actor import failures on Windows when commit
         # is temporarily low).
         try:
-            os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
             from src.memory_management import get_memory_manager
 
             manager = get_memory_manager()
