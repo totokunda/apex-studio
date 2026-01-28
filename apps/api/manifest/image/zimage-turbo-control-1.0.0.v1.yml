@@ -92,7 +92,7 @@ spec:
     component: transformer
     name: zimage_turbo_fun_controlnet_union_2_0
     model_path:
-    - path: alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.0/Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors
+    - path: alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.0/Z-Image-Turbo-Fun-Controlnet-Union-2.1-2601-8steps.safetensors
       variant: default
       precision: fp16
       type: safetensors
