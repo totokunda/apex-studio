@@ -42,11 +42,6 @@ spec:
     label: Qwen Image Lightning 4 Steps
     verified: true
     source: lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
-  - scale: 0.0
-    name: Next Scene
-    label: Next Scene
-    verified: true
-    source: https://huggingface.co/lovis93/next-scene-qwen-image-lora-2509/resolve/main/next-scene_lora-v2-3000.safetensors
   components:
   - type: scheduler
     label: Scheduler
