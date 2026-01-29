@@ -29,6 +29,7 @@ import {
   LuTrash,
   LuLoader,
   LuPlus,
+  LuFolder,
 } from "react-icons/lu";
 
 import {
@@ -47,6 +48,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { refreshManifestPart } from "@/lib/manifest/queries";
 import { toast } from "sonner";
 import { TbCancel } from "react-icons/tb";
+import { pickMediaPaths } from "@app/preload";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 
@@ -133,13 +135,58 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
           Local path on this machine. Can be a file or a directory and will be
           checked before use.
         </p>
-        <input
-          type="text"
-          value={newModelPath}
-          onChange={(e) => setNewModelPath(e.target.value)}
-          className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light font-mono placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
-          placeholder="/Users/you/models/my_model.safetensors"
-        />
+        <div className="flex items-center gap-x-2">
+          <input
+            type="text"
+            value={newModelPath}
+            onChange={(e) => setNewModelPath(e.target.value)}
+            className="flex-1 bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light font-mono placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
+            placeholder="/Users/you/models/my_model.safetensors"
+          />
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const picked = await pickMediaPaths({
+                  directory: false,
+                  title: "Select model file or folder",
+                  filters: [
+                    {
+                      name: "Model Files",
+                      extensions: [
+                        "safetensors",
+                        "ckpt",
+                        "pt",
+                        "pth",
+                        "bin",
+                        "gguf",
+                        "ggml",
+                        "onnx",
+                        "tflite",
+                      ],
+                    },
+                    { name: "All Files", extensions: ["*"] },
+                  ],
+                  defaultPath:
+                    newModelPath && newModelPath.trim().length > 0
+                      ? newModelPath.trim()
+                      : undefined,
+                });
+                const selectedPath =
+                  Array.isArray(picked) && picked.length > 0 ? picked[0] : null;
+                if (selectedPath && typeof selectedPath === "string") {
+                  setNewModelPath(selectedPath);
+                }
+              } catch {
+                // Swallow errors; keep existing path untouched
+              }
+            }}
+            className="text-[10px] font-medium flex items-center justify-center gap-x-1 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[5px] px-2.5 py-1.5 transition-all"
+          >
+            <LuFolder className="w-3.5 h-3.5" />
+            <span>Browse</span>
+          </button>
+        </div>
       </div>
       <div className="flex items-center justify-end gap-x-2 pt-1">
         

@@ -202,6 +202,7 @@ export interface ExportOptions {
   }) => void;
   includeAudio?: boolean; // defaults to true
   imageFrame?: number; // for image mode
+  imageMimeType?: string; // for image mode (defaults to image/png)
   range?: { start: number; end: number }; // inclusive start, exclusive end
   encoderOptions?: FfmpegEncoderOptionsNoFilename;
   filename?: string; // for image download
@@ -232,6 +233,7 @@ export interface ExportClipOptions {
   mode: "video" | "image" | "audio";
   includeAudio?: boolean; // defaults to true
   imageFrame?: number; // for image mode
+  imageMimeType?: string; // for image mode (defaults to image/png)
   range?: { start: number; end: number }; // inclusive start, exclusive end (LOCAL to clip)
   encoderOptions?: FfmpegEncoderOptionsNoFilename;
   filename?: string; // output name hint
@@ -449,6 +451,7 @@ export async function exportSequence(
     fps,
     mode,
     imageFrame,
+    imageMimeType,
     range,
     encoderOptions,
     filename,
@@ -923,7 +926,9 @@ export async function exportSequence(
         onProgress({ currentFrame: 1, totalFrames: 1, ratio: 1 });
       }
       // Download image
-      const blob = await renderer.toBlob({ mimeType: "image/png" });
+      const blob = await renderer.toBlob({
+        mimeType: imageMimeType || "image/png",
+      });
       if (!cancelToken?.cancelled) {
         try {
           opts.onDone?.();
@@ -1125,6 +1130,7 @@ export async function exportClip(
     fps,
     mode,
     imageFrame,
+    imageMimeType,
     range,
     encoderOptions,
     filename,
@@ -1624,7 +1630,9 @@ export async function exportClip(
       if (onProgress) {
         onProgress({ currentFrame: 1, totalFrames: 1, ratio: 1 });
       }
-      const blob = await renderer.toBlob({ mimeType: "image/png" });
+      const blob = await renderer.toBlob({
+        mimeType: imageMimeType || "image/png",
+      });
       if (!cancelToken?.cancelled) {
         try {
           opts.onDone?.();

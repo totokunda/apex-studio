@@ -143,7 +143,7 @@ const NumberInput: React.FC<NumberInputProps<string>> = ({
           onKeyDown={handleKeyDown}
         />
         {
-          <div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-7 cursor-pointer rounded-r">
+          <div className="flex flex-col items-center w-6 justify-center divide-y divide-brand-light/10 bg-brand  h-7.5 cursor-pointer rounded-r">
             <button
               className="w-full h-full px-1 hover:bg-brand-light/10 transition-all duration-200 flex items-center justify-center"
               onClick={() => {
