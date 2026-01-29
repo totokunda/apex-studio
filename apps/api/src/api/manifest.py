@@ -1441,6 +1441,7 @@ def _validate_and_register_custom_model_path_sync(
     # without mutating the on-disk YAML.
     component_for_validation: Dict[str, Any] = dict(component_doc)
     component_for_validation["model_path"] = req.path
+    # check if config_path is in the component_for_validation and if
 
     engine = UniversalEngine(yaml_path=str(yaml_path), should_download=False).engine
 
