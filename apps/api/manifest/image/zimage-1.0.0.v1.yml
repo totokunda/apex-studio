@@ -242,14 +242,3 @@ spec:
       default: 4.0
       min: 1.0
       max: 15.0
-  loras:
-  - scale: 1.0
-    name: Sweeney
-    label: Sweeney
-    verified: true
-    source: https://huggingface.co/totoku/sydney_sweeney_zimage_lora/resolve/main/adapter_model.safetensors
-  - scale: 0.0
-    name: Hisoka
-    label: Hisoka
-    verified: true
-    source: /home/tosin_coverquick_co/apex-studio/apps/train/zimage/lora/hisoka_2/final/adapter_model.safetensors
