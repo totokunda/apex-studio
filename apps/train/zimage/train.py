@@ -408,7 +408,7 @@ def main() -> None:
     p.add_argument(
         "--lora_target_modules",
         type=str,
-        default="to_q,to_k,to_v,to_out.0,w1,w2,w3",
+        default="to_q,to_k,to_v,to_out.0",
         help="Comma-separated PEFT target module names",
     )
 
