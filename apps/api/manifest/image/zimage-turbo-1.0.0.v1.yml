@@ -79,6 +79,7 @@ spec:
   - type: transformer
     label: ZImage Turbo Transformer
     base: zimage.base
+    config_path: Tongyi-MAI/Z-Image-Turbo/transformer/config.json
     model_path:
     - path: Comfy-Org/z_image_turbo/split_files/diffusion_models/z_image_turbo_bf16.safetensors
       variant: default

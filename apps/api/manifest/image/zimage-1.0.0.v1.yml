@@ -9,7 +9,6 @@ metadata:
     generation.
   tags:
   - zimage
-  - turbo
   - t2i
   author: Tongy-MAI
   license: Apache-2.0
@@ -78,6 +77,7 @@ spec:
   - type: transformer
     label: ZImage Transformer
     base: zimage.base
+    config_path: Tongyi-MAI/Z-Image/transformer/config.json
     model_path:
     - path: Tongyi-MAI/Z-Image/transformer
       variant: default

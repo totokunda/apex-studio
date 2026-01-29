@@ -247,13 +247,19 @@ const LoraDownloadRow: React.FC<{
   const isWaiting = !!waitingForJob || startDownloading;
 
   return (
-    <div className="w-full bg-brand border border-brand-light/10 rounded-md px-3 py-2.5">
+    <div
+      className="w-full overflow-hidden bg-brand border border-brand-light/10 rounded-md px-3 py-2.5"
+      style={{ width: `${width + 28}px`, maxWidth: `${width + 28}px` }}
+    >
       <div className="flex items-start justify-between gap-x-3">
         <div className="min-w-0 flex-1">
           <div className="text-brand-light text-[11px] font-medium truncate break-all text-start">
             {label}
           </div>
-          <div className="text-[10px] text-brand-light/70 font-mono text-start mt-0.5">
+          <div
+            className="text-[10px] text-brand-light/70 font-mono text-start mt-0.5 truncate max-w-full"
+            title={path}
+          >
             {path}
           </div>
         </div>

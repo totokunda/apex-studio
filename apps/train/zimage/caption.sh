@@ -17,7 +17,7 @@ CAPTIONS_CSV="${CAPTIONS_CSV:-$SCRIPT_DIR/captions.csv}"
 
 CAPTION_GLOB="${CAPTION_GLOB:-*}"
 CAPTION_MODEL="${CAPTION_MODEL:-fancyfeast/llama-joycaption-beta-one-hf-llava}"
-CAPTION_PROMPT="${CAPTION_PROMPT:-Write a brief caption for this image in a formal tone.}"
+CAPTION_PROMPT="${CAPTION_PROMPT:-Write a caption for the image, where the character in the image, should be referred to as 'Hisoka'. Do not describe the character\'s appearance, just describe the scene.}"
 CAPTION_MAX_NEW_TOKENS="${CAPTION_MAX_NEW_TOKENS:-512}"
 
 "$PYTHON" "$SCRIPT_DIR/caption.py" \

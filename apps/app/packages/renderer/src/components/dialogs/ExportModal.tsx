@@ -15,7 +15,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
+import NumberInput from "@/components/properties/model/inputs/NumberInput";
 import { useClipStore } from "@/lib/clip";
 import { useControlsStore } from "@/lib/control";
 import { getMediaInfoCached } from "@/lib/media/utils";
@@ -28,6 +30,8 @@ type ResolutionOption = {
   label: string;
   value: number;
 };
+
+type ExportKind = "video" | "image";
 
 type BitrateOption = {
   label: string;
@@ -44,22 +48,38 @@ type FormatOption = {
   value: "mp4" | "mov" | "mkv" | "webm";
 };
 
+type ImageFormatOption = {
+  label: string;
+  value: "png" | "jpeg" | "webp";
+};
+
 type AudioFormatOption = {
   label: string;
   value: "wav" | "mp3";
 };
 
-export interface ExportSettings {
-  name: string;
-  path: string;
-  resolution: number;
-  bitrate: string;
-  codec: CodecOption["value"];
-  format: FormatOption["value"];
-  includeAudio: boolean;
-  audioFormat?: AudioFormatOption["value"];
-  preserveAlpha?: boolean;
-}
+export type ExportSettings =
+  | {
+      kind: "video";
+      name: string;
+      path: string;
+      resolution: number;
+      bitrate: string;
+      codec: CodecOption["value"];
+      format: FormatOption["value"];
+      includeAudio: boolean;
+      audioFormat?: AudioFormatOption["value"];
+      preserveAlpha?: boolean;
+    }
+  | {
+      kind: "image";
+      name: string;
+      path: string;
+      resolution: number;
+      imageFormat: ImageFormatOption["value"];
+      frame: number; // 0-based project frame index
+      preserveAlpha?: boolean;
+    };
 
 interface ExportModalProps {
   open: boolean;
@@ -107,6 +127,12 @@ const FORMAT_OPTIONS: FormatOption[] = [
   { label: "MKV", value: "mkv" },
 ];
 
+const IMAGE_FORMAT_OPTIONS: ImageFormatOption[] = [
+  { label: "PNG", value: "png" },
+  { label: "JPEG", value: "jpeg" },
+  { label: "WebP", value: "webp" },
+];
+
 const AUDIO_FORMAT_OPTIONS: AudioFormatOption[] = [
   { label: "WAV", value: "wav" },
   { label: "MP3", value: "mp3" },
@@ -125,6 +151,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   exportProgress = null,
   onCancelExport,
 }) => {
+  const playheadFrame = useControlsStore((s) => s.focusFrame);
+  const playheadFps = useControlsStore((s) => s.fps);
+
+  const [kind, setKind] = useState<ExportKind>("video");
   const [name, setName] = useState(defaultName);
   const [path, setPath] = useState(defaultPath);
   const [resolution, setResolution] = useState<number>(
@@ -144,7 +174,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     AUDIO_FORMAT_OPTIONS[0]?.value ?? "mp3",
   );
 
-  
+  const [imageFormat, setImageFormat] = useState<ImageFormatOption["value"]>(
+    IMAGE_FORMAT_OPTIONS[0]?.value ?? "png",
+  );
+  const [imageFrame, setImageFrame] = useState<number>(0);
 
   const [preserveAlpha, setPreserveAlpha] = useState<boolean>(false);
 
@@ -161,6 +194,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     const clamped = Math.max(0, Math.min(1, raw));
     return Math.round(clamped * 100);
   }, [exportProgress]);
+
+  const maxSelectableFrame = useMemo(() => {
+    return Math.max(0, (durationFrames ?? 1) - 1);
+  }, [durationFrames]);
+
+  const safeImageFrame = useMemo(() => {
+    const n = Number(imageFrame);
+    return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+  }, [imageFrame]);
 
   useEffect(() => {
     // Compute duration and audio presence from global stores once per open
@@ -207,6 +249,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         setDurationFrames(null);
         setDurationFps(null);
       }
+
+      // Default the image frame picker to the current playhead (clamped).
+      const maxFrame = Math.max(0, Math.max(0, totalFrames) - 1);
+      const desired = Math.max(0, Math.round(controlsState.focusFrame || 0));
+      setImageFrame(Math.min(desired, maxFrame));
     } catch {
       setHasAnyAudio(false);
       setDurationSeconds(null);
@@ -217,6 +264,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // Ensure that when preserving alpha, we pick a format/codec combo that supports transparency.
   useEffect(() => {
+    if (kind !== "video") return;
     if (!preserveAlpha) return;
 
     const formatSupportsAlpha = (f: FormatOption["value"]) =>
@@ -229,7 +277,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       setFormat("mov");
       setCodec("prores");
     }
-  }, [preserveAlpha, format, codec]);
+  }, [kind, preserveAlpha, format, codec]);
+
+  // JPEG cannot preserve alpha.
+  useEffect(() => {
+    if (kind !== "image") return;
+    if (imageFormat === "jpeg" && preserveAlpha) {
+      setPreserveAlpha(false);
+    }
+  }, [kind, imageFormat, preserveAlpha]);
 
   const durationLabel = useMemo(() => {
     const totalFrames = durationFrames;
@@ -321,9 +377,28 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   const handleExportClick = () => {
     if (isExporting) return;
+    const trimmedName = name.trim();
+    const trimmedPath = resolvePath(path.trim());
+    if (!trimmedName || !trimmedPath) return;
+
+    if (kind === "image") {
+      const safeFrame = Math.max(0, Math.min(maxSelectableFrame, safeImageFrame));
+      onExport({
+        kind: "image",
+        name: trimmedName,
+        path: trimmedPath,
+        resolution,
+        imageFormat,
+        frame: safeFrame,
+        preserveAlpha,
+      });
+      return;
+    }
+
     onExport({
-      name: name.trim(),
-      path: resolvePath(path.trim()),
+      kind: "video",
+      name: trimmedName,
+      path: trimmedPath,
       resolution,
       bitrate,
       codec,
@@ -359,6 +434,39 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         <div className="px-5 pt-4 pb-3 flex flex-col gap-4">
           {!isExporting ? (
             <>
+              <div className="grid grid-cols-1 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className={fieldLabelClass}>
+                    <span>Type</span>
+                  </label>
+                  <Select
+                    value={kind}
+                    onValueChange={(v) => setKind(v as ExportKind)}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="w-full !h-7.5 text-[11px] bg-brand-background/70 rounded-[6px]"
+                    >
+                      <SelectValue placeholder="Select export type" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                      <SelectItem
+                        value="video"
+                        className="text-[11px] font-medium"
+                      >
+                        Video
+                      </SelectItem>
+                      <SelectItem
+                        value="image"
+                        className="text-[11px] font-medium"
+                      >
+                        Image
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
               <div className="flex flex-col gap-1">
                 <label className={fieldLabelClass}>
                   <span>Name</span>
@@ -445,159 +553,53 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   </Select>
                 </div>
 
-                <div className="flex flex-col gap-1">
-                  <label className={fieldLabelClass}>
-                    <span>Bitrate</span>
-                  </label>
-                  <Select
-                    value={bitrate}
-                    onValueChange={(value) => setBitrate(value)}
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
-                    >
-                      <SelectValue placeholder="Select bitrate" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
-                      {BITRATE_OPTIONS.map((opt) => (
-                        <SelectItem
-                          key={opt.value}
-                          value={opt.value}
-                          className="text-[11px] font-medium"
-                        >
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className={fieldLabelClass}>
-                    <span>Codec</span>
-                  </label>
-                  <Select
-                    value={codec}
-                    onValueChange={(value) =>
-                      setCodec(value as CodecOption["value"])
-                    }
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
-                    >
-                      <SelectValue placeholder="Select codec" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
-                      {CODEC_OPTIONS.map((opt) => (
-                        <SelectItem
-                          key={opt.value}
-                          value={opt.value}
-                          className="text-[11px] font-medium"
-                        >
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className={fieldLabelClass}>
-                    <span>Format</span>
-                  </label>
-                  <Select
-                    value={format}
-                    onValueChange={(value) =>
-                      setFormat(value as FormatOption["value"])
-                    }
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
-                    >
-                      <SelectValue placeholder="Select format" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
-                      {FORMAT_OPTIONS.map((opt) => (
-                        <SelectItem
-                          key={opt.value}
-                          value={opt.value}
-                          className="text-[11px] font-medium"
-                        >
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="mt-1 flex flex-col gap-1.5">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="preserve-alpha"
-                    checked={preserveAlpha}
-                    onCheckedChange={(checked) =>
-                      setPreserveAlpha(Boolean(checked))
-                    }
-                    className="mt-0.5"
-                  />
-                  <label
-                    htmlFor="preserve-alpha"
-                    className="text-brand-light text-[11px] font-medium cursor-pointer"
-                  >
-                    Preserve Alpha
-                  </label>
-                </div>
-              </div>
-
-              <div className="mt-1 flex flex-col gap-1.5">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="include-audio"
-                    checked={includeAudio}
-                    disabled={!hasAnyAudio}
-                    onCheckedChange={(checked) =>
-                      setIncludeAudio(Boolean(checked))
-                    }
-                    className={cn(
-                      "mt-0.5",
-                      !hasAnyAudio && "opacity-40 cursor-not-allowed",
-                    )}
-                  />
-                  <label
-                    htmlFor="include-audio"
-                    className={cn(
-                      "text-brand-light text-[11px] font-medium cursor-pointer",
-                      !hasAnyAudio && "text-brand-light/40 cursor-not-allowed",
-                    )}
-                  >
-                    Include audio in export
-                  </label>
-                </div>
-                {includeAudio && (
-                  <div className="pl-5 flex flex-col gap-1">
-                    <label className={cn(fieldLabelClass, "mb-1")}>
-                      <span>Audio format</span>
+                {kind === "video" ? (
+                  <div className="flex flex-col gap-1">
+                    <label className={fieldLabelClass}>
+                      <span>Bitrate</span>
                     </label>
                     <Select
-                      value={audioFormat}
+                      value={bitrate}
+                      onValueChange={(value) => setBitrate(value)}
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
+                      >
+                        <SelectValue placeholder="Select bitrate" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                        {BITRATE_OPTIONS.map((opt) => (
+                          <SelectItem
+                            key={opt.value}
+                            value={opt.value}
+                            className="text-[11px] font-medium"
+                          >
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    <label className={fieldLabelClass}>
+                      <span>Format</span>
+                    </label>
+                    <Select
+                      value={imageFormat}
                       onValueChange={(value) =>
-                        setAudioFormat(value as AudioFormatOption["value"])
+                        setImageFormat(value as ImageFormatOption["value"])
                       }
                     >
                       <SelectTrigger
                         size="sm"
-                        className="w-full !h-7.5 text-[11px] bg-brand-background/70 rounded-[6px]"
+                        className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
                       >
-                        <SelectValue placeholder="Select audio format" />
+                        <SelectValue placeholder="Select format" />
                       </SelectTrigger>
                       <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
-                        {AUDIO_FORMAT_OPTIONS.map((opt) => (
+                        {IMAGE_FORMAT_OPTIONS.map((opt) => (
                           <SelectItem
                             key={opt.value}
                             value={opt.value}
@@ -611,12 +613,220 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   </div>
                 )}
               </div>
+
+              {kind === "video" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1">
+                    <label className={fieldLabelClass}>
+                      <span>Codec</span>
+                    </label>
+                    <Select
+                      value={codec}
+                      onValueChange={(value) =>
+                        setCodec(value as CodecOption["value"])
+                      }
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
+                      >
+                        <SelectValue placeholder="Select codec" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                        {CODEC_OPTIONS.map((opt) => (
+                          <SelectItem
+                            key={opt.value}
+                            value={opt.value}
+                            className="text-[11px] font-medium"
+                          >
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className={fieldLabelClass}>
+                      <span>Format</span>
+                    </label>
+                    <Select
+                      value={format}
+                      onValueChange={(value) =>
+                        setFormat(value as FormatOption["value"])
+                      }
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="w-full !h-7.5 text-[11px] bg-brand-background/70 dark rounded-[6px]"
+                      >
+                        <SelectValue placeholder="Select format" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                        {FORMAT_OPTIONS.map((opt) => (
+                          <SelectItem
+                            key={opt.value}
+                            value={opt.value}
+                            className="text-[11px] font-medium"
+                          >
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+
+              {kind === "image" && (
+                <div className="flex flex-col gap-2">
+                  <label className={fieldLabelClass}>
+                    <span>Frame</span>
+                    <span className="text-[10px] text-brand-light/60 font-normal">
+                      Use the timeline playhead or pick a frame
+                    </span>
+                  </label>
+
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <NumberInput
+                        value={String(safeImageFrame)}
+                        onChange={(v) => {
+                          const n = Number(v);
+                          const next = Number.isFinite(n) ? n : 0;
+                          setImageFrame(Math.max(0, Math.min(maxSelectableFrame, Math.round(next))));
+                        }}
+                        min={0}
+                        max={maxSelectableFrame}
+                        step={1}
+                        className="h-7.5 rounded-l-[6px]"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-7.5 px-3 text-[10.5px] font-medium border-brand-light/20 bg-brand hover:bg-brand-background/80 rounded-[6px]"
+                      onClick={() => {
+                        setImageFrame(
+                          Math.max(0, Math.min(maxSelectableFrame, Math.round(playheadFrame))),
+                        );
+                      }}
+                    >
+                      Use playhead
+                    </Button>
+                  </div>
+
+                  <div className="pt-3">
+                    <Slider
+                      value={[safeImageFrame]}
+                      min={0}
+                      max={maxSelectableFrame}
+                      step={1}
+                      onValueChange={(v) => {
+                        const next = Array.isArray(v) ? v[0] : 0;
+                        setImageFrame(Math.max(0, Math.round(next)));
+                      }}
+                      className="w-full"
+                    />
+                    <div className="mt-1 text-[10px] text-brand-light/60 flex items-center justify-between">
+                      <span>
+                        0
+                      </span>
+                      <span>
+                        {maxSelectableFrame}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-1 flex flex-col gap-1.5">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="preserve-alpha"
+                    checked={preserveAlpha}
+                    disabled={kind === "image" && imageFormat === "jpeg"}
+                    onCheckedChange={(checked) =>
+                      setPreserveAlpha(Boolean(checked))
+                    }
+                    className="mt-0.5"
+                  />
+                  <label
+                    htmlFor="preserve-alpha"
+                    className={cn(
+                      "text-brand-light text-[11px] font-medium cursor-pointer",
+                      kind === "image" && imageFormat === "jpeg" && "opacity-50",
+                    )}
+                  >
+                    Preserve Alpha
+                  </label>
+                </div>
+              </div>
+
+              {kind === "video" && (
+                <div className="mt-1 flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="include-audio"
+                      checked={includeAudio}
+                      disabled={!hasAnyAudio}
+                      onCheckedChange={(checked) =>
+                        setIncludeAudio(Boolean(checked))
+                      }
+                      className={cn(
+                        "mt-0.5",
+                        !hasAnyAudio && "opacity-40 cursor-not-allowed",
+                      )}
+                    />
+                    <label
+                      htmlFor="include-audio"
+                      className={cn(
+                        "text-brand-light text-[11px] font-medium cursor-pointer",
+                        !hasAnyAudio && "text-brand-light/40 cursor-not-allowed",
+                      )}
+                    >
+                      Include audio in export
+                    </label>
+                  </div>
+                  {includeAudio && (
+                    <div className="pl-5 flex flex-col gap-1">
+                      <label className={cn(fieldLabelClass, "mb-1")}>
+                        <span>Audio format</span>
+                      </label>
+                      <Select
+                        value={audioFormat}
+                        onValueChange={(value) =>
+                          setAudioFormat(value as AudioFormatOption["value"])
+                        }
+                      >
+                        <SelectTrigger
+                          size="sm"
+                          className="w-full !h-7.5 text-[11px] bg-brand-background/70 rounded-[6px]"
+                        >
+                          <SelectValue placeholder="Select audio format" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                          {AUDIO_FORMAT_OPTIONS.map((opt) => (
+                            <SelectItem
+                              key={opt.value}
+                              value={opt.value}
+                              className="text-[11px] font-medium"
+                            >
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <div className="flex flex-col items-center justify-center gap-3 ">
               <div className="flex flex-col gap-1 w-full">
                 <span className="text-[12px] font-medium text-brand-light/90 text-start">
-                  Exporting your video…
+                  {kind === "image" ? "Exporting your image…" : "Exporting your video…"}
                 </span>
                 <span className="text-[10px] text-brand-light/60 text-start">
                   You can close this dialog. The export will continue in the
@@ -639,11 +849,26 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
 
         <div className="px-5 py-3 border-t border-brand-light/10 bg-brand-background flex items-center justify-between">
-          {!isExporting && (
+          {!isExporting && kind === "video" && (
             <div className="text-[10px] text-brand-light/60 flex items-center gap-1">
               <TbMovie className="w-4 h-4" />
               <span className="font-normal">Duration:</span>
               <span className="font-normal">{durationLabel}</span>
+            </div>
+          )}
+          {!isExporting && kind === "image" && (
+            <div className="text-[10px] text-brand-light/60 flex items-center gap-2">
+              <span className="font-normal">Frame:</span>
+              <span className="font-normal">{safeImageFrame}</span>
+              <span className="font-normal text-brand-light/40">
+                (
+                {(() => {
+                  const fps = Math.max(1, durationFps ?? playheadFps ?? 24);
+                  const sec = safeImageFrame / fps;
+                  return `${sec.toFixed(2)}s`;
+                })()}
+                )
+              </span>
             </div>
           )}
           <div

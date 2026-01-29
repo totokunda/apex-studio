@@ -38,7 +38,6 @@ MACOS_INTEL_TORCH_VERSION = "2.2.2"
 MACOS_INTEL_TORCHVISION_VERSION = "0.17.2"
 MACOS_INTEL_TORCHAUDIO_VERSION = "2.2.2"
 
-
 def _is_intel_macos() -> bool:
     if sys.platform != "darwin":
         return False

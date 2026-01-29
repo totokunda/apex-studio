@@ -48,7 +48,7 @@ import type { AnyClipProps, ModelClipProps, GroupClipProps } from "@/lib/types";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 import { sortClipsForStacking } from "@/lib/clipOrdering";
 import { toast } from "sonner";
-import { revealPathInFolder } from "@app/preload";
+import { revealPathInFolder, writeFileBuffer } from "@app/preload";
 import { DEFAULT_FPS } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { SettingsModal } from "../dialogs/SettingsModal";
@@ -228,7 +228,11 @@ const TopBar: React.FC<TopBarProps> = () => {
 
 
   const handleExport = async (settings: ExportSettings) => {
-    const outpath = `${settings.path}/${settings.name}.${settings.format}`;
+    const ext =
+      settings.kind === "image"
+        ? settings.imageFormat
+        : settings.format;
+    const outpath = `${settings.path}/${settings.name}.${ext}`;
 
     // Derive pixel dimensions from the chosen resolution and the editor rect ratio.
     // In the editor we compute rectWidth/rectHeight as:
@@ -288,44 +292,73 @@ const TopBar: React.FC<TopBarProps> = () => {
 
 
       const { promise, cancel } = exportSequenceCancellable({
-        mode: "video",
+        mode: settings.kind === "image" ? "image" : "video",
         filename: outpath,
-        includeAudio: settings.includeAudio,
+        includeAudio: settings.kind === "video" ? settings.includeAudio : false,
         clips: preparedClips,
         fps: fps,
         width: widthPx,
         height: heightPx,
-        encoderOptions: {
-          format: settings.format,
-          codec: settings.codec,
-          bitrate: settings.bitrate,
-          alpha: preserveAlpha,
-        },
+        ...(settings.kind === "video"
+          ? {
+              encoderOptions: {
+                format: settings.format,
+                codec: settings.codec,
+                bitrate: settings.bitrate,
+                alpha: preserveAlpha,
+              },
+              audioOptions: {
+                format: settings.audioFormat ?? "mp3",
+              },
+            }
+          : {
+              imageFrame: settings.frame,
+              imageMimeType:
+                settings.imageFormat === "jpeg"
+                  ? "image/jpeg"
+                  : settings.imageFormat === "webp"
+                    ? "image/webp"
+                    : "image/png",
+            }),
         backgroundColor: preserveAlpha ? undefined : "#000000",
-        audioOptions: {
-          format: settings.audioFormat ?? "mp3",
-        },
         onProgress: ({ ratio }) => {
           setIsExporting(true);
           setExportProgress(typeof ratio === "number" ? ratio : 0);
         },
-        onDone: async () => {
-          toast("Export completed", {
-            description: outpath,
-          });
-          // Best-effort: open the exported file location for the user.
-          try {
-            await revealPathInFolder(outpath);
-          } catch (e) {
-            // eslint-disable-next-line no-console
-            console.error("Failed to reveal export path", e);
-          }
-        },
+        ...(settings.kind === "video"
+          ? {
+              onDone: async () => {
+                toast("Export completed", {
+                  description: outpath,
+                });
+                // Best-effort: open the exported file location for the user.
+                try {
+                  await revealPathInFolder(outpath);
+                } catch (e) {
+                  // eslint-disable-next-line no-console
+                  console.error("Failed to reveal export path", e);
+                }
+              },
+            }
+          : {}),
       });
 
       setCancelExportFn(() => cancel);
 
-      await promise;
+      const result = await promise;
+
+      if (settings.kind === "image") {
+        const blob = result instanceof Blob ? result : new Blob();
+        const buffer = new Uint8Array(await blob.arrayBuffer());
+        await writeFileBuffer(outpath, buffer);
+        toast("Export completed", { description: outpath });
+        try {
+          await revealPathInFolder(outpath);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to reveal export path", e);
+        }
+      }
     } catch (err) {
       if (
         err instanceof ExportCancelledError ||

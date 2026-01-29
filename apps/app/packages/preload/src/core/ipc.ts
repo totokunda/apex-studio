@@ -1,7 +1,7 @@
 import { ipcRenderer, webUtils } from "electron";
 import { promises as fsp } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import fs from "node:fs";
 
@@ -37,6 +37,29 @@ async function deleteFile(pathOrUrl: string): Promise<void> {
   } catch {
     // swallow
   }
+}
+
+// Safely write a binary file to disk. Accepts absolute paths or file:// URLs.
+// Creates parent directories if needed.
+async function writeFileBuffer(
+  pathOrUrl: string,
+  data: Uint8Array | ArrayBuffer,
+): Promise<void> {
+  let p = String(pathOrUrl || "");
+  if (!p) return;
+  if (p.startsWith("file://")) {
+    try {
+      p = fileURLToPath(p);
+    } catch {
+      // fall through with original
+    }
+  }
+  const dir = dirname(p);
+  if (dir) {
+    await fsp.mkdir(dir, { recursive: true });
+  }
+  const buf = data instanceof Uint8Array ? Buffer.from(data) : Buffer.from(data);
+  await fsp.writeFile(p, buf);
 }
 
 // Generic binary file helpers used by the renderer (supports app://, http(s) and file://)
@@ -114,6 +137,7 @@ export {
   send,
   resolvePath,
   deleteFile,
+  writeFileBuffer,
   readFileBuffer,
   readFileStream,
   pathToFileURLString,
