@@ -104,6 +104,11 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
   const isDuplicateVariantName =
     normalizedNewModelName.length > 0 &&
     normalizedExistingVariantNames.has(normalizedNewModelName);
+  // During "Verifying..." we may refresh manifest data before clearing the form,
+  // which can transiently make the just-added name look like a duplicate.
+  // Only show this validation while the user is initially entering a variant name.
+  const showDuplicateVariantNameError =
+    !isValidatingModelPath && isDuplicateVariantName;
 
   return (
     <div className="mt-2.5 w-full bg-brand-background border border-brand-light/15 rounded-md px-3 py-3.5 space-y-2.5">
@@ -121,7 +126,7 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
           className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
           placeholder="e.g. Local GGUF Q4 variant"
         />
-        {isDuplicateVariantName && (
+        {showDuplicateVariantNameError && (
           <p className="text-[9.5px] text-red-400">
             A variant with this name already exists.
           </p>
@@ -564,13 +569,69 @@ const ModelPathsSection: React.FC<{
   manifestId: string;
   componentIndex: number;
 }> = ({ component, manifestId, componentIndex }) => {
-   const variants = (component.model_path  as ManifestComponentModelPathItem[])?.map((path) => path.variant);
-   const defaultVariant = variants?.[0] ?? "";
-   const [selectedVariant, setSelectedVariant] = useState(defaultVariant);
+   const variants = useMemo(() => {
+     const raw = (component.model_path as ManifestComponentModelPathItem[] | undefined) ?? [];
+     const unique = new Set<string>();
+     for (const p of raw) {
+       const v = p?.variant;
+       if (typeof v === "string" && v.length > 0) unique.add(v);
+     }
+     return Array.from(unique);
+   }, [component.model_path]);
+   const variantPathCounts = useMemo(() => {
+     const raw = (component.model_path as ManifestComponentModelPathItem[] | undefined) ?? [];
+     const counts = new Map<string, number>();
+     for (const p of raw) {
+       const v = p?.variant;
+       if (typeof v !== "string" || v.length === 0) continue;
+       counts.set(v, (counts.get(v) ?? 0) + 1);
+     }
+     return counts;
+   }, [component.model_path]);
+   const fallbackVariant = variants[0] ?? "add-variant";
+   const [selectedVariant, setSelectedVariant] = useState(fallbackVariant);
 
-   const onRemoveCustomPath = useCallback(() => {
-    setSelectedVariant(defaultVariant);
-   }, [defaultVariant, setSelectedVariant]);
+   // Keep selection valid as variants list changes (e.g., after delete/refresh).
+   useEffect(() => {
+     if (selectedVariant === "add-variant") return;
+     if (variants.includes(selectedVariant)) return;
+     setSelectedVariant(fallbackVariant);
+   }, [fallbackVariant, selectedVariant, variants]);
+
+   const onRemoveCustomPath = useCallback(
+     (removedVariant?: string) => {
+       setSelectedVariant((prev) => {
+         const remaining = removedVariant
+           ? variants.filter((v) => v !== removedVariant)
+           : variants;
+
+         if (remaining.length === 0) {
+           return "add-variant";
+         }
+
+         // If we're not deleting the current selection (and it's still valid), keep it.
+         if (prev !== removedVariant && remaining.includes(prev)) {
+           return prev;
+         }
+
+         // Otherwise, navigate to the nearest available neighbor.
+         if (removedVariant) {
+           const removedIndex = variants.indexOf(removedVariant);
+           const left = removedIndex > 0 ? variants[removedIndex - 1] : null;
+           const right =
+             removedIndex >= 0 && removedIndex < variants.length - 1
+               ? variants[removedIndex + 1]
+               : null;
+
+           if (left && remaining.includes(left)) return left;
+           if (right && remaining.includes(right)) return right;
+         }
+
+         return remaining[0];
+       });
+     },
+     [variants],
+   );
 
    const onAddCustomPath = useCallback((variant: string) => {
     setSelectedVariant(variant);
@@ -578,7 +639,11 @@ const ModelPathsSection: React.FC<{
 
   return (
     <div className="w-full">
-      <Tabs defaultValue={defaultVariant} onValueChange={setSelectedVariant} value={selectedVariant}>
+      <Tabs
+        defaultValue={fallbackVariant}
+        onValueChange={setSelectedVariant}
+        value={selectedVariant}
+      >
         <TabsList className="w-full flex justify-start dark gap-1.5 bg-brand flex-wrap px-3">
          {variants?.map((variant ) => variant && (
           <TabsTrigger 
@@ -601,7 +666,15 @@ const ModelPathsSection: React.FC<{
             <TabsContent key={variant} value={variant ?? ""}>
               <div className="px-3 pb-4">
                 {(component.model_path  as ManifestComponentModelPathItem[])?.filter((path) => path.variant === variant).map((path) => (
-                  <ModelPathItem key={path.path} path={path} variant={variant ?? ""} componentIndex={componentIndex} manifestId={manifestId} onRemoveCustomPath={onRemoveCustomPath} />
+                  <ModelPathItem
+                    key={path.path}
+                    path={path}
+                    variant={variant ?? ""}
+                    variantPathCount={variantPathCounts.get(variant ?? "") ?? 0}
+                    componentIndex={componentIndex}
+                    manifestId={manifestId}
+                    onRemoveCustomPath={onRemoveCustomPath}
+                  />
                 ))}
               </div>
             </TabsContent>
@@ -626,10 +699,18 @@ const ModelPathsSection: React.FC<{
 const ModelPathItem: React.FC<{
   path: ManifestComponentModelPathItem;
   variant: string;
+  variantPathCount: number;
   componentIndex: number;
   manifestId: string;
-  onRemoveCustomPath: () => void;
-}> = ({path, componentIndex, manifestId, onRemoveCustomPath}) => {
+  onRemoveCustomPath: (removedVariant?: string) => void;
+}> = ({
+  path,
+  variant,
+  variantPathCount,
+  componentIndex,
+  manifestId,
+  onRemoveCustomPath,
+}) => {
   
   const {
     getSourceToJobId,
@@ -781,7 +862,11 @@ const ModelPathItem: React.FC<{
                   setIsDeleting(true);
                   if (path.custom) {
                     await deleteCustomModelPath(manifestId, componentIndex, path.path);
-                    onRemoveCustomPath();
+                    // Only navigate away when deleting the last path in a variant
+                    // (i.e., the variant itself is being removed).
+                    if (variantPathCount <= 1) {
+                      onRemoveCustomPath(variant);
+                    }
                   } else {
                     await deleteDownload({
                       path: path.path,
