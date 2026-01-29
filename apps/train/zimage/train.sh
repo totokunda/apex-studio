@@ -15,9 +15,11 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 # Defaults (override by exporting env vars before running this script)
 CAPTIONS_CSV="${CAPTIONS_CSV:-$SCRIPT_DIR/captions.csv}"
 TRAINING_INPUTS_DIR="${TRAINING_INPUTS_DIR:-$SCRIPT_DIR/training_inputs}"
-OPTIMIZER="${OPTIMIZER:-adamw}"
+OPTIMIZER="${OPTIMIZER:-adamw8bit}"
 RUN_NAME="${RUN_NAME:-run}"
 MAX_STEPS="${MAX_STEPS:-5000}"
+SAMPLE_PROMPT="${SAMPLE_PROMPT:-@hisoka doing a controlled handstand on a polished arena floor, body perfectly vertical and balanced on straight arms, confident mischievous smirk, dramatic overhead spotlight, high-contrast anime key art, dynamic foreshortening, slight motion blur in the background crowd, crisp linework, vivid shading, cinematic framing, sharp focus, clean composition, 4k, high detail}"
+SAMPLE_EVERY="${SAMPLE_EVERY:-50}"
 
 $PYTHON "$SCRIPT_DIR/train.py" \
   --vae_encodings "$TRAINING_INPUTS_DIR/vae_encodings.safetensors" \
@@ -33,4 +35,6 @@ $PYTHON "$SCRIPT_DIR/train.py" \
   --max_steps "$MAX_STEPS" \
   --gradient_checkpointing \
   --run_name "$RUN_NAME" \
-  --save_every 250
+  --save_every 250 \
+  --sample_prompt "$SAMPLE_PROMPT" \
+  --sample_every "$SAMPLE_EVERY"
