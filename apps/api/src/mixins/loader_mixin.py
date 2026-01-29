@@ -172,8 +172,6 @@ class LoaderMixin(DownloadMixin):
             # Should be cpu often times since the model is loaded on the cpu
             load_device = "cpu"
             
-        
-     
         if getter_fn:
             model_class = getter_fn(model_base)
         else:
