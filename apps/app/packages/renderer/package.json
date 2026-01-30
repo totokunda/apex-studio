@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && NODE_OPTIONS='--max-old-space-size=8192' vite build",
+    "build": "tsc && vite build",
+    "postbuild": "node scripts/prune-filters.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

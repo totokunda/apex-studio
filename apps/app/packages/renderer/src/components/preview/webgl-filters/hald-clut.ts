@@ -150,9 +150,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
       ]);
       if (!this.program) {
         console.error("Failed to create shader program");
-      } else {
-        console.log("Hald CLUT shader program created successfully");
-      }
+      } 
     } catch (error) {
       console.error("Error creating shader program:", error);
     }

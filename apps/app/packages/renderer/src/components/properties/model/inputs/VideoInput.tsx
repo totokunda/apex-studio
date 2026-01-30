@@ -887,6 +887,9 @@ const VideoInput: React.FC<VideoInputProps> = ({
 
   const emitSelection = useCallback(
     (next: VideoSelection) => {
+      if (next && next.clipId !== value?.clipId) {
+        setSelectedRange(next.startFrame, next.endFrame, inputId);
+      }
       if (onChangeComposite) {
         onChangeComposite({
           selection: next,
@@ -1312,11 +1315,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
           console.warn(`Failed to load media info for ${it.name}:`, result.reason);
         }
       }
-      const filtered = results
-        .filter((media) => media.type === "video")
-        .sort((a, b) =>
-          a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
-        );
+      
       const newlyAdded = results.filter((it) => !existingNames.has(it.name));
       if (newlyAdded.length > 0) {
         const first = newlyAdded[0];
@@ -1585,22 +1584,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
       setSelectedRange(0, span, inputId);
       return;
     }
-    let curStart = Math.round(selectedRangeTuple?.[0] ?? 0);
-    let curEnd = Math.round(selectedRangeTuple?.[1] ?? curStart + 1);
-    let desiredStart = Math.max(0, Math.min(span - 1, curStart));
-    let desiredEnd = Math.max(desiredStart + 1, Math.min(span, curEnd));
-
-    if (typeof maxDuration === "number" && maxDuration > 0) {
-      const maxSpan = Math.max(1, Math.floor(maxDuration));
-      const currentSpan = desiredEnd - desiredStart;
-      if (currentSpan > maxSpan) {
-        desiredEnd = desiredStart + maxSpan;
-      }
-    }
-
-    if (desiredStart !== curStart || desiredEnd !== curEnd) {
-      setSelectedRange(desiredStart, desiredEnd, inputId);
-    }
+   
   }, [
     previewClip,
     selectedRangeTuple?.[0],
