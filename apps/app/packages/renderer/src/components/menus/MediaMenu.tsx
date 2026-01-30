@@ -191,17 +191,29 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
     queryFn: async () => {
       const list = await listConvertedMedia(folderUuid);
 
-      const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = list.map((it, idx) => ({
-        name: it.name,
-        type: it.type,
-        absPath: it.absPath,
-        assetUrl: it.assetUrl,
-        dateAddedMs: it.dateAddedMs,
-        mediaInfo: infos[idx],
-        hasProxy: it.hasProxy,
-      }));
+      const infoResults = await Promise.allSettled(
+        list.map((it) => getMediaInfo(it.assetUrl))
+      );
+      
+      const results: MediaItem[] = [];
+      for (let idx = 0; idx < list.length; idx++) {
+        const it = list[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          results.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name} (skipping):`, result.reason);
+        }
+      }
+      
       results.sort((a, b) =>
         a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
       );
@@ -274,20 +286,48 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
       toast.dismiss(loadingId);
       const list = await listConvertedMedia(folderUuid);
 
-      const newItemsToFetch = list.filter((it) => !existingNames.has(it.name));
-      const infoPromises = newItemsToFetch.map((it) =>
-        getMediaInfo(it.assetUrl),
+      // Get the base names of files that were just uploaded
+      const uploadedFileNames = new Set(
+        paths.map((p) => p.split(/[/\\]/).pop()?.toLowerCase() || "")
       );
-      const infos = await Promise.all(infoPromises);
-      const newItems: MediaItem[] = newItemsToFetch.map((it, idx) => ({
-        name: it.name,
-        type: it.type,
-        absPath: it.absPath,
-        assetUrl: it.assetUrl,
-        dateAddedMs: it.dateAddedMs,
-        mediaInfo: infos[idx],
-        hasProxy: it.hasProxy,
-      }));
+      
+      // Only process files that: 1) aren't already in UI, AND 2) were just uploaded
+      const newItemsToFetch = list.filter(
+        (it) => !existingNames.has(it.name) && uploadedFileNames.has(it.name.toLowerCase())
+      );
+      const infoResults = await Promise.allSettled(
+        newItemsToFetch.map((it) => getMediaInfo(it.assetUrl)),
+      );
+      
+      const newItems: MediaItem[] = [];
+      const failedFiles: string[] = [];
+      
+      for (let idx = 0; idx < newItemsToFetch.length; idx++) {
+        const it = newItemsToFetch[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          newItems.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to get media info for ${it.name}:`, result.reason);
+          failedFiles.push(it.name);
+        }
+      }
+      
+      if (failedFiles.length > 0) {
+        toast.error(`${failedFiles.length} file(s) could not be imported: unsupported format`, {
+          position: "bottom-right",
+          duration: 5000,
+        });
+      }
+      
       queryClient.setQueryData<MediaItem[]>(mediaQueryKey, (prev) => {
         const base = prev ?? [];
         const next = [...base, ...newItems].sort((a, b) =>
@@ -340,20 +380,49 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
       await importMediaPaths(paths, undefined, folderUuid);
       toast.dismiss(loadingId);
       const list = await listConvertedMedia(folderUuid);
-      const newItemsToFetch = list.filter((it) => !existingNames.has(it.name));
-      const infoPromises = newItemsToFetch.map((it) =>
-        getMediaInfo(it.assetUrl),
+      
+      // Get the base names of files that were just uploaded
+      const uploadedFileNames = new Set(
+        paths.map((p) => p.split(/[/\\]/).pop()?.toLowerCase() || "")
       );
-      const infos = await Promise.all(infoPromises);
-      const newItems: MediaItem[] = newItemsToFetch.map((it, idx) => ({
-        name: it.name,
-        type: it.type,
-        absPath: it.absPath,
-        assetUrl: it.assetUrl,
-        dateAddedMs: it.dateAddedMs,
-        mediaInfo: infos[idx],
-        hasProxy: it.hasProxy,
-      }));
+      
+      // Only process files that: 1) aren't already in UI, AND 2) were just uploaded
+      const newItemsToFetch = list.filter(
+        (it) => !existingNames.has(it.name) && uploadedFileNames.has(it.name.toLowerCase())
+      );
+      const infoResults = await Promise.allSettled(
+        newItemsToFetch.map((it) => getMediaInfo(it.assetUrl)),
+      );
+      
+      const newItems: MediaItem[] = [];
+      const failedFiles: string[] = [];
+      
+      for (let idx = 0; idx < newItemsToFetch.length; idx++) {
+        const it = newItemsToFetch[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          newItems.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to get media info for ${it.name}:`, result.reason);
+          failedFiles.push(it.name);
+        }
+      }
+      
+      if (failedFiles.length > 0) {
+        toast.error(`${failedFiles.length} file(s) could not be imported: unsupported format`, {
+          position: "bottom-right",
+          duration: 5000,
+        });
+      }
+      
       queryClient.setQueryData<MediaItem[]>(mediaQueryKey, (prev) => {
         const base = prev ?? [];
         const next = [...base, ...newItems].sort((a, b) =>

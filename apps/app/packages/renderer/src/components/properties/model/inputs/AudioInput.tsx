@@ -103,18 +103,28 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
     (async () => {
       try {
         const list = await listConvertedMedia(getActiveProject()?.folderUuid);
-        const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
-        const infos = await Promise.all(infoPromises);
-        const results: MediaItem[] = list
-          .map((it, idx) => ({
-            name: it.name,
-            type: it.type,
-            absPath: it.absPath,
-            assetUrl: it.assetUrl,
-            dateAddedMs: it.dateAddedMs,
-            mediaInfo: infos[idx],
-            hasProxy: it.hasProxy,
-          }))
+        const infoResults = await Promise.allSettled(
+          list.map((it) => getMediaInfo(it.assetUrl))
+        );
+        const items: MediaItem[] = [];
+        for (let idx = 0; idx < list.length; idx++) {
+          const it = list[idx];
+          const result = infoResults[idx];
+          if (result.status === "fulfilled") {
+            items.push({
+              name: it.name,
+              type: it.type,
+              absPath: it.absPath,
+              assetUrl: it.assetUrl,
+              dateAddedMs: it.dateAddedMs,
+              mediaInfo: result.value,
+              hasProxy: it.hasProxy,
+            });
+          } else {
+            console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+          }
+        }
+        const results: MediaItem[] = items
           .filter((media) => {
             if (media.type === "audio") return true;
             const mediaInfo = media.mediaInfo;
@@ -176,18 +186,28 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
       const existingNames = new Set(before.map((it) => it.name));
       await importMediaPaths(paths, undefined, getActiveProject()?.folderUuid);
       const after = await listConvertedMedia(getActiveProject()?.folderUuid);
-      const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = after
-        .map((it, idx) => ({
-          name: it.name,
-          type: it.type,
-          absPath: it.absPath,
-          assetUrl: it.assetUrl,
-          dateAddedMs: it.dateAddedMs,
-          mediaInfo: infos[idx],
-          hasProxy: it.hasProxy,
-        }))
+      const infoResults = await Promise.allSettled(
+        after.map((it) => getMediaInfo(it.assetUrl))
+      );
+      const items: MediaItem[] = [];
+      for (let idx = 0; idx < after.length; idx++) {
+        const it = after[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          items.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+        }
+      }
+      const results: MediaItem[] = items
         .filter((media) => media.type === "audio")
         .sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
@@ -973,18 +993,28 @@ const AudioInput: React.FC<AudioInputProps> = ({
       const existingNames = new Set(before.map((it) => it.name));
       await importMediaPaths([path], undefined, getActiveProject()?.folderUuid);
       const after = await listConvertedMedia(getActiveProject()?.folderUuid);
-      const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = after
-        .map((it, idx) => ({
-          name: it.name,
-          type: it.type,
-          absPath: it.absPath,
-          assetUrl: it.assetUrl,
-          dateAddedMs: it.dateAddedMs,
-          mediaInfo: infos[idx],
-          hasProxy: it.hasProxy,
-        }))
+      const infoResults = await Promise.allSettled(
+        after.map((it) => getMediaInfo(it.assetUrl))
+      );
+      const items: MediaItem[] = [];
+      for (let idx = 0; idx < after.length; idx++) {
+        const it = after[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          items.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+        }
+      }
+      const results: MediaItem[] = items
         .filter((media) => media.type === "audio")
         .sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
