@@ -437,6 +437,7 @@ class OviEngine(WanShared):
             dtype=target_dtype,
             generator=torch.Generator(device=self.device).manual_seed(seed),
         )
+        
         audio_noise = randn_tensor(
             shape=(audio_latent_length, audio_latent_channel),
             device=device,
@@ -466,12 +467,14 @@ class OviEngine(WanShared):
             self.transformer.video_model.patch_size[1],
             self.transformer.video_model.patch_size[2],
         )
+        
         max_seq_len_video = (
             video_noise.shape[1]
             * video_noise.shape[2]
             * video_noise.shape[3]
             // (_patch_size_h * _patch_size_w)
         )
+        
         num_steps = len(timesteps_video)
 
         if easy_cache_thresh > 0.0:
@@ -486,12 +489,13 @@ class OviEngine(WanShared):
                 rope_on_cpu=rope_on_cpu,
                 cache_on_cpu=cache_on_cpu,
             )
+        
         denoise_progress_callback = make_mapped_progress(progress_callback, 0.50, 0.90)
 
         safe_emit_progress(
             progress_callback, 0.50, "Starting joint video+audio denoising"
         )
-
+        
         with torch.amp.autocast(
             device.type, enabled=target_dtype != torch.float32, dtype=target_dtype
         ):

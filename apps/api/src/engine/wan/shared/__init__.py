@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import math
 from torchvision import transforms
 from typing import TYPE_CHECKING, Callable, List, Dict, Any, Tuple
+from dataclasses import dataclass
 from src.engine.base_engine import BaseEngine
 from diffusers.video_processor import VideoProcessor
 from diffusers.image_processor import VaeImageProcessor
@@ -35,6 +36,14 @@ try:
     import psutil
 except Exception:  # pragma: no cover
     psutil = None
+
+
+@dataclass
+class _DualNoiseTransformerSelectState:
+    has_offloaded_low_noise_transformer: bool = False
+    has_loaded_low_noise_transformer: bool = False
+    has_offloaded_high_noise_transformer: bool = False
+    has_loaded_high_noise_transformer: bool = False
 
 
 class WanShared(BaseEngine, WanMLXDenoise):
@@ -296,56 +305,175 @@ class WanShared(BaseEngine, WanMLXDenoise):
         except Exception:
             return 0
 
-    def _should_keep_moe_transformers_on_cpu(self) -> bool:
-        """Return True if we can keep *both* MOE transformers resident on CPU when offloading."""
-        if psutil is None:
-            return False
 
-        try:
-            vm = psutil.virtual_memory()
-            cpu_available_bytes = int(getattr(vm, "available", 0) or 0)
-        except Exception:
-            return False
+    def _select_dual_noise_transformer(
+        self,
+        *,
+        t: torch.Tensor,
+        boundary_timestep: torch.Tensor | float | int | None,
+        step_idx: int,
+        total_steps: int,
+        state: _DualNoiseTransformerSelectState,
+        denoise_progress_callback: Callable[..., Any] | None = None,
+        chunking_profile: str = "none",
+        easy_cache_thresh: float = 0.0,
+        easy_cache_ret_steps: int = 10,
+        easy_cache_cutoff_steps: int | None = None,
+        high_noise_transformer_name: str = "high_noise_transformer",
+        low_noise_transformer_name: str = "low_noise_transformer",
+    ) -> Any:
+        """
+        Select and prepare the correct transformer for a "dual model" (high/low noise)
+        setup based on the current scalar timestep `t` and `boundary_timestep`.
 
-        if cpu_available_bytes <= 0:
-            return False
+        Returns:
+            transformer ready to use
+        """
 
-        low_obj = getattr(self, "low_noise_transformer", None)
-        high_obj = getattr(self, "high_noise_transformer", None)
+        # Choose transformer purely based on timestep boundary. Any one-time offload/load
+        # operations are handled via `state`.
+        use_high_noise_transformer = (
+            boundary_timestep is not None and t >= boundary_timestep
+        )
 
-        low_bytes = self._estimate_loaded_module_tensor_bytes(low_obj)
-        if low_bytes <= 0:
-            low_bytes = self._estimate_component_bytes_by_name("low_noise_transformer")
+        progress = float(step_idx) / float(total_steps) if total_steps else 0.0
 
-        high_bytes = self._estimate_loaded_module_tensor_bytes(high_obj)
-        if high_bytes <= 0:
-            high_bytes = self._estimate_component_bytes_by_name(
-                "high_noise_transformer"
+        if use_high_noise_transformer:
+            if (
+                getattr(self, low_noise_transformer_name, None)
+                and not state.has_offloaded_low_noise_transformer
+            ):
+                self.logger.info("Offloading low noise transformer")
+                safe_emit_progress(
+                    denoise_progress_callback,
+                    progress,
+                    "Offloading previous transformer",
+                )
+                # IMPORTANT: group-offloading hooks can keep CPU tensors alive.
+                self._offload(
+                    low_noise_transformer_name,
+                )
+                state.has_offloaded_low_noise_transformer = True
+
+            if not getattr(self, high_noise_transformer_name, None):
+                safe_emit_progress(
+                    denoise_progress_callback,
+                    progress,
+                    "Loading new transformer",
+                )
+                self.load_component_by_name(high_noise_transformer_name)
+
+                high_t = getattr(self, high_noise_transformer_name)
+                if hasattr(high_t, "current_steps"):
+                    high_t.current_steps = step_idx
+                if hasattr(high_t, "num_inference_steps"):
+                    high_t.num_inference_steps = total_steps
+
+                if easy_cache_thresh > 0.0 and hasattr(high_t, "enable_easy_cache"):
+                    high_t.enable_easy_cache(
+                        total_steps,
+                        easy_cache_thresh,
+                        easy_cache_ret_steps,
+                        should_reset_global_cache=True,
+                    )
+                    self.logger.info(
+                        "Enabled easy cache for high noise transformer with threshold "
+                        f"{easy_cache_thresh}, ret steps {easy_cache_ret_steps}, cutoff steps {easy_cache_cutoff_steps}"
+                    )
+
+                safe_emit_progress(
+                    denoise_progress_callback,
+                    progress,
+                    "New transformer ready",
+                )
+
+            high_t = getattr(self, high_noise_transformer_name)
+            if not state.has_loaded_high_noise_transformer:
+                self.to_device(high_t)
+                if hasattr(high_t, "enable_memory_efficient_inference") and chunking_profile != "none":
+                    high_t.enable_memory_efficient_inference(chunking_profile=chunking_profile)
+                elif hasattr(
+                    high_t, "set_chunking_profile"
+                ) and chunking_profile != "none":
+                    high_t.set_chunking_profile(chunking_profile)
+                
+                state.has_loaded_high_noise_transformer = True
+
+            return high_t
+
+        # Low-noise transformer branch
+        if (
+            getattr(self, high_noise_transformer_name, None)
+            and not state.has_offloaded_high_noise_transformer
+        ):
+            self.logger.info("Offloading high noise transformer")
+            safe_emit_progress(
+                denoise_progress_callback,
+                progress,
+                "Offloading previous transformer",
+            )
+            self._offload(
+                high_noise_transformer_name,
+            )
+            state.has_offloaded_high_noise_transformer = True
+            empty_cache()
+
+        if not getattr(self, low_noise_transformer_name, None):
+            safe_emit_progress(
+                denoise_progress_callback,
+                progress,
+                "Loading alternate transformer",
+            )
+            self.load_component_by_name(low_noise_transformer_name)
+
+            low_t = getattr(self, low_noise_transformer_name)
+            if hasattr(low_t, "current_steps"):
+                low_t.current_steps = step_idx
+            if hasattr(low_t, "num_inference_steps"):
+                low_t.num_inference_steps = total_steps
+
+            if easy_cache_thresh > 0.0 and hasattr(low_t, "enable_easy_cache"):
+                low_t.enable_easy_cache(
+                    total_steps,
+                    easy_cache_thresh,
+                    easy_cache_ret_steps,
+                    should_reset_global_cache=False,
+                )
+                self.logger.info(
+                    "Enabled easy cache for low noise transformer with threshold "
+                    f"{easy_cache_thresh}, ret steps {easy_cache_ret_steps}, cutoff steps {easy_cache_cutoff_steps}"
+                )
+
+            safe_emit_progress(
+                denoise_progress_callback,
+                progress,
+                "Alternate transformer ready",
             )
 
-        # If we can't estimate both sizes at all, be conservative.
-        if low_bytes <= 0 or high_bytes <= 0:
-            return False
+        low_t = getattr(self, low_noise_transformer_name)
+        if not state.has_loaded_low_noise_transformer:
+            self.to_device(low_t)
+            if hasattr(low_t, "enable_memory_efficient_inference") and chunking_profile != "none":
+                low_t.enable_memory_efficient_inference(chunking_profile=chunking_profile)
+            elif hasattr(low_t, "set_chunking_profile") and chunking_profile != "none":
+                low_t.set_chunking_profile(chunking_profile)
+            state.has_loaded_low_noise_transformer = True
+   
+        return low_t
 
-        try:
-            headroom_gb = float(os.environ.get("WAN_MOE_CPU_KEEP_HEADROOM_GB", "4.0"))
-        except Exception:
-            headroom_gb = 4.0
-
-        try:
-            safety_mult = float(os.environ.get("WAN_MOE_CPU_KEEP_SAFETY_MULT", "1.15"))
-        except Exception:
-            safety_mult = 1.15
-
-        try:
-            max_frac = float(
-                os.environ.get("WAN_MOE_CPU_KEEP_MAX_AVAILABLE_FRAC", "0.80")
-            )
-        except Exception:
-            max_frac = 0.80
-
-        needed_bytes = int((low_bytes + high_bytes) * safety_mult + headroom_gb * 1e9)
-        return needed_bytes <= int(cpu_available_bytes * max_frac)
+    def _select_dual_noise_guidance_scale(
+        self,
+        *,
+        t: torch.Tensor,
+        boundary_timestep: torch.Tensor | float | int | None,
+        guidance_scale: float | List[float],
+    ) -> float:
+        use_high_noise_transformer = (
+            boundary_timestep is not None and t >= boundary_timestep
+        )
+        if isinstance(guidance_scale, list):
+            return float(guidance_scale[0] if use_high_noise_transformer else guidance_scale[1])
+        return float(guidance_scale)
 
     def moe_denoise(self, *args, **kwargs) -> torch.Tensor:
         timesteps = kwargs.get("timesteps", None)
@@ -376,14 +504,10 @@ class WanShared(BaseEngine, WanMLXDenoise):
         easy_cache_cutoff_steps = kwargs.get("easy_cache_cutoff_steps", None)
         total_steps = len(timesteps) if timesteps is not None else 0
         safe_emit_progress(denoise_progress_callback, 0.0, "Starting denoise")
-        keep_moe_transformers_on_cpu = self._should_keep_moe_transformers_on_cpu()
         chunking_profile = kwargs.get("chunking_profile", "none")
 
     
-        has_offloaded_low_noise_transformer = False
-        has_loaded_low_noise_transformer = False
-        has_offloaded_high_noise_transformer = False
-        has_loaded_high_noise_transformer = False
+        dual_transformer_state = _DualNoiseTransformerSelectState()
 
         with self._progress_bar(len(timesteps), desc=f"Sampling MOE") as pbar:
             total_steps = len(timesteps)
@@ -398,125 +522,27 @@ class WanShared(BaseEngine, WanMLXDenoise):
 
                 timestep = t.expand(latents.shape[0])
 
-                if (
-                    boundary_timestep is not None
-                    and t >= boundary_timestep
-                    and not has_offloaded_low_noise_transformer
-                ):
-                    if getattr(self, "low_noise_transformer", None):
-                        self.logger.info("Offloading low noise transformer")
-                        safe_emit_progress(
-                            denoise_progress_callback,
-                            float(i) / float(total_steps) if total_steps else 0.0,
-                            "Offloading previous transformer",
-                        )
-                        # IMPORTANT: group-offloading hooks can keep CPU tensors alive.
-                        self._offload(
-                            "low_noise_transformer",
-                            offload_type=(
-                                "cpu" if keep_moe_transformers_on_cpu else "discard"
-                            ),
-                        )
-                        has_offloaded_low_noise_transformer = True
-
-                    if not getattr(self, "high_noise_transformer", None):
-                        safe_emit_progress(
-                            denoise_progress_callback,
-                            float(i) / float(total_steps) if total_steps else 0.0,
-                            "Loading new transformer",
-                        )
-
-                        self.load_component_by_name("high_noise_transformer")
-                        self.high_noise_transformer.current_steps = i
-                        self.high_noise_transformer.num_inference_steps = total_steps
-                        
-                        if easy_cache_thresh > 0.0:
-                            self.high_noise_transformer.enable_easy_cache(
-                                total_steps,
-                                easy_cache_thresh,
-                                easy_cache_ret_steps,
-                                should_reset_global_cache=True,
-                            )
-                            self.logger.info(
-                                f"Enabled easy cache for high noise transformer with threshold {easy_cache_thresh}, ret steps {easy_cache_ret_steps}, cutoff steps {easy_cache_cutoff_steps}"
-                            )
-
-                        safe_emit_progress(
-                            denoise_progress_callback,
-                            float(i) / float(total_steps) if total_steps else 0.0,
-                            "New transformer ready",
-                        )
-                    
-            
-                    if not has_loaded_high_noise_transformer:
-                        self.to_device(self.high_noise_transformer)
-                        
-                        if chunking_profile != "none" and hasattr(
-                            self.high_noise_transformer, "set_chunking_profile"
-                        ):
-                            self.high_noise_transformer.set_chunking_profile(
-                                chunking_profile
-                            )
-
-                    transformer = self.high_noise_transformer
-
-                    if isinstance(guidance_scale, list):
-                        guidance_scale = guidance_scale[0]
-                else:
-                    if (
-                        getattr(self, "high_noise_transformer", None)
-                        and not has_offloaded_high_noise_transformer
-                    ):
-                        self.logger.info("Offloading high noise transformer")
-                        safe_emit_progress(
-                            denoise_progress_callback,
-                            float(i) / float(total_steps) if total_steps else 0.0,
-                            "Offloading previous transformer",
-                        )
-                        self._offload(
-                            "high_noise_transformer",
-                            offload_type=(
-                                "cpu" if keep_moe_transformers_on_cpu else "discard"
-                            ),
-                        )
-                        has_offloaded_high_noise_transformer = True
-
-                    if not getattr(self, "low_noise_transformer", None):
-                        safe_emit_progress(
-                            denoise_progress_callback,
-                            float(i) / float(total_steps) if total_steps else 0.0,
-                            "Loading alternate transformer",
-                        )
-                        self.load_component_by_name("low_noise_transformer")
-           
-                        
-                        if easy_cache_thresh > 0.0:
-                            self.low_noise_transformer.enable_easy_cache(
-                                total_steps,
-                                easy_cache_thresh,
-                                easy_cache_ret_steps,
-                                should_reset_global_cache=False,
-                            )
-                        safe_emit_progress(
-                            denoise_progress_callback,
-                            float(i) / float(total_steps) if total_steps else 0.0,
-                            "Alternate transformer ready",
-                        )
-                        
-
-                    if not has_loaded_low_noise_transformer:
-                        self.to_device(self.low_noise_transformer)
-                        if chunking_profile != "none" and hasattr(
-                            self.low_noise_transformer, "set_chunking_profile"
-                        ):
-                            self.low_noise_transformer.set_chunking_profile(
-                                chunking_profile
-                            )
-                        has_loaded_low_noise_transformer = True
-
-                    transformer = self.low_noise_transformer
-                    if isinstance(guidance_scale, list):
-                        guidance_scale = guidance_scale[1]
+                transformer = self._select_dual_noise_transformer(
+                    t=t,
+                    boundary_timestep=boundary_timestep,
+                    step_idx=i,
+                    total_steps=total_steps,
+                    state=dual_transformer_state,
+                    denoise_progress_callback=denoise_progress_callback,
+                    chunking_profile=chunking_profile,
+                    easy_cache_thresh=easy_cache_thresh,
+                    easy_cache_ret_steps=easy_cache_ret_steps,
+                    easy_cache_cutoff_steps=easy_cache_cutoff_steps,
+                    high_noise_transformer_name=kwargs.get(
+                        "high_noise_transformer_name", "high_noise_transformer"
+                    ),
+                    low_noise_transformer_name=kwargs.get(
+                        "low_noise_transformer_name", "low_noise_transformer"
+                    ),
+                )
+                step_guidance_scale = self._select_dual_noise_guidance_scale(
+                    t=t, boundary_timestep=boundary_timestep, guidance_scale=guidance_scale
+                )
 
                 # Standard denoising
                 noise_pred = transformer(
@@ -536,7 +562,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
                         **kwargs.get("unconditional_transformer_kwargs", {}),
                     )[0]
 
-                    noise_pred = uncond_noise_pred + guidance_scale * (
+                    noise_pred = uncond_noise_pred + step_guidance_scale * (
                         noise_pred - uncond_noise_pred
                     )
 
@@ -573,12 +599,10 @@ class WanShared(BaseEngine, WanMLXDenoise):
             if getattr(self, "low_noise_transformer", None):
                 self._offload(
                     "low_noise_transformer",
-                    offload_type="cpu" if keep_moe_transformers_on_cpu else "discard",
                 )
             if getattr(self, "high_noise_transformer", None):
                 self._offload(
                     "high_noise_transformer",
-                    offload_type="cpu" if keep_moe_transformers_on_cpu else "discard",
                 )
 
         return latents
