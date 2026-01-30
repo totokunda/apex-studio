@@ -18,8 +18,9 @@ TRAINING_INPUTS_DIR="${TRAINING_INPUTS_DIR:-$SCRIPT_DIR/training_inputs}"
 OPTIMIZER="${OPTIMIZER:-adamw8bit}"
 RUN_NAME="${RUN_NAME:-run}"
 MAX_STEPS="${MAX_STEPS:-5000}"
-SAMPLE_PROMPT="${SAMPLE_PROMPT:-@hisoka doing a controlled handstand on a polished arena floor, body perfectly vertical and balanced on straight arms, confident mischievous smirk, dramatic overhead spotlight, high-contrast anime key art, dynamic foreshortening, slight motion blur in the background crowd, crisp linework, vivid shading, cinematic framing, sharp focus, clean composition, 4k, high detail}"
-SAMPLE_EVERY="${SAMPLE_EVERY:-50}"
+SAMPLE_PROMPT="${SAMPLE_PROMPT:-Digital anime still featuring Hisoka Morow from the shoulders up with a confident, slightly smirking expression. Dim indoor lighting and warm shadows create a moody atmosphere.}"
+SAMPLE_EVERY="${SAMPLE_EVERY:-100}"
+TARGET_MODULES="${TARGET_MODULES:-to_q,to_k,to_v,to_out.0,w1,w2,w3}"
 
 $PYTHON "$SCRIPT_DIR/train.py" \
   --vae_encodings "$TRAINING_INPUTS_DIR/vae_encodings.safetensors" \
@@ -27,14 +28,16 @@ $PYTHON "$SCRIPT_DIR/train.py" \
   --captions_csv "$CAPTIONS_CSV" \
   --caption_dropout 0.05 \
   --lora_rank 32 \
+  --lora_alpha 16 \
   --learning_rate 1e-4 \
   --optimizer "$OPTIMIZER" \
   --batch_size 1 \
   --mixed_precision bf16 \
-  --gradient_accumulation_steps 4 \
+  --gradient_accumulation_steps 1 \
   --max_steps "$MAX_STEPS" \
   --gradient_checkpointing \
   --run_name "$RUN_NAME" \
   --save_every 250 \
   --sample_prompt "$SAMPLE_PROMPT" \
-  --sample_every "$SAMPLE_EVERY"
+  --sample_every "$SAMPLE_EVERY" \
+  --lora_target_modules "$TARGET_MODULES"
