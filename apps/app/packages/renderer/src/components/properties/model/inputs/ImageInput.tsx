@@ -869,6 +869,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
     (next: ImageSelection) => {
       // If this input is being cleared, also clear asset-mode selection so an empty
       // input doesn't keep showing a stale "Selected" state in TimelineSearch.
+      
       if (!next) {
         try {
           useAssetControlsStore.getState().clearSelectedAsset();

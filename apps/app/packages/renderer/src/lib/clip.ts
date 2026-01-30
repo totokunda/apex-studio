@@ -23,7 +23,10 @@ import { getMediaInfo, getMediaInfoCached, getMediaInfoFromUrl } from "./media/u
 import { getLowercaseExtension } from "@app/preload";
 import { Preprocessor } from "./preprocessor";
 import { ManifestWithType, UIInput } from "./manifest/api";
-import { globalInputControlsStore } from "./inputControl";
+import {
+  globalInputControlsStore,
+  INPUT_CONTROLS_FALLBACK_CLIP_ID,
+} from "./inputControl";
 import { remapMaskWithClipTransformProportional } from "./mask/clipTransformUtils";
 
 import _ from "lodash";
@@ -1754,13 +1757,39 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     const ui = manifest.spec?.ui || manifest.ui;
     if (!ui || !Array.isArray(ui.inputs)) return null;
     const output: Record<string, any> = {};
+    const inputStore = globalInputControlsStore.getState();
+    const hasOwn = Object.prototype.hasOwnProperty;
+
+    const getSelectedRangeForClip = (inputId: string): [number, number] => {
+      const byInput = (inputStore as any).selectedRangeByInputId?.[inputId] as
+        | Record<string, [number, number]>
+        | undefined;
+      if (byInput && hasOwn.call(byInput, clipId)) return byInput[clipId]!;
+      if (byInput && hasOwn.call(byInput, INPUT_CONTROLS_FALLBACK_CLIP_ID)) {
+        return byInput[INPUT_CONTROLS_FALLBACK_CLIP_ID]!;
+      }
+      return inputStore.getSelectedRange(inputId, clipId);
+    };
+
+    const getFocusFrameForClip = (inputId: string): number => {
+      const byInput = (inputStore as any).focusFrameByInputId?.[inputId] as
+        | Record<string, number>
+        | undefined;
+      if (byInput && hasOwn.call(byInput, clipId)) return byInput[clipId]!;
+      if (byInput && hasOwn.call(byInput, INPUT_CONTROLS_FALLBACK_CLIP_ID)) {
+        return byInput[INPUT_CONTROLS_FALLBACK_CLIP_ID]!;
+      }
+      return inputStore.getFocusFrame(inputId, clipId);
+    };
+
     ui.inputs.forEach((inp) => {
       const typeStr = String((inp as any)?.type || "");
+      const typeLower = typeStr.toLowerCase();
       // Only JSON-parse values for input types that intentionally store JSON in `inp.value`.
       // Critical: do NOT parse for plain `text` inputs, otherwise entering JSON would be
       // treated as an object and not a literal string.
       const shouldJsonParseValue = (() => {
-        const t = typeStr.toLowerCase();
+        const t = typeLower;
         if (t === "text_list") return true;
         if (t === "image_list") return true;
         if (t.startsWith("image")) return true;
@@ -1780,10 +1809,30 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
 
       let finalVal: any = parsedVal ?? inp.default;
       // For media-like inputs, attach either selected range (video/audio) or selected frame (image)
-      const isVideoish = typeStr.startsWith("video");
-      const isAudioish = typeStr.startsWith("audio");
-      const isImageish = typeStr.startsWith("image");
-      const isImageList = typeStr === "image_list";
+      const isVideoish = typeLower.startsWith("video");
+      const isAudioish = typeLower.startsWith("audio");
+      const isImageish = typeLower.startsWith("image");
+      const isImageList = typeLower === "image_list";
+
+      // image_list is a special case: it's an array of selections where each item is
+      // rendered via an `ImageInput` using a derived inputId `${inp.id}_${index}`.
+      // That means focus/range are stored per item, not under the base `inp.id`.
+      if (isImageList && Array.isArray(finalVal)) {
+        finalVal = (finalVal as any[]).map((item: any, index: number) => {
+          if (!item || typeof item !== "object") return item;
+          const itemInputId = `${inp.id}_${index}`;
+          const itemTypeLower = String(item?.type || "").toLowerCase();
+          const itemIsVideoish = itemTypeLower.startsWith("video");
+          const itemIsAudioish = itemTypeLower.startsWith("audio");
+          const focus = getFocusFrameForClip(itemInputId);
+          const enriched: any = { ...(item as any), selectedFrame: focus };
+          if (itemIsVideoish || itemIsAudioish) {
+            const [start, end] = getSelectedRangeForClip(itemInputId);
+            enriched.selectedRange = [start, end];
+          }
+          return enriched;
+        });
+      }
       // image_list is a special case: keep it as an array of selections, do not coerce to a single clip
       if (isVideoish || isAudioish || (isImageish && !isImageList)) {
         // Resolve composite values (selection + preprocessor flags) and ensure we return AnyClipProps
@@ -1820,10 +1869,8 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         } else {
           selectedClip = finalVal;
         }
-        const inputStore = globalInputControlsStore.getState();
-
         if (isVideoish || isAudioish) {
-          const [start, end] = inputStore.getSelectedRange(inp.id, clipId);
+          const [start, end] = getSelectedRangeForClip(inp.id);
           if (selectedClip && typeof selectedClip === "object") {
             finalVal = {
               ...(selectedClip as any),
@@ -1842,7 +1889,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
             };
           }
         } else if (isImageish) {
-          const focus = inputStore.getFocusFrame(inp.id, clipId);
+          const focus = getFocusFrameForClip(inp.id);
           if (selectedClip && typeof selectedClip === "object") {
             finalVal = {
               ...(selectedClip as any),
