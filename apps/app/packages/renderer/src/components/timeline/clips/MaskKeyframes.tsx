@@ -545,7 +545,6 @@ export const MaskKeyframes: React.FC<MaskKeyframesProps> = ({
   }
 
   const handleKeyframeClick = (frame: number) => {
-    console.log("handleKeyframeClick", frame);
     setSelectedMaskId(mask.id);
     setSelectedFrame(frame);
     setFocusFrame(getGlobalFrame(frame, clip));

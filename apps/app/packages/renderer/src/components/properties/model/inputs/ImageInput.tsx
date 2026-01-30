@@ -112,17 +112,27 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
   useEffect(() => {
     (async () => {
       const list = await listConvertedMedia(getActiveProject()?.folderUuid);
-      const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      let results: MediaItem[] = list.map((it, idx) => ({
-        name: it.name,
-        type: it.type,
-        absPath: it.absPath,
-        assetUrl: it.assetUrl,
-        dateAddedMs: it.dateAddedMs,
-        mediaInfo: infos[idx],
-        hasProxy: it.hasProxy,
-      }));
+      const infoResults = await Promise.allSettled(
+        list.map((it) => getMediaInfo(it.assetUrl))
+      );
+      let results: MediaItem[] = [];
+      for (let idx = 0; idx < list.length; idx++) {
+        const it = list[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          results.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+        }
+      }
       results = results
         .sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
@@ -156,17 +166,27 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
       const existingNames = new Set(mediaItems.map((it) => it.name));
       await importMediaPaths(paths, undefined, getActiveProject()?.folderUuid);
       const list = await listConvertedMedia(getActiveProject()?.folderUuid);
-      const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      let results: MediaItem[] = list.map((it, idx) => ({
-        name: it.name,
-        type: it.type,
-        absPath: it.absPath,
-        assetUrl: it.assetUrl,
-        dateAddedMs: it.dateAddedMs,
-        mediaInfo: infos[idx],
-        hasProxy: it.hasProxy,
-      }));
+      const infoResults = await Promise.allSettled(
+        list.map((it) => getMediaInfo(it.assetUrl))
+      );
+      let results: MediaItem[] = [];
+      for (let idx = 0; idx < list.length; idx++) {
+        const it = list[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          results.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+        }
+      }
 
       results = results
         .sort((a, b) =>
@@ -869,6 +889,10 @@ const ImageInput: React.FC<ImageInputProps> = ({
     (next: ImageSelection) => {
       // If this input is being cleared, also clear asset-mode selection so an empty
       // input doesn't keep showing a stale "Selected" state in TimelineSearch.
+
+      if (next && next.clipId !== value?.clipId) {
+        setInputFocusFrame(0, inputId);
+      }
       if (!next) {
         try {
           useAssetControlsStore.getState().clearSelectedAsset();
