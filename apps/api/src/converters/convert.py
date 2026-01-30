@@ -131,7 +131,7 @@ def get_transformer_converter_by_model_name(model_name: str):
         return WanMultiTalkTransformerConverter()
     elif "WanS2V" in model_name:
         return WanS2VTransformerConverter()
-    elif "Wan" in model_name and not "Humo" in model_name:
+    elif "Wan" in model_name and not ("Humo" in model_name or "MOVA" in model_name):
         return WanTransformerConverter()
     elif "FlashVSR" in model_name:
         return FlashVSRTransformerConverter()

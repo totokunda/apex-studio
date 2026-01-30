@@ -1,0 +1,384 @@
+api_version: apex/v1
+kind: Model
+metadata:
+  id: mova-image-to-video-audio
+  model: wan
+  name: MOVA Image to Video Audio
+  version: 1.0.0
+  description: MOVA is a 14B parameter model for image-to-video-audio generation.
+  tags:
+  - mova
+  - i2v
+  - audio
+  - 14b
+  author: MOSI
+  license: Apache-2.0
+  demo_path: models/mova-image-to-video-audio.mp4
+  categories:
+  - image-to-video
+spec:
+  engine: wan
+  model_type: mova
+  engine_type: torch
+  default_duration_secs: 8.0
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - efficient_dot_product_attention
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  fps: 24
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchPairScheduler
+    scheduler_options:
+    - name: FlowMatchPairScheduler
+      label: FlowMatch Pair Scheduler
+      description: The FlowMatch Pair Scheduler is used for MOVA Image to Video Audio.
+      base: src.scheduler.flow_match_pair.FlowMatchPairScheduler
+      config_path: OpenMOSS-Team/MOVA-720p/scheduler/scheduler_config.json
+  - type: vae
+    name: vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae/config.json
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
+  - type: transformer
+    label: MOVA Audio Transformer
+    base: wan.mova_audio
+    name: audio_transformer
+    model_path:
+    - path: OpenMOSS-Team/MOVA-360p/audio_dit
+      variant: default
+      precision: fp16
+      type: safetensors
+    config_path: OpenMOSS-Team/MOVA-360p/audio_dit/config.json
+  - type: vae
+    label: MOVA Audio VAE
+    base: movaaudiovae
+    name: audio_vae
+    model_path:
+    - path: OpenMOSS-Team/MOVA-360p/audio_vae
+      variant: default
+      precision: fp16
+      type: safetensors
+    config_path: OpenMOSS-Team/MOVA-360p/audio_vae/config.json
+  - type: helper
+    label: Dual Tower Bridge
+    base: wan.mova
+    name: dual_tower_bridge
+    model_path:
+    - path: OpenMOSS-Team/MOVA-360p/dual_tower_bridge
+      variant: default
+      precision: fp16
+      type: safetensors
+    config_path: OpenMOSS-Team/MOVA-360p/dual_tower_bridge/config.json
+  - type: transformer
+    label: High Noise Transformer
+    base: wan.mova
+    name: high_noise_transformer
+    model_path:
+    - path: OpenMOSS-Team/MOVA-360p/video_dit
+      variant: default
+      precision: fp16
+      type: safetensors
+    config_path: OpenMOSS-Team/MOVA-360p/video_dit/config.json
+  - type: transformer
+    label: Low Noise Transformer
+    base: wan.mova
+    name: low_noise_transformer
+    model_path:
+    - path: OpenMOSS-Team/MOVA-360p/video_dit_2
+      variant: default
+      precision: fp16
+      type: safetensors
+    config_path: OpenMOSS-Team/MOVA-360p/video_dit_2/config.json
+
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 5.0
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: media
+      label: Media
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - high_noise_guidance_scale
+        - - low_noise_guidance_scale
+        - - seed
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+        - - rope_on_cpu
+    - name: easy_cache
+      label: Easy Cache
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - use_easy_cache
+        - - easy_cache_thresh
+        - - easy_cache_ret_steps
+    inputs:
+    - id: image
+      label: Image
+      description: The image to condition on.
+      type: image
+      panel: media
+      required: true
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指"
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 360
+      options:
+      - name: HD
+        value: 720
+      - name: SD
+        value: 360
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 4
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 720
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1280
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: high_noise_guidance_scale
+      label: High Noise Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: low_noise_guidance_scale
+      label: Low Noise Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false
+    - id: use_easy_cache
+      label: Use Easy Cache
+      description: Use the Easy Cache to speed up the generation, at the cost of some quality.
+      type: boolean
+      panel: easy_cache
+      required: false
+      default: true
+    - id: easy_cache_thresh
+      label: Easy Cache Threshold
+      description: Threshold for the easy cache
+      type: number+slider
+      value_type: float
+      panel: easy_cache
+      required: false
+      default: 0.05
+      min: 0.0
+      max: 1.0
+      step: 0.001
+    - id: easy_cache_ret_steps
+      label: Easy Cache Return Steps
+      description: Number of steps to return for the easy cache
+      type: number+slider
+      value_type: integer
+      panel: easy_cache
+      required: false
+      default: 10
+      min: 1
+      max: 100
+      step: 1

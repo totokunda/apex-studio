@@ -1,10 +1,13 @@
 from typing import Optional, Tuple
+from diffusers.utils.export_utils import export_to_video
 import numpy as np
 import math
 from collections.abc import Generator, Iterator
 from fractions import Fraction
 from io import BytesIO
-
+from typing import List
+from pathlib import Path
+import PIL
 import av
 import numpy as np
 import torch
@@ -12,8 +15,12 @@ from einops import rearrange
 from PIL import Image
 from torch._prims_common import DeviceLikeType
 from tqdm import tqdm
-from loguru import logger
-
+from src.utils.ffmpeg import get_ffmpeg_path
+import subprocess
+import shutil
+import tempfile
+import os
+import wave
 DEFAULT_IMAGE_CRF = 33
 
 
@@ -490,3 +497,102 @@ def preprocess(image: np.array, crf: float = DEFAULT_IMAGE_CRF) -> np.array:
     with BytesIO(video_bytes) as video_file:
         image_array = decode_single_frame(video_file)
     return image_array
+
+
+
+
+
+
+def _write_wav_wave(audio, wav_path, sample_rate=44100):
+    """
+    Write int16 PCM WAV using standard library wave.
+    - audio: torch.Tensor or np.ndarray, shape [samples] / [channels, samples]
+      - If float, assumed range is approximately [-1, 1], will be converted to int16 PCM
+    """
+    if isinstance(audio, torch.Tensor):
+        a = audio.detach().cpu().numpy()
+    else:
+        a = np.asarray(audio)
+
+    if a.ndim == 1:
+        a = a[None, :]
+    if a.ndim != 2:
+        raise ValueError(f"audio shape needs to be [S] / [C,S], current shape is {a.shape}")
+
+    channels, samples = int(a.shape[0]), int(a.shape[1])
+    if channels > 2:
+        a = a[:2, :]
+        channels = 2
+
+    if np.issubdtype(a.dtype, np.floating):
+        a = np.clip(a, -1.0, 1.0)
+        a = (a * 32767.0).astype(np.int16)
+    elif a.dtype != np.int16:
+        a = np.clip(a, -32768, 32767).astype(np.int16)
+
+    if channels == 1:
+        interleaved = a.reshape(-1)
+    else:
+        interleaved = a.T.reshape(-1)
+
+    with wave.open(wav_path, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)  # int16
+        wf.setframerate(int(sample_rate))
+        wf.writeframes(interleaved.tobytes(order="C"))
+
+
+def save_video_mova(
+    video: List[Image.Image] | List[np.ndarray], 
+    audio: torch.Tensor | None, 
+    filename_prefix: str, 
+    sample_rate: int = 44100, 
+    fps: int = 24, 
+    quality: int = 9, 
+    job_dir: Optional[str] = None
+) -> None:
+    """
+    Save video with audio.
+    - video: List[PIL.Image | np.ndarray]
+    - audio: torch.Tensor or None
+    - filename_prefix: Output mp4 file name prefix
+    - sample_rate: Audio sample rate (default 44100)
+    - fps: Video frame rate (default 24)
+    - quality: Video quality (default 9)
+    - job_dir: Output directory (default None)
+    """
+
+    ffmpeg_path = get_ffmpeg_path()
+        
+    if job_dir is not None:
+        job_dir = Path(job_dir)
+        save_path = str(job_dir / f"{filename_prefix}.mp4")
+    else:
+        save_path = f"{filename_prefix}.mp4"
+
+    with tempfile.TemporaryDirectory(prefix='save_vwa_') as tmp_dir:
+        tmp_video = os.path.join(tmp_dir, 'video.mp4')
+        tmp_audio = os.path.join(tmp_dir, 'audio.wav')
+        if isinstance(video[0], list):
+            video = video[0]
+        export_to_video(video, tmp_video, fps=fps, quality=quality)
+        _write_wav_wave(audio, tmp_audio, sample_rate=sample_rate)
+
+        cmd = [
+            ffmpeg_path, '-y',
+            '-i', tmp_video,
+            '-i', tmp_audio,
+            '-c:v', 'copy',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-movflags', '+faststart',
+            '-shortest',
+            save_path
+        ]
+        
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            # Fallback to save only video
+            print(f"[save_video_with_audio] ffmpeg reuse failed, saving only video. Error: {e.stderr.decode(errors='ignore')[:500]}")
+            # Copy temporary video to target
+            shutil.copyfile(tmp_video, save_path)
