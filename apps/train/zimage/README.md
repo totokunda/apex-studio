@@ -9,6 +9,16 @@ This folder contains a simple end-to-end pipeline for training a Z-Image LoRA us
 
 All default outputs are kept **under this folder** for convenience.
 
+## Requirements
+
+- Install Python dependencies from `zimage/requirements.txt`.
+- This pipeline **requires PyTorch**:
+  - `torch` (core tensors + GPU acceleration if available)
+  - `torchvision` (image transforms / utilities used by parts of the pipeline)
+  - `torchaudio` (installed alongside torch for compatibility with the PyTorch stack)
+
+Note: `pip install torch torchvision torchaudio` often installs **CPU-only** wheels by default. For NVIDIA GPUs, install the matching CUDA build from the official PyTorch install instructions on `pytorch.org`, then verify with `python -c "import torch; print(torch.cuda.is_available())"`.
+
 ## Quick start (run everything)
 
 From the repo root:

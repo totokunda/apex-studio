@@ -279,7 +279,7 @@ def step_mem(
     reset_peak: bool = False,
     sync_cuda: bool = True,
     log_tensors: bool = False,
-    tensors_top_k: int = 15,
+    tensors_top_k: int = 30,
     tensors_min_bytes: int = 0,
     tensors_device: Optional[str] = "cuda",
     stream: Optional[IO[str]] = None,
@@ -294,7 +294,7 @@ def step_mem(
     - `reset_peak=True` resets PyTorch CUDA peak stats for the selected device.
     - `log_tensors=True` walks Python GC to list live torch tensors (can be slow/noisy).
     """
-    if os.environ.get("APEX_STEP_MEM_DISABLE", "0").strip() not in (
+    if os.environ.get("APEX_STEP_MEM_DISABLE", "").strip() not in (
         "",
         "0",
         "false",

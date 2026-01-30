@@ -1818,6 +1818,58 @@ class DownloadMixin:
             except Exception:
                 return None
 
+        def _parse_rust_range_line(line: str) -> Optional[tuple[int, int]]:
+            """Parse a single rust `.ranges` line: `start,stop` (inclusive)."""
+            try:
+                raw = (line or "").strip()
+                if not raw:
+                    return None
+                if "," not in raw:
+                    return None
+                a, b = raw.split(",", 1)
+                s = int(a.strip())
+                e = int(b.strip())
+                if s < 0 or e < 0:
+                    return None
+                if e < s:
+                    return None
+                return (s, e)
+            except Exception:
+                return None
+
+        def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+            if not ranges:
+                return []
+            ranges = sorted(ranges, key=lambda x: x[0])
+            merged: list[tuple[int, int]] = []
+            cur_s, cur_e = ranges[0]
+            for s, e in ranges[1:]:
+                # Merge overlaps and adjacency (inclusive ranges)
+                if s <= cur_e + 1:
+                    cur_e = max(cur_e, e)
+                else:
+                    merged.append((cur_s, cur_e))
+                    cur_s, cur_e = s, e
+            merged.append((cur_s, cur_e))
+            return merged
+
+        def _contiguous_prefix_len_from_zero(merged_done: list[tuple[int, int]]) -> int:
+            """Return byte-length of the contiguous done prefix starting at 0."""
+            try:
+                if not merged_done:
+                    return 0
+                if merged_done[0][0] != 0:
+                    return 0
+                end = merged_done[0][1]
+                for s, e in merged_done[1:]:
+                    if s == end + 1:
+                        end = max(end, e)
+                        continue
+                    break
+                return int(end) + 1
+            except Exception:
+                return 0
+
         @dataclass
         class _RateLimitInfo:
             # Mirrors rust/apex_download_rs RateLimitInfo
@@ -2190,25 +2242,78 @@ class DownloadMixin:
             resume_size = 0
             ranges_path = f"{part_path}.ranges"
             if os.path.exists(ranges_path):
-                # Best-effort safety: avoid treating Rust sparse partials as "complete".
-                # If we got here, Rust is disabled/unavailable; restart cleanly.
-                try:
-                    self.logger.warning(
-                        f"Found Rust resume metadata next to {part_path}; Python downloader cannot resume sparse partials. "
-                        "Deleting Rust partial state and restarting download from scratch."
-                    )
-                except Exception:
-                    pass
+                # Rust partials may be sparse / random-access and preallocated to full size.
+                # Python can only safely resume from a contiguous prefix starting at byte 0.
+                salvaged = False
                 try:
                     if os.path.exists(part_path):
-                        os.remove(part_path)
+                        with open(ranges_path, "r", encoding="utf-8") as f:
+                            parsed: list[tuple[int, int]] = []
+                            for line in f.read().splitlines():
+                                r = _parse_rust_range_line(line)
+                                if r is not None:
+                                    parsed.append(r)
+                        merged_done = _merge_ranges(parsed)
+                        prefix_len = _contiguous_prefix_len_from_zero(merged_done)
+                        if prefix_len > 0:
+                            try:
+                                part_len = os.path.getsize(part_path)
+                            except Exception:
+                                part_len = None
+
+                            # If Rust completed the whole file but failed before rename, finalize here.
+                            if part_len is not None and prefix_len >= int(part_len):
+                                try:
+                                    os.replace(part_path, file_path)
+                                    try:
+                                        os.remove(ranges_path)
+                                    except Exception:
+                                        pass
+                                    self.logger.info(
+                                        f"Finalized existing Rust partial file to {file_path} (ranges indicate complete)"
+                                    )
+                                    return file_path
+                                except Exception:
+                                    pass
+
+                            # Convert Rust partial into a Python-resumable `.part` by truncating
+                            # to the contiguous prefix and dropping `.ranges`.
+                            try:
+                                os.truncate(part_path, prefix_len)
+                                try:
+                                    os.remove(ranges_path)
+                                except Exception:
+                                    pass
+                                resume_size = int(prefix_len)
+                                salvaged = True
+                                self.logger.warning(
+                                    f"Converted Rust partial state to Python-resumable partial for {log_name}: "
+                                    f"keeping {resume_size} bytes from start and resuming with Python downloader."
+                                )
+                            except Exception:
+                                salvaged = False
                 except Exception:
-                    pass
-                try:
-                    os.remove(ranges_path)
-                except Exception:
-                    pass
-                resume_size = 0
+                    salvaged = False
+
+                if not salvaged:
+                    # If we can't salvage a contiguous prefix, restart cleanly.
+                    try:
+                        self.logger.warning(
+                            f"Found Rust resume metadata next to {part_path} but could not safely salvage a contiguous prefix; "
+                            "deleting Rust partial state and restarting download from scratch."
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        if os.path.exists(part_path):
+                            os.remove(part_path)
+                    except Exception:
+                        pass
+                    try:
+                        os.remove(ranges_path)
+                    except Exception:
+                        pass
+                    resume_size = 0
             elif os.path.exists(part_path):
                 try:
                     resume_size = os.path.getsize(part_path)

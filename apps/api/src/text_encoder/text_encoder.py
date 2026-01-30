@@ -5,7 +5,7 @@ from src.mixins.loader_mixin import LoaderMixin
 import ftfy
 import re
 import html
-from src.utils.defaults import DEFAULT_CACHE_PATH, DEFAULT_COMPONENTS_PATH
+from src.utils.defaults import DEFAULT_CACHE_PATH, get_components_path
 import os
 from src.mixins.to_mixin import ToMixin
 from src.mixins.cache_mixin import CacheMixin, sanitize_path_for_filename
@@ -49,6 +49,11 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         self.cache_file = cache_file
         self.device = device
         self.max_cache_size = max_cache_size
+        # download config path if it is there
+        if self.config_path:
+            self.config_path = self._download(
+                self.config_path, get_components_path()
+            )
 
         if self.enable_cache and self.cache_file is None:
             self.cache_file = os.path.join(
@@ -57,7 +62,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             )
         if self.tokenizer_path is not None:
             self.tokenizer_path = self._download(
-                self.tokenizer_path, DEFAULT_COMPONENTS_PATH
+                self.tokenizer_path, get_components_path()
             )
             tokenizer_class = find_class_recursive(
                 transformers, config.get("tokenizer_class", "AutoTokenizer")

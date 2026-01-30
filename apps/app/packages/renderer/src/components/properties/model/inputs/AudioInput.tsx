@@ -103,18 +103,28 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
     (async () => {
       try {
         const list = await listConvertedMedia(getActiveProject()?.folderUuid);
-        const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
-        const infos = await Promise.all(infoPromises);
-        const results: MediaItem[] = list
-          .map((it, idx) => ({
-            name: it.name,
-            type: it.type,
-            absPath: it.absPath,
-            assetUrl: it.assetUrl,
-            dateAddedMs: it.dateAddedMs,
-            mediaInfo: infos[idx],
-            hasProxy: it.hasProxy,
-          }))
+        const infoResults = await Promise.allSettled(
+          list.map((it) => getMediaInfo(it.assetUrl))
+        );
+        const items: MediaItem[] = [];
+        for (let idx = 0; idx < list.length; idx++) {
+          const it = list[idx];
+          const result = infoResults[idx];
+          if (result.status === "fulfilled") {
+            items.push({
+              name: it.name,
+              type: it.type,
+              absPath: it.absPath,
+              assetUrl: it.assetUrl,
+              dateAddedMs: it.dateAddedMs,
+              mediaInfo: result.value,
+              hasProxy: it.hasProxy,
+            });
+          } else {
+            console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+          }
+        }
+        const results: MediaItem[] = items
           .filter((media) => {
             if (media.type === "audio") return true;
             const mediaInfo = media.mediaInfo;
@@ -162,45 +172,58 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
 
   const handleUpload = useCallback(async () => {
     try {
-      const filters = [{ name: "Audio Files", extensions: AUDIO_EXTS }];
+      const filters = [{ name: "Audio/Video Files", extensions: AUDIO_EXTS.concat(VIDEO_EXTS) }];
       const picked = await pickMediaPaths({
         directory: false,
         filters,
         title: "Choose audio file(s) to import",
       });
       const paths = (picked ?? []).filter((p) =>
-        AUDIO_EXTS.includes(getLowercaseExtension(p)),
+        AUDIO_EXTS.concat(VIDEO_EXTS).includes(getLowercaseExtension(p)),
       );
       if (paths.length === 0) return;
       const before = await listConvertedMedia(getActiveProject()?.folderUuid);
       const existingNames = new Set(before.map((it) => it.name));
       await importMediaPaths(paths, undefined, getActiveProject()?.folderUuid);
       const after = await listConvertedMedia(getActiveProject()?.folderUuid);
-      const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = after
-        .map((it, idx) => ({
-          name: it.name,
-          type: it.type,
-          absPath: it.absPath,
-          assetUrl: it.assetUrl,
-          dateAddedMs: it.dateAddedMs,
-          mediaInfo: infos[idx],
-          hasProxy: it.hasProxy,
-        }))
-        .filter((media) => media.type === "audio")
+      const infoResults = await Promise.allSettled(
+        after.map((it) => getMediaInfo(it.assetUrl))
+      );
+
+      const items: MediaItem[] = [];
+      for (let idx = 0; idx < after.length; idx++) {
+        const it = after[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          items.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+        }
+      }
+      const results: MediaItem[] = items
+        .filter((media) => media.type === "audio" || media.type === "video")
         .sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
         );
       setMediaItems(results);
 
       const newlyAdded = results.filter((it) => !existingNames.has(it.name));
+
       if (newlyAdded.length > 0) {
         const first = newlyAdded[0];
         const durationFrames = Math.max(
           1,
           Math.floor((first.mediaInfo?.duration || 0) * fps),
         );
+
         clearSelectedAsset();
         let url = first.assetUrl + (isVideo(first.assetUrl) ? "#audio" : "");
         const asset = addAsset({ path: url, modelInputAsset: true });
@@ -217,7 +240,7 @@ const PopoverAudio: React.FC<PopoverAudioProps> = ({
     } catch {
       // ignore upload errors here
     }
-  }, [clearSelectedAsset, onChange, fps]);
+  }, [clearSelectedAsset, onChange, fps, isVideo]);
 
   const assetSelectionHandler = React.useCallback(
     (selectedClipId: string | null) => {
@@ -753,15 +776,20 @@ const AudioInput: React.FC<AudioInputProps> = ({
 
   const emitSelection = useCallback(
     (next: AudioSelection) => {
+      // we need to validate the range, and update if necessary
+      if (next && next.clipId !== value?.clipId) {
+        setSelectedRange(next.startFrame, next.endFrame, inputId);
+      }
       onChange(next);
       // When unselecting, clear any persisted per-input selection state.
+      // up
       if (!next) {
         pause(inputId);
         clearSelectedRange(inputId);
         clearFocusFrame(inputId);
       }
     },
-    [onChange, pause, inputId, clearSelectedRange, clearFocusFrame],
+    [onChange, pause, inputId, clearSelectedRange, clearFocusFrame, setSelectedRange, selectedRangeTuple],
   );
   useEffect(() => {
     const el = stageContainerRef.current;
@@ -973,18 +1001,28 @@ const AudioInput: React.FC<AudioInputProps> = ({
       const existingNames = new Set(before.map((it) => it.name));
       await importMediaPaths([path], undefined, getActiveProject()?.folderUuid);
       const after = await listConvertedMedia(getActiveProject()?.folderUuid);
-      const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = after
-        .map((it, idx) => ({
-          name: it.name,
-          type: it.type,
-          absPath: it.absPath,
-          assetUrl: it.assetUrl,
-          dateAddedMs: it.dateAddedMs,
-          mediaInfo: infos[idx],
-          hasProxy: it.hasProxy,
-        }))
+      const infoResults = await Promise.allSettled(
+        after.map((it) => getMediaInfo(it.assetUrl))
+      );
+      const items: MediaItem[] = [];
+      for (let idx = 0; idx < after.length; idx++) {
+        const it = after[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          items.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+        }
+      }
+      const results: MediaItem[] = items
         .filter((media) => media.type === "audio")
         .sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
@@ -1177,29 +1215,7 @@ const AudioInput: React.FC<AudioInputProps> = ({
     selectedRangeTuple?.[1],
   ]);
 
-  // Ensure selectedRange is always valid (min 1 frame, within [clip.start, clip.end])
-  useEffect(() => {
-    if (!previewClip || !previewClip.type) return;
-    const clipStart = Math.max(0, Math.round(previewClip.startFrame ?? 0));
-    const clipEnd = Math.max(
-      clipStart + 1,
-      Math.round(previewClip.endFrame ?? clipStart + 1),
-    );
-    const span = Math.max(1, clipEnd - clipStart);
-    let curStart = Math.round(selectedRangeTuple?.[0] ?? 0);
-    let curEnd = Math.round(selectedRangeTuple?.[1] ?? curStart + 1);
-    const desiredStart = Math.max(0, Math.min(span - 1, curStart));
-    const desiredEnd = Math.max(desiredStart + 1, Math.min(span, curEnd));
-    if (desiredStart !== curStart || desiredEnd !== curEnd) {
-      setSelectedRange(desiredStart, desiredEnd, inputId);
-    }
-  }, [
-    previewClip,
-    selectedRangeTuple?.[0],
-    selectedRangeTuple?.[1],
-    setSelectedRange,
-    inputId,
-  ]);
+
 
   // Default selectedRange to the full duration on first load (store default [0,1])
   // Only reset if range is truly uninitialized, not if it was persisted
@@ -1218,7 +1234,6 @@ const AudioInput: React.FC<AudioInputProps> = ({
     // AND the clip span is greater than 1 (meaning [0, 1] is not valid for this clip)
     const isDefault = selectedRangeTuple[0] === 0 && selectedRangeTuple[1] === 1;
     if (!isDefault || span <= 1) return;
-    
     setSelectedRange(0, span, inputId);
   }, [
     previewClip,

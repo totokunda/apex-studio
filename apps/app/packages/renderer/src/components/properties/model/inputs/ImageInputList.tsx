@@ -37,6 +37,7 @@ const ImageInputList: React.FC<ImageInputListProps> = ({
   };
 
   const handleItemChange = (index: number, next: ImageSelection) => {
+    console.log("handleItemChange", index, next);
     const nextList = [...(value || [])];
     nextList[index] = next;
     onChange(nextList);

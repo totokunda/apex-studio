@@ -29,6 +29,7 @@ import {
   LuTrash,
   LuLoader,
   LuPlus,
+  LuFolder,
 } from "react-icons/lu";
 
 import {
@@ -47,6 +48,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { refreshManifestPart } from "@/lib/manifest/queries";
 import { toast } from "sonner";
 import { TbCancel } from "react-icons/tb";
+import { pickMediaPaths } from "@app/preload";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 
@@ -102,6 +104,11 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
   const isDuplicateVariantName =
     normalizedNewModelName.length > 0 &&
     normalizedExistingVariantNames.has(normalizedNewModelName);
+  // During "Verifying..." we may refresh manifest data before clearing the form,
+  // which can transiently make the just-added name look like a duplicate.
+  // Only show this validation while the user is initially entering a variant name.
+  const showDuplicateVariantNameError =
+    !isValidatingModelPath && isDuplicateVariantName;
 
   return (
     <div className="mt-2.5 w-full bg-brand-background border border-brand-light/15 rounded-md px-3 py-3.5 space-y-2.5">
@@ -119,7 +126,7 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
           className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
           placeholder="e.g. Local GGUF Q4 variant"
         />
-        {isDuplicateVariantName && (
+        {showDuplicateVariantNameError && (
           <p className="text-[9.5px] text-red-400">
             A variant with this name already exists.
           </p>
@@ -133,13 +140,58 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
           Local path on this machine. Can be a file or a directory and will be
           checked before use.
         </p>
-        <input
-          type="text"
-          value={newModelPath}
-          onChange={(e) => setNewModelPath(e.target.value)}
-          className="w-full bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light font-mono placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
-          placeholder="/Users/you/models/my_model.safetensors"
-        />
+        <div className="flex items-center gap-x-2">
+          <input
+            type="text"
+            value={newModelPath}
+            onChange={(e) => setNewModelPath(e.target.value)}
+            className="flex-1 bg-brand border border-brand-light/15 rounded-[5px] px-2.5 py-1.5 text-[10px] text-brand-light font-mono placeholder:text-brand-light/40 focus:outline-none focus:ring-1 focus:ring-brand-light/40"
+            placeholder="/Users/you/models/my_model.safetensors"
+          />
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const picked = await pickMediaPaths({
+                  directory: false,
+                  title: "Select model file or folder",
+                  filters: [
+                    {
+                      name: "Model Files",
+                      extensions: [
+                        "safetensors",
+                        "ckpt",
+                        "pt",
+                        "pth",
+                        "bin",
+                        "gguf",
+                        "ggml",
+                        "onnx",
+                        "tflite",
+                      ],
+                    },
+                    { name: "All Files", extensions: ["*"] },
+                  ],
+                  defaultPath:
+                    newModelPath && newModelPath.trim().length > 0
+                      ? newModelPath.trim()
+                      : undefined,
+                });
+                const selectedPath =
+                  Array.isArray(picked) && picked.length > 0 ? picked[0] : null;
+                if (selectedPath && typeof selectedPath === "string") {
+                  setNewModelPath(selectedPath);
+                }
+              } catch {
+                // Swallow errors; keep existing path untouched
+              }
+            }}
+            className="text-[10px] font-medium flex items-center justify-center gap-x-1 text-brand-light hover:text-brand-light/90 bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[5px] px-2.5 py-1.5 transition-all"
+          >
+            <LuFolder className="w-3.5 h-3.5" />
+            <span>Browse</span>
+          </button>
+        </div>
       </div>
       <div className="flex items-center justify-end gap-x-2 pt-1">
         
@@ -517,13 +569,69 @@ const ModelPathsSection: React.FC<{
   manifestId: string;
   componentIndex: number;
 }> = ({ component, manifestId, componentIndex }) => {
-   const variants = (component.model_path  as ManifestComponentModelPathItem[])?.map((path) => path.variant);
-   const defaultVariant = variants?.[0] ?? "";
-   const [selectedVariant, setSelectedVariant] = useState(defaultVariant);
+   const variants = useMemo(() => {
+     const raw = (component.model_path as ManifestComponentModelPathItem[] | undefined) ?? [];
+     const unique = new Set<string>();
+     for (const p of raw) {
+       const v = p?.variant;
+       if (typeof v === "string" && v.length > 0) unique.add(v);
+     }
+     return Array.from(unique);
+   }, [component.model_path]);
+   const variantPathCounts = useMemo(() => {
+     const raw = (component.model_path as ManifestComponentModelPathItem[] | undefined) ?? [];
+     const counts = new Map<string, number>();
+     for (const p of raw) {
+       const v = p?.variant;
+       if (typeof v !== "string" || v.length === 0) continue;
+       counts.set(v, (counts.get(v) ?? 0) + 1);
+     }
+     return counts;
+   }, [component.model_path]);
+   const fallbackVariant = variants[0] ?? "add-variant";
+   const [selectedVariant, setSelectedVariant] = useState(fallbackVariant);
 
-   const onRemoveCustomPath = useCallback(() => {
-    setSelectedVariant(defaultVariant);
-   }, [defaultVariant, setSelectedVariant]);
+   // Keep selection valid as variants list changes (e.g., after delete/refresh).
+   useEffect(() => {
+     if (selectedVariant === "add-variant") return;
+     if (variants.includes(selectedVariant)) return;
+     setSelectedVariant(fallbackVariant);
+   }, [fallbackVariant, selectedVariant, variants]);
+
+   const onRemoveCustomPath = useCallback(
+     (removedVariant?: string) => {
+       setSelectedVariant((prev) => {
+         const remaining = removedVariant
+           ? variants.filter((v) => v !== removedVariant)
+           : variants;
+
+         if (remaining.length === 0) {
+           return "add-variant";
+         }
+
+         // If we're not deleting the current selection (and it's still valid), keep it.
+         if (prev !== removedVariant && remaining.includes(prev)) {
+           return prev;
+         }
+
+         // Otherwise, navigate to the nearest available neighbor.
+         if (removedVariant) {
+           const removedIndex = variants.indexOf(removedVariant);
+           const left = removedIndex > 0 ? variants[removedIndex - 1] : null;
+           const right =
+             removedIndex >= 0 && removedIndex < variants.length - 1
+               ? variants[removedIndex + 1]
+               : null;
+
+           if (left && remaining.includes(left)) return left;
+           if (right && remaining.includes(right)) return right;
+         }
+
+         return remaining[0];
+       });
+     },
+     [variants],
+   );
 
    const onAddCustomPath = useCallback((variant: string) => {
     setSelectedVariant(variant);
@@ -531,7 +639,11 @@ const ModelPathsSection: React.FC<{
 
   return (
     <div className="w-full">
-      <Tabs defaultValue={defaultVariant} onValueChange={setSelectedVariant} value={selectedVariant}>
+      <Tabs
+        defaultValue={fallbackVariant}
+        onValueChange={setSelectedVariant}
+        value={selectedVariant}
+      >
         <TabsList className="w-full flex justify-start dark gap-1.5 bg-brand flex-wrap px-3">
          {variants?.map((variant ) => variant && (
           <TabsTrigger 
@@ -554,7 +666,15 @@ const ModelPathsSection: React.FC<{
             <TabsContent key={variant} value={variant ?? ""}>
               <div className="px-3 pb-4">
                 {(component.model_path  as ManifestComponentModelPathItem[])?.filter((path) => path.variant === variant).map((path) => (
-                  <ModelPathItem key={path.path} path={path} variant={variant ?? ""} componentIndex={componentIndex} manifestId={manifestId} onRemoveCustomPath={onRemoveCustomPath} />
+                  <ModelPathItem
+                    key={path.path}
+                    path={path}
+                    variant={variant ?? ""}
+                    variantPathCount={variantPathCounts.get(variant ?? "") ?? 0}
+                    componentIndex={componentIndex}
+                    manifestId={manifestId}
+                    onRemoveCustomPath={onRemoveCustomPath}
+                  />
                 ))}
               </div>
             </TabsContent>
@@ -579,10 +699,18 @@ const ModelPathsSection: React.FC<{
 const ModelPathItem: React.FC<{
   path: ManifestComponentModelPathItem;
   variant: string;
+  variantPathCount: number;
   componentIndex: number;
   manifestId: string;
-  onRemoveCustomPath: () => void;
-}> = ({path, componentIndex, manifestId, onRemoveCustomPath}) => {
+  onRemoveCustomPath: (removedVariant?: string) => void;
+}> = ({
+  path,
+  variant,
+  variantPathCount,
+  componentIndex,
+  manifestId,
+  onRemoveCustomPath,
+}) => {
   
   const {
     getSourceToJobId,
@@ -734,7 +862,11 @@ const ModelPathItem: React.FC<{
                   setIsDeleting(true);
                   if (path.custom) {
                     await deleteCustomModelPath(manifestId, componentIndex, path.path);
-                    onRemoveCustomPath();
+                    // Only navigate away when deleting the last path in a variant
+                    // (i.e., the variant itself is being removed).
+                    if (variantPathCount <= 1) {
+                      onRemoveCustomPath(variant);
+                    }
                   } else {
                     await deleteDownload({
                       path: path.path,

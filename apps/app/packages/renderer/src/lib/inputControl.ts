@@ -17,7 +17,8 @@ import _ from "lodash";
  * `useInputControlsStore` hook which exposes a per-clip façade that
  * only requires an inputId.
  */
-interface InputControlStore {
+
+export interface InputControlStore {
   // Zoom state (independent from other controls)
   setZoomLevel: (level: ZoomLevel, inputId: string, clipId: string) => void;
   setTotalTimelineFrames: (frames: number, inputId: string, clipId: string) => void;
@@ -170,6 +171,9 @@ function getPlaybackState(
 }
 
 const GLOBAL_FALLBACK_CLIP_ID = "__global__";
+// Exported so callers that must read the global store directly (e.g. during
+// generation) can safely fall back when per-clip state isn't present.
+export const INPUT_CONTROLS_FALLBACK_CLIP_ID = GLOBAL_FALLBACK_CLIP_ID;
 
 // Cache of projected per-clip stores so that method identities remain stable
 // across renders and store updates (avoids infinite effect loops that depend
