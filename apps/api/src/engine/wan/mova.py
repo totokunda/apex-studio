@@ -447,7 +447,12 @@ class WanMOVAEngine(WanShared):
         rope_on_cpu: bool = True,
         **kwargs,
     ):
-        
+        safe_emit_progress(
+            progress_callback,
+            0.0,
+            "Starting MOVA image-to-video + audio generation pipeline",
+        )
+
         use_cfg_guidance = negative_prompt is not None and guidance_scale > 1.0
         num_frames = self._parse_num_frames(duration, fps)
         if high_noise_guidance_scale is not None and low_noise_guidance_scale is not None:
@@ -456,26 +461,45 @@ class WanMOVAEngine(WanShared):
                 progress_callback, 0.01, "Using high/low-noise guidance scales"
             )
         device = self.device
+
+        safe_emit_progress(progress_callback, 0.02, "Loading input image")
         image = self._load_image(image)
+        safe_emit_progress(
+            progress_callback,
+            0.04,
+            f"Preprocessing input image (target: ~{height}x{width}, frames: {num_frames}, fps: {fps:g})",
+        )
         image, height, width = self._aspect_ratio_resize(image, max_area=height * width, mod_value=16)
         image = self.video_processor.preprocess(image, height=height, width=width).to(self.device, dtype=torch.float32)
         audio_num_samples = int(self.audio_sample_rate * num_frames / fps)
         
         if seed is not None:
+            safe_emit_progress(progress_callback, 0.06, f"Seeding RNG (seed: {seed})")
             generator = torch.Generator(device=device).manual_seed(seed)
         
         if not self.scheduler:
+            safe_emit_progress(progress_callback, 0.08, "Loading scheduler")
             self.load_component_by_type("scheduler")
-            self.to_device(self.scheduler)
+            safe_emit_progress(progress_callback, 0.09, "Scheduler loaded")
+        safe_emit_progress(progress_callback, 0.10, "Moving scheduler to device")
+        self.to_device(self.scheduler)
+        safe_emit_progress(progress_callback, 0.11, "Configuring scheduler timesteps")
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         scheduler_support_audio = hasattr(self.scheduler, "get_pairs")
         if scheduler_support_audio:
+            safe_emit_progress(progress_callback, 0.12, "Using paired video/audio timesteps")
             audio_scheduler = self.scheduler
             paired_timesteps = self.scheduler.get_pairs()
         else:
+            safe_emit_progress(progress_callback, 0.12, "Preparing separate audio scheduler")
             audio_scheduler = copy.deepcopy(self.scheduler)
             paired_timesteps = torch.stack([self.scheduler.timesteps, self.scheduler.timesteps], dim=1)
         
+        safe_emit_progress(
+            progress_callback,
+            0.14,
+            f"Preparing video latents + conditioning (resolution: {height}x{width}, frames: {num_frames})",
+        )
         latents, condition = self.prepare_latents(
             image,
             1,
@@ -491,6 +515,11 @@ class WanMOVAEngine(WanShared):
             offload=offload,
         )
         
+        safe_emit_progress(
+            progress_callback,
+            0.18,
+            f"Preparing audio noise latents (samples: {audio_num_samples}, sample_rate: {self.audio_sample_rate})",
+        )
         audio_latents = self.prepare_audio_latents(
             None,
             1,
@@ -502,14 +531,17 @@ class WanMOVAEngine(WanShared):
             latents=audio_latents,
         )
         
+        safe_emit_progress(progress_callback, 0.20, "Encoding prompt embeddings")
+        encode_progress_callback = make_mapped_progress(progress_callback, 0.20, 0.32)
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
             negative_prompt,
             use_cfg_guidance=use_cfg_guidance,
-            progress_callback=progress_callback,
+            progress_callback=encode_progress_callback,
             max_sequence_length=max_sequence_length,
             offload=offload,
         )
+        safe_emit_progress(progress_callback, 0.33, "Prompt embeddings ready")
         
         total_steps = paired_timesteps.shape[0]
         boundary_timestep = boundary_ratio * self.scheduler.config.num_train_timesteps
@@ -517,15 +549,14 @@ class WanMOVAEngine(WanShared):
             progress_callback, 0.40, 0.92
         )
         
-        safe_emit_progress(
-            progress_callback,
-            0.40,
-            f"Starting denoising (CFG: {'on' if use_cfg_guidance else 'off'}, EasyCache: {'on' if use_easycache else 'off'})",
-        )
-        
         # Initialize EasyCache state if enabled
         easycache_state = None
         if use_easycache:
+            safe_emit_progress(
+                progress_callback,
+                0.34,
+                f"Initializing EasyCache (thresh: {easycache_thresh:g}, ret_steps: {easycache_ret_steps})",
+            )
             easycache_state = create_easycache_state(
                 num_steps=total_steps,
                 thresh=easycache_thresh,
@@ -534,16 +565,35 @@ class WanMOVAEngine(WanShared):
         
         dual_transformer_state = _DualNoiseTransformerSelectState()
         if not getattr(self, "audio_transformer", None):
+            safe_emit_progress(progress_callback, 0.35, "Loading audio transformer")
             self.load_component_by_name("audio_transformer")
-        
+
+        safe_emit_progress(progress_callback, 0.36, "Moving audio transformer to device")
         self.to_device(self.audio_transformer)
         if chunking_profile != "none":
             if hasattr(self.audio_transformer, "set_chunking_profile"):
+                safe_emit_progress(
+                    progress_callback,
+                    0.37,
+                    f"Enabling audio transformer chunking profile '{chunking_profile}' (RoPE on CPU: {'on' if rope_on_cpu else 'off'})",
+                )
                 self.audio_transformer.enable_memory_efficient_inference(chunking_profile=chunking_profile, rope_on_cpu=rope_on_cpu)
         
 
         dual_tower_bridge = self.helpers["dual_tower_bridge"]
+        safe_emit_progress(progress_callback, 0.38, "Moving audio/video bridge to device")
         self.to_device(dual_tower_bridge)
+
+        safe_emit_progress(
+            progress_callback,
+            0.40,
+            (
+                "Starting denoising "
+                f"(steps: {total_steps}, CFG: {'on' if use_cfg_guidance else 'off'}, "
+                f"mode: {cfg_mode}{', merged' if cfg_merge else ''}, "
+                f"EasyCache: {'on' if use_easycache else 'off'})"
+            ),
+        )
         
         with self._progress_bar(total=total_steps, desc="Denoising") as pbar:
             
@@ -668,36 +718,45 @@ class WanMOVAEngine(WanShared):
                     latents = self.scheduler.step(visual_noise_pred, timestep, latents, return_dict=False)[0]
                     audio_latents = audio_scheduler.step(audio_noise_pred, audio_timestep, audio_latents, return_dict=False)[0]
 
-                if denoise_progress_callback is not None and total_steps > 0:
-                    try:
-                        denoise_progress_callback(idx_step / total_steps, f"Denoising step {idx_step + 1}/{total_steps}")
-                    except Exception:
-                        pass
+                if total_steps > 0:
+                    safe_emit_progress(
+                        denoise_progress_callback,
+                        (idx_step + 1) / total_steps,
+                        f"Denoising step {idx_step + 1}/{total_steps}",
+                    )
                 
                 pbar.update(1)
 
         if offload:
+            safe_emit_progress(progress_callback, 0.93, "Offloading denoising models")
             self._offload("audio_transformer")
             self._offload("high_noise_transformer")
             self._offload("low_noise_transformer")
             self._offload("dual_tower_bridge")
             
         # decode video
+        safe_emit_progress(progress_callback, 0.94, "Decoding video latents")
         video = self.vae_decode(latents, offload=offload)
         video = self._tensor_to_frames(video)
+        safe_emit_progress(progress_callback, 0.96, "Decoded video frames")
 
         # decode audio
         if not getattr(self, "audio_vae", None):
+            safe_emit_progress(progress_callback, 0.965, "Loading audio decoder")
             self.load_component_by_name("audio_vae")
+        safe_emit_progress(progress_callback, 0.97, "Moving audio decoder to device")
         self.to_device(self.audio_vae)
         
+        safe_emit_progress(progress_callback, 0.98, "Decoding audio latents")
         audio_latents = audio_latents.to(self.audio_vae.dtype)
         audio = self.audio_vae.decode(audio_latents).to(torch.float32)
         audio = audio[0].cpu().squeeze()
         
         if offload:
+            safe_emit_progress(progress_callback, 0.99, "Offloading audio decoder")
             self._offload("audio_vae")
 
+        safe_emit_progress(progress_callback, 1.0, "Completed MOVA generation pipeline")
         return video, audio
 
     

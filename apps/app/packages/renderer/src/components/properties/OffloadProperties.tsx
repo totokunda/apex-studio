@@ -265,7 +265,7 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
       const num_blocks = Math.max(1, Math.floor(Number.isFinite(num_blocks_raw) ? num_blocks_raw : 1));
 
       const budget_mb_raw = (existing as any)?.budget_mb;
-      let budget_mb_mb: number = 3000;
+      let budget_mb_mb: number = 1000;
       if (typeof budget_mb_raw === "number" && Number.isFinite(budget_mb_raw)) {
         budget_mb_mb = budget_mb_raw;
       } else if (typeof budget_mb_raw === "string") {
@@ -353,7 +353,7 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
     }
     if (mode === "budget") {
       // Slider UX: always store a numeric MB budget between 100MB and 5GB.
-      const fallback = 3000;
+      const fallback = 1000;
       const chosen = budgetMb ?? fallback;
       (nextEntry as any).budget_mb = Math.min(5000, Math.max(100, Math.round(chosen)));
     }
