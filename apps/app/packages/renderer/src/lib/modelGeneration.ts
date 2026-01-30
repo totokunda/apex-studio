@@ -334,6 +334,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
   toast.info("Preparing inputs and starting generation...");
   const modelValues = getModelValues(clipId);
+
   if (!modelValues) return;
   const inputs = (clip as ModelClipProps)?.manifest?.spec.ui?.inputs || [];
 
@@ -363,6 +364,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           selectedRange?: [number, number];
           selection?: string;
         };
+
         if (!value) continue;
         if (
           Object.prototype.hasOwnProperty.call(value as any, "selection") &&
@@ -392,11 +394,7 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           },
         );
 
-
-
         const { exportClips, width, height } = prepared;
-
-        
 
         let absolutePath: string | null = null;
         const frame =
