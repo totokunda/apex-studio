@@ -46,7 +46,7 @@ import LoraPanel from '../properties/model/LoraPanel'
 import { runModelGeneration } from '@/lib/modelGeneration';
 import { runPreprocessorJob } from '@/lib/preprocessorRun';
 import { useManifestQuery } from '@/lib/manifest/queries'
-import { useInputControlsStore } from '@/lib/inputControl'
+
 interface PropertiesPanelProps {
     panelSize: number;
 }
