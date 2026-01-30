@@ -114,23 +114,33 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
     (async () => {
       try {
         const list = await listConvertedMedia(getActiveProject()?.folderUuid);
-        const infoPromises = list.map((it) => getMediaInfo(it.assetUrl));
-        const infos = await Promise.all(infoPromises);
-        const results: MediaItem[] = list
-          .map((it, idx) => ({
-            name: it.name,
-            type: it.type,
-            absPath: it.absPath,
-            assetUrl: it.assetUrl,
-            dateAddedMs: it.dateAddedMs,
-            mediaInfo: infos[idx],
-            hasProxy: it.hasProxy,
-          }))
+        const infoResults = await Promise.allSettled(
+          list.map((it) => getMediaInfo(it.assetUrl))
+        );
+        const results: MediaItem[] = [];
+        for (let idx = 0; idx < list.length; idx++) {
+          const it = list[idx];
+          const result = infoResults[idx];
+          if (result.status === "fulfilled") {
+            results.push({
+              name: it.name,
+              type: it.type,
+              absPath: it.absPath,
+              assetUrl: it.assetUrl,
+              dateAddedMs: it.dateAddedMs,
+              mediaInfo: result.value,
+              hasProxy: it.hasProxy,
+            });
+          } else {
+            console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+          }
+        }
+        const filtered = results
           .filter((media) => media.type === "video")
           .sort((a, b) =>
             a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
           );
-        setMediaItems(results);
+        setMediaItems(filtered);
         setMediaLoaded(true);
       } catch {
         // Swallow errors; UI handles toasts elsewhere.
@@ -175,23 +185,33 @@ const PopoverVideo: React.FC<PopoverVideoProps> = ({
       const existingNames = new Set(before.map((it) => it.name));
       await importMediaPaths(paths, undefined, getActiveProject()?.folderUuid);
       const after = await listConvertedMedia(getActiveProject()?.folderUuid);
-      const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = after
-        .map((it, idx) => ({
-          name: it.name,
-          type: it.type,
-          absPath: it.absPath,
-          assetUrl: it.assetUrl,
-          dateAddedMs: it.dateAddedMs,
-          mediaInfo: infos[idx],
-          hasProxy: it.hasProxy,
-        }))
+      const infoResults = await Promise.allSettled(
+        after.map((it) => getMediaInfo(it.assetUrl))
+      );
+      const results: MediaItem[] = [];
+      for (let idx = 0; idx < after.length; idx++) {
+        const it = after[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          results.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+        }
+      }
+      const filtered = results
         .filter((media) => media.type === "video")
         .sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
         );
-      setMediaItems(results);
+      setMediaItems(filtered);
 
       const newlyAdded = results.filter((it) => !existingNames.has(it.name));
       if (newlyAdded.length > 0) {
@@ -867,6 +887,9 @@ const VideoInput: React.FC<VideoInputProps> = ({
 
   const emitSelection = useCallback(
     (next: VideoSelection) => {
+      if (next && next.clipId !== value?.clipId) {
+        setSelectedRange(next.startFrame, next.endFrame, inputId);
+      }
       if (onChangeComposite) {
         onChangeComposite({
           selection: next,
@@ -1271,22 +1294,28 @@ const VideoInput: React.FC<VideoInputProps> = ({
       const existingNames = new Set(before.map((it) => it.name));
       await importMediaPaths([path], undefined, getActiveProject()?.folderUuid);
       const after = await listConvertedMedia(getActiveProject()?.folderUuid);
-      const infoPromises = after.map((it) => getMediaInfo(it.assetUrl));
-      const infos = await Promise.all(infoPromises);
-      const results: MediaItem[] = after
-        .map((it, idx) => ({
-          name: it.name,
-          type: it.type,
-          absPath: it.absPath,
-          assetUrl: it.assetUrl,
-          dateAddedMs: it.dateAddedMs,
-          mediaInfo: infos[idx],
-          hasProxy: it.hasProxy,
-        }))
-        .filter((media) => media.type === "video")
-        .sort((a, b) =>
-          a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
-        );
+      const infoResults = await Promise.allSettled(
+        after.map((it) => getMediaInfo(it.assetUrl))
+      );
+      const results: MediaItem[] = [];
+      for (let idx = 0; idx < after.length; idx++) {
+        const it = after[idx];
+        const result = infoResults[idx];
+        if (result.status === "fulfilled") {
+          results.push({
+            name: it.name,
+            type: it.type,
+            absPath: it.absPath,
+            assetUrl: it.assetUrl,
+            dateAddedMs: it.dateAddedMs,
+            mediaInfo: result.value,
+            hasProxy: it.hasProxy,
+          });
+        } else {
+          console.warn(`Failed to load media info for ${it.name}:`, result.reason);
+        }
+      }
+      
       const newlyAdded = results.filter((it) => !existingNames.has(it.name));
       if (newlyAdded.length > 0) {
         const first = newlyAdded[0];
@@ -1555,22 +1584,7 @@ const VideoInput: React.FC<VideoInputProps> = ({
       setSelectedRange(0, span, inputId);
       return;
     }
-    let curStart = Math.round(selectedRangeTuple?.[0] ?? 0);
-    let curEnd = Math.round(selectedRangeTuple?.[1] ?? curStart + 1);
-    let desiredStart = Math.max(0, Math.min(span - 1, curStart));
-    let desiredEnd = Math.max(desiredStart + 1, Math.min(span, curEnd));
-
-    if (typeof maxDuration === "number" && maxDuration > 0) {
-      const maxSpan = Math.max(1, Math.floor(maxDuration));
-      const currentSpan = desiredEnd - desiredStart;
-      if (currentSpan > maxSpan) {
-        desiredEnd = desiredStart + maxSpan;
-      }
-    }
-
-    if (desiredStart !== curStart || desiredEnd !== curEnd) {
-      setSelectedRange(desiredStart, desiredEnd, inputId);
-    }
+   
   }, [
     previewClip,
     selectedRangeTuple?.[0],

@@ -486,19 +486,21 @@ def main() -> None:
 
     # PEFT LoRA
     try:
-        from peft import LoraConfig, get_peft_model  # type: ignore
+        from peft import get_peft_model, LoraConfig
     except Exception as e:
         raise RuntimeError("peft is required to train LoRA. Please install peft.") from e
 
     lora_alpha = args.lora_alpha if args.lora_alpha is not None else args.lora_rank
     target_modules = [m.strip() for m in args.lora_target_modules.split(",") if m.strip()]
+    print(f"Training LoRA with rank {args.lora_rank}, alpha {lora_alpha}, target modules {target_modules}, dropout {args.lora_dropout}")
 
     lora_cfg = LoraConfig(
         r=args.lora_rank,
-        lora_alpha=lora_alpha,
-        lora_dropout=args.lora_dropout,
+        alpha=lora_alpha,
         target_modules=target_modules,
+        lora_dropout=args.lora_dropout,
         bias="none",
+        
     )
     model = get_peft_model(transformer, lora_cfg)
 
