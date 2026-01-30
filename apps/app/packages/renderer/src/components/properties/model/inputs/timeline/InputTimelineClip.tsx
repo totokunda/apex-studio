@@ -330,12 +330,8 @@ const TimelineClip: React.FC<
       // Store selection exactly as committed (clip-local), after basic clamping.
       const localStart = clampedStart;
       const localEnd = clampedEnd;
-      const [existingStart, existingEnd] = useInputControlsStore
-        .getState()
-        .getSelectedRange(inputId ?? "");
-      if (existingStart === localStart && existingEnd === localEnd) {
-        // Range already matches; still ensure focus is clamped into this range if needed.
-      } else {
+      const [existingStart, existingEnd] = selectedRange;
+      if (existingStart !== localStart || existingEnd !== localEnd) {
         setSelectedRange(localStart, localEnd, inputId ?? "");
       }
 
@@ -360,6 +356,7 @@ const TimelineClip: React.FC<
       currentEndFrame,
       focusFrame,
       inputId,
+      selectedRange,
       setSelectedRange,
       setFocusFrame,
       setFocusAnchorRatio,
