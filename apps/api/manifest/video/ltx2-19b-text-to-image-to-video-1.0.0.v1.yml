@@ -337,8 +337,35 @@ spec:
         flow: column
         rows:
         - - num_inference_steps
-        - - guidance_scale
         - - seed
+    - name: audio_guidance
+      label: Audio Guidance
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - audio_guidance_scale
+        - - audio_guidance_rescale
+        - - audio_skip_step
+        - - audio_stg_scale
+        - - audio_stg_blocks
+        - - audio_rescale_scale
+        - - audio_modality_scale
+    - name: video_guidance
+      label: Video Guidance
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - video_guidance_scale
+        - - video_guidance_rescale
+        - - video_skip_step
+        - - video_stg_scale
+        - - video_stg_blocks
+        - - video_rescale_scale
+        - - video_modality_scale
     - name: chunking_profile
       label: Chunking Profile
       collapsible: true
@@ -621,4 +648,143 @@ spec:
       min: 1
       max: 512
       step: 1
-
+    - id: audio_guidance_scale
+      label: Audio Guidance Scale
+      description: "Classifier-Free Guidance scale. Higher values make the output adhere more strongly to the text prompt. Typical values: 2.0–5.0. Set to 1.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: audio_guidance
+      default: 7.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: audio_guidance_rescale
+      label: Audio Guidance Rescale
+      description: "Rescales the guided prediction to match the variance of the conditional prediction. Helps prevent over-saturation. Typical values: 0.5–0.7. Set to 0.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: audio_guidance
+      default: 0.0
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: audio_skip_step
+      label: Audio Skip Step
+      description: "Skip guidance every N steps. Can speed up inference with minimal quality loss. Set to 0 to disable (never skip)."
+      type: number+slider
+      value_type: integer
+      panel: audio_guidance
+      default: 0
+      min: 0
+      max: 100
+      step: 1
+    - id: audio_stg_scale
+      label: Audio STG Scale
+      description: "Spatio-Temporal Guidance scale. Controls perturbation-based guidance for improved temporal coherence. Typical values: 0.5–1.5. Set to 0.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: audio_guidance
+      default: 0.0
+      min: 0.0
+      max: 3.0
+      step: 0.01
+    - id: audio_stg_blocks
+      label: Audio STG Blocks
+      description: "Which transformer blocks to perturb for STG (e.g., [29] for the last block). Set to [] to disable STG."
+      type: number_list
+      value_type: integer
+      panel: audio_guidance
+      default: [29]
+      min: 0
+      max: 100
+      step: 1
+    - id: audio_rescale_scale
+      label: Audio Rescale Scale
+      description: "Rescales the guided prediction to match the variance of the conditional prediction. Helps prevent over-saturation. Typical values: 0.5–0.7. Set to 0.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: audio_guidance
+      default: 0.7
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: audio_modality_scale
+      label: Audio Modality Scale
+      description: "Modality CFG scale. Steers the model away from unsynced video and audio results, improving audio-visual coherence. Set to 1.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: audio_guidance
+      default: 3.0
+      min: 1.0
+      max: 10.0
+      step: 0.1
+    - id: video_guidance_scale
+      label: Video Guidance Scale
+      description: "Classifier-Free Guidance scale. Higher values make the output adhere more strongly to the text prompt. Typical values: 2.0–5.0. Set to 1.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: video_guidance
+      default: 3.0
+      min: 1.0
+      max: 10.0
+      step: 0.1
+    - id: video_guidance_rescale
+      label: Video Guidance Rescale
+      description: "Rescales the guided prediction to match the variance of the conditional prediction. Helps prevent over-saturation. Typical values: 0.5–0.7. Set to 0.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: video_guidance
+      default: 0.0
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: video_skip_step
+      label: Video Skip Step
+      description: "Skip guidance every N steps. Can speed up inference with minimal quality loss. Set to 0 to disable (never skip)."
+      type: number+slider
+      value_type: integer
+      panel: video_guidance
+      default: 0
+      min: 0
+      max: 100
+      step: 1
+    - id: video_stg_scale
+      label: Video STG Scale
+      description: "Spatio-Temporal Guidance scale. Controls perturbation-based guidance for improved temporal coherence. Typical values: 0.5–1.5. Set to 0.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: video_guidance
+      default: 0.0
+      min: 0.0
+      max: 3.0
+      step: 0.01
+    - id: video_stg_blocks
+      label: Video STG Blocks
+      description: "Which transformer blocks to perturb for STG (e.g., [29] for the last block). Set to [] to disable STG."
+      type: number_list
+      value_type: integer
+      panel: video_guidance
+      default: [29]
+      min: 0
+      max: 100
+      step: 1
+    - id: video_rescale_scale
+      label: Video Rescale Scale
+      description: "Rescales the guided prediction to match the variance of the conditional prediction. Helps prevent over-saturation. Typical values: 0.5–0.7. Set to 0.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: video_guidance
+      default: 0.7
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    - id: video_modality_scale
+      label: Video Modality Scale
+      description: "Modality CFG scale. Steers the model away from unsynced video and audio results, improving audio-visual coherence. Set to 1.0 to disable."
+      type: number+slider
+      value_type: float
+      panel: video_guidance
+      default: 3.0
+      min: 1.0
+      max: 10.0
+      step: 0.1

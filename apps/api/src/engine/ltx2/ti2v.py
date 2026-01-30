@@ -8,6 +8,7 @@ from src.helpers.ltx2.upsampler import upsample_video
 from src.types import InputImage, InputAudio
 from src.utils.cache import empty_cache
 from src.utils.progress import safe_emit_progress, make_mapped_progress
+from src.engine.ltx2.multimodal_guidance import MultiModalGuider, MultiModalGuiderParams
 
 
 class LTX2TI2VEngine(LTX2Shared):
@@ -564,8 +565,19 @@ class LTX2TI2VEngine(LTX2Shared):
         timesteps: List[int] = None,
         use_distilled_stage_1: bool = False,
         use_distilled_stage_2: bool = False,
-        guidance_scale: float = 3.0,
-        guidance_rescale: float = 0.0,
+        # --- Multimodal guidance (independent video/audio control) ---
+        video_guidance_scale: float = 3.0,
+        audio_guidance_scale: float = 3.0,
+        video_guidance_rescale: float = 0.0,
+        audio_guidance_rescale: float = 0.0,
+        video_stg_scale: float = 0.0,
+        video_stg_blocks: Optional[List[int]] = None,
+        video_modality_scale: float = 1.0,
+        video_skip_step: int = 0,
+        audio_stg_scale: float = 0.0,
+        audio_stg_blocks: Optional[List[int]] = None,
+        audio_modality_scale: float = 1.0,
+        audio_skip_step: int = 0,
         noise_scale: float = 1.0,
         num_videos_per_prompt: Optional[int] = 1,
         seed: Optional[int] = None,
@@ -603,9 +615,6 @@ class LTX2TI2VEngine(LTX2Shared):
         image_strengths: Optional[Union[float, List[float]]] = None,
         image_pixel_frame_indices: Optional[Union[int, List[int]]] = None,
         last_image_strength: Optional[float] = None,
-        use_gradient_estimation: bool = False,
-        ge_gamma: float = 2.0,
-        cfg_sequential: bool = True,
         chunking_profile: str = "none",
         rope_on_cpu: bool = True,
         progress_callback: Optional[Callable[[float, str], None]] = None,
@@ -646,8 +655,14 @@ class LTX2TI2VEngine(LTX2Shared):
             * self.vae_spatial_compression_ratio
         )
 
-        self._guidance_scale = guidance_scale
-        self._guidance_rescale = guidance_rescale
+        # Determine whether we need unconditional embeddings (CFG) at all.
+        # `do_classifier_free_guidance` is derived from `_guidance_scale`, so set it based on the
+        # per-modality guidance scales.
+        effective_video_cfg = float(video_guidance_scale)
+        effective_audio_cfg = float(audio_guidance_scale)
+        self._guidance_scale = max(effective_video_cfg, effective_audio_cfg)
+        # Legacy `guidance_rescale` is removed; per-modality rescale is implemented in the multimodal guider.
+        self._guidance_rescale = 0.0
         self._attention_kwargs = attention_kwargs
         self._interrupt = False
         self._current_timestep = None
@@ -1109,17 +1124,15 @@ class LTX2TI2VEngine(LTX2Shared):
         self.scheduler.config.use_beta_sigmas = False
         self.scheduler.config.invert_sigmas = False
 
-        # For now, duplicate the scheduler for use with the audio latents in the default (scheduler.step) path.
-        audio_scheduler = None
-        if not use_gradient_estimation:
-            audio_scheduler = copy.deepcopy(self.scheduler)
-            _, _ = self._get_timesteps(
-                audio_scheduler,
-                num_inference_steps,
-                timesteps,
-                sigmas=sigmas,
-                mu=mu,
-            )
+        # Duplicate the scheduler for the audio latents to avoid shared internal step state.
+        audio_scheduler = copy.deepcopy(self.scheduler)
+        _, _ = self._get_timesteps(
+            audio_scheduler,
+            num_inference_steps,
+            timesteps,
+            sigmas=sigmas,
+            mu=mu,
+        )
 
         timesteps, num_inference_steps = self._get_timesteps(
             self.scheduler,
@@ -1179,11 +1192,57 @@ class LTX2TI2VEngine(LTX2Shared):
         )
         audio_timestep_frames = int(audio_num_frames)
 
+        # --- Multimodal guidance setup ---
+        video_guider = MultiModalGuider(
+            params=MultiModalGuiderParams(
+                cfg_scale=effective_video_cfg,
+                stg_scale=float(video_stg_scale),
+                stg_blocks=video_stg_blocks,
+                rescale_scale=float(video_guidance_rescale),
+                modality_scale=float(video_modality_scale),
+                skip_step=int(video_skip_step),
+            )
+        )
+        audio_guider = MultiModalGuider(
+            params=MultiModalGuiderParams(
+                cfg_scale=effective_audio_cfg,
+                stg_scale=float(audio_stg_scale),
+                stg_blocks=audio_stg_blocks,
+                rescale_scale=float(audio_guidance_rescale),
+                modality_scale=float(audio_modality_scale),
+                skip_step=int(audio_skip_step),
+            )
+        )
+
+        # Always run the multimodal guidance path:
+        # - if all scales disable guidance, it degenerates to a single conditional forward (pred=cond)
+        # - avoids keeping any legacy CFG branching logic in the denoiser
+        mm_guidance_enabled = True
+
+        # Pre-compute STG skip-block lists (None => all blocks; [] => disabled handled by guider).
+        num_blocks = (
+            len(getattr(self.transformer, "transformer_blocks"))
+            if hasattr(self.transformer, "transformer_blocks")
+            else 0
+        )
+        video_stg_skip_blocks: Optional[List[int]] = None
+        audio_stg_skip_blocks: Optional[List[int]] = None
+        if num_blocks > 0:
+            if video_guider.do_perturbed_generation():
+                if video_guider.params.stg_blocks is None:
+                    video_stg_skip_blocks = list(range(num_blocks))
+                else:
+                    video_stg_skip_blocks = [int(b) for b in video_guider.params.stg_blocks]
+            if audio_guider.do_perturbed_generation():
+                if audio_guider.params.stg_blocks is None:
+                    audio_stg_skip_blocks = list(range(num_blocks))
+                else:
+                    audio_stg_skip_blocks = [int(b) for b in audio_guider.params.stg_blocks]
+
+        last_mm_pred_video = None
+        last_mm_pred_audio = None
+
         # 7. Denoising loop
-        # NOTE: FlowMatchEulerDiscreteScheduler operates over `scheduler.sigmas` (includes a terminal 0).
-        # For gradient estimation we implement the Euler update directly, matching ltx-pipelines:
-        #   v_k = (x_k - x0_k) / sigma_k,  v_total = ge_gamma*(v_k - v_{k-1}) + v_{k-1}
-        #   x_{k+1} = x_k + (sigma_{k+1} - sigma_k) * v_total
         self._latent_num_frames = latent_num_frames
         self._latent_height = latent_height
         self._latent_width = latent_width
@@ -1194,408 +1253,8 @@ class LTX2TI2VEngine(LTX2Shared):
         if chunking_profile != "none":
             self.transformer.set_chunking_profile(chunking_profile)
 
-        sigmas_t = getattr(self.scheduler, "sigmas", None)
-        if use_gradient_estimation:
-            if getattr(
-                getattr(self.scheduler, "config", None), "stochastic_sampling", False
-            ):
-                self.logger.warning(
-                    "Gradient-estimation sampling requested, but scheduler.config.stochastic_sampling=True. "
-                    "Falling back to default Euler scheduler.step."
-                )
-                use_gradient_estimation = False
-            elif sigmas_t is None:
-                raise ValueError(
-                    "Gradient-estimation sampling requires scheduler.sigmas to be available."
-                )
-
-        if use_gradient_estimation:
-            # Ensure sigmas are on device and float32 for stable scalar math.
-            if not torch.is_tensor(sigmas_t):
-                sigmas_t = torch.tensor(sigmas_t, device=device, dtype=torch.float32)
-            else:
-                sigmas_t = sigmas_t.to(device=device, dtype=torch.float32)
-
-            # In FlowMatchEulerDiscreteScheduler, `sigmas` has length N+1, while `timesteps` has length N.
-            num_steps = int(sigmas_t.shape[0]) - 1
-            timesteps_loop = timesteps[:num_steps]
-
-            prev_video_velocity = None
-            prev_video_velocity_grid = None
-            prev_audio_velocity = None
-
-            denoise_progress_callback = make_mapped_progress(
-                stage1_progress_callback, 0.50, 0.90
-            )
-            safe_emit_progress(
-                stage1_progress_callback, 0.45, "Starting denoise (gradient-estimation)"
-            )
-            with self._progress_bar(total=num_steps) as progress_bar:
-                for i, t in enumerate(timesteps_loop):
-                    if self.interrupt:
-                        continue
-
-                    self._current_timestep = t
-
-                    # Predict velocity (GE mode).
-                    # If CFG is enabled, the pipeline expects a "virtual 2x batch" layout: [uncond; cond].
-                    # With `cfg_sequential=True`, we compute those two halves sequentially (batch=B each),
-                    # then concatenate back to 2B so indexing/chunking semantics remain intact.
-                    if self.do_classifier_free_guidance and cfg_sequential:
-                        bsz = latents.shape[0]
-                        uncond_idx = slice(0, bsz)
-                        cond_idx = slice(bsz, 2 * bsz)
-
-                        latent_model_input = latents.to(prompt_embeds_dtype)
-                        audio_latent_model_input = audio_latents.to(prompt_embeds_dtype)
-
-                        timestep_b = t.expand(bsz)
-                        video_timestep_b = (
-                            self._timesteps_from_denoise_mask_tokens(
-                                timestep=timestep_b,
-                                denoise_mask_tokens=denoise_mask,
-                                frames=video_timestep_frames,
-                            )
-                            if denoise_mask is not None
-                            else timestep_b
-                        )
-                        audio_timestep_b = (
-                            self._timesteps_from_denoise_mask_tokens(
-                                timestep=timestep_b,
-                                denoise_mask_tokens=audio_denoise_mask,
-                                frames=audio_timestep_frames,
-                            )
-                            if audio_denoise_mask is not None
-                            else timestep_b
-                        )
-                            
-                        
-                        
-
-                        with self.transformer.cache_context("cond_uncond"):
-                            vel_video_uncond, vel_audio_uncond = self.transformer(
-                                hidden_states=latent_model_input,
-                                audio_hidden_states=audio_latent_model_input,
-                                encoder_hidden_states=connector_prompt_embeds[
-                                    uncond_idx
-                                ],
-                                audio_encoder_hidden_states=connector_audio_prompt_embeds[
-                                    uncond_idx
-                                ],
-                                timestep=video_timestep_b,
-                                audio_timestep=audio_timestep_b,
-                                encoder_attention_mask=connector_attention_mask[
-                                    uncond_idx
-                                ],
-                                audio_encoder_attention_mask=connector_attention_mask[
-                                    uncond_idx
-                                ],
-                                num_frames=latent_num_frames,
-                                height=latent_height,
-                                width=latent_width,
-                                fps=fps,
-                                audio_num_frames=audio_num_frames,
-                                video_coords=video_coords,
-                                audio_coords=audio_coords,
-                                attention_kwargs=attention_kwargs,
-                                return_dict=False,
-                            )
-                            vel_video_text, vel_audio_text = self.transformer(
-                                hidden_states=latent_model_input,
-                                audio_hidden_states=audio_latent_model_input,
-                                encoder_hidden_states=connector_prompt_embeds[cond_idx],
-                                audio_encoder_hidden_states=connector_audio_prompt_embeds[
-                                    cond_idx
-                                ],
-                                timestep=video_timestep_b,
-                                audio_timestep=audio_timestep_b,
-                                encoder_attention_mask=connector_attention_mask[
-                                    cond_idx
-                                ],
-                                audio_encoder_attention_mask=connector_attention_mask[
-                                    cond_idx
-                                ],
-                                num_frames=latent_num_frames,
-                                height=latent_height,
-                                width=latent_width,
-                                fps=fps,
-                                audio_num_frames=audio_num_frames,
-                                video_coords=video_coords,
-                                audio_coords=audio_coords,
-                                rope_on_cpu=rope_on_cpu,
-                                attention_kwargs=attention_kwargs,
-                                return_dict=False,
-                            )
-
-                        vel_pred_video = torch.cat(
-                            [vel_video_uncond, vel_video_text], dim=0
-                        ).float()
-                        vel_pred_audio = torch.cat(
-                            [vel_audio_uncond, vel_audio_text], dim=0
-                        ).float()
-                    else:
-                        latent_model_input = (
-                            torch.cat([latents] * 2)
-                            if self.do_classifier_free_guidance
-                            else latents
-                        )
-                        latent_model_input = latent_model_input.to(prompt_embeds_dtype)
-                        audio_latent_model_input = (
-                            torch.cat([audio_latents] * 2)
-                            if self.do_classifier_free_guidance
-                            else audio_latents
-                        )
-                        audio_latent_model_input = audio_latent_model_input.to(
-                            prompt_embeds_dtype
-                        )
-
-                        # If CFG is enabled and we run a single 2B forward, coords must match the 2B batch.
-                        video_coords_call = video_coords
-                        audio_coords_call = audio_coords
-                        if (
-                            self.do_classifier_free_guidance
-                            and int(video_coords_call.shape[0]) * 2
-                            == int(latent_model_input.shape[0])
-                        ):
-                            video_coords_call = torch.cat(
-                                [video_coords_call, video_coords_call], dim=0
-                            )
-                            audio_coords_call = torch.cat(
-                                [audio_coords_call, audio_coords_call], dim=0
-                            )
-
-                        timestep_2b = t.expand(latent_model_input.shape[0])
-
-                        video_timestep_2b = (
-                            self._timesteps_from_denoise_mask_tokens(
-                                timestep=timestep_2b,
-                                denoise_mask_tokens=denoise_mask_model,
-                                frames=video_timestep_frames,
-                            )
-                            if denoise_mask_model is not None
-                            else timestep_2b
-                        )
-
-                        audio_timestep_2b = (
-                            self._timesteps_from_denoise_mask_tokens(
-                                timestep=timestep_2b,
-                                denoise_mask_tokens=audio_denoise_mask_model,
-                                frames=audio_timestep_frames,
-                            )
-                            if audio_denoise_mask_model is not None
-                            else timestep_2b
-                        )
-
-                        with self.transformer.cache_context("cond_uncond"):
-                            vel_pred_video, vel_pred_audio = self.transformer(
-                                hidden_states=latent_model_input,
-                                audio_hidden_states=audio_latent_model_input,
-                                encoder_hidden_states=connector_prompt_embeds,
-                                audio_encoder_hidden_states=connector_audio_prompt_embeds,
-                                timestep=video_timestep_2b,
-                                audio_timestep=audio_timestep_2b,
-                                encoder_attention_mask=connector_attention_mask,
-                                audio_encoder_attention_mask=connector_attention_mask,
-                                num_frames=latent_num_frames,
-                                height=latent_height,
-                                width=latent_width,
-                                fps=fps,
-                                audio_num_frames=audio_num_frames,
-                                video_coords=video_coords_call,
-                                audio_coords=audio_coords_call,
-                                attention_kwargs=attention_kwargs,
-                                return_dict=False,
-                            )
-                        vel_pred_video = vel_pred_video.float()
-                        vel_pred_audio = vel_pred_audio.float()
-
-                    if self.do_classifier_free_guidance:
-                        vel_video_uncond, vel_video_text = vel_pred_video.chunk(2)
-                        vel_pred_video = vel_video_uncond + self.guidance_scale * (
-                            vel_video_text - vel_video_uncond
-                        )
-
-                        vel_audio_uncond, vel_audio_text = vel_pred_audio.chunk(2)
-                        vel_pred_audio = vel_audio_uncond + self.guidance_scale * (
-                            vel_audio_text - vel_audio_uncond
-                        )
-
-                        if self.guidance_rescale > 0:
-                            vel_pred_video = self.rescale_noise_cfg(
-                                vel_pred_video,
-                                vel_video_text,
-                                guidance_rescale=self.guidance_rescale,
-                            )
-                            vel_pred_audio = self.rescale_noise_cfg(
-                                vel_pred_audio,
-                                vel_audio_text,
-                                guidance_rescale=self.guidance_rescale,
-                            )
-
-                    sigma = sigmas_t[i]
-                    sigma_next = sigmas_t[i + 1]
-                    dt = sigma_next - sigma
-
-                    # Build denoised (x0) from current sample and predicted velocity.
-                    # FlowMatchEulerDiscreteScheduler uses: x0 = sample - sigma * velocity
-                    denoised_video = latents - sigma * vel_pred_video
-                    denoised_audio = audio_latents - sigma * vel_pred_audio
-
-                    # Post-process denoised with hard-conditioning (ltx-core semantics):
-                    # denoise_mask=1 => denoise/noise; denoise_mask=0 => keep clean latent.
-                    if denoise_mask is not None and clean_latents is not None:
-                        m = denoise_mask.unsqueeze(-1)
-                        denoised_video = (
-                            denoised_video * m + clean_latents.float() * (1.0 - m)
-                        ).to(denoised_video.dtype)
-
-                    # Convert to velocities (v = (x - x0) / sigma) and apply gradient estimation.
-                    if float(sigma.item()) == 0.0:
-                        raise ValueError(
-                            "Sigma can't be 0.0 during gradient-estimation update."
-                        )
-
-                    # If requested, freeze fully-conditioned latent frames (diffusers slicing approach) in GE mode too.
-                    # We do the video GE update in unpacked grid space so we can freeze frame indices precisely.
-                    if (
-                        freeze_latent_frame_indices is not None
-                        and len(freeze_latent_frame_indices) > 0
-                    ):
-                        latents_grid = self._unpack_latents(
-                            latents,
-                            latent_num_frames,
-                            latent_height,
-                            latent_width,
-                            self.transformer_spatial_patch_size,
-                            self.transformer_temporal_patch_size,
-                        )
-                        denoised_video_grid = self._unpack_latents(
-                            denoised_video,
-                            latent_num_frames,
-                            latent_height,
-                            latent_width,
-                            self.transformer_spatial_patch_size,
-                            self.transformer_temporal_patch_size,
-                        )
-
-                        freeze_set = set(int(i) for i in freeze_latent_frame_indices)
-                        freeze_idx = [
-                            fi for fi in range(latent_num_frames) if fi in freeze_set
-                        ]
-
-                        # Ensure frozen frames never change by forcing x0 == x for those frames (=> velocity 0).
-                        if len(freeze_idx) > 0:
-                            denoised_video_grid[:, :, freeze_idx] = latents_grid[
-                                :, :, freeze_idx
-                            ]
-
-                        cur_video_velocity_grid = (
-                            latents_grid - denoised_video_grid
-                        ) / sigma
-
-                        if prev_video_velocity_grid is not None:
-                            total_video_velocity_grid = (
-                                ge_gamma
-                                * (cur_video_velocity_grid - prev_video_velocity_grid)
-                                + prev_video_velocity_grid
-                            )
-                        else:
-                            total_video_velocity_grid = cur_video_velocity_grid
-
-                        denoised_video_grid = (
-                            latents_grid - sigma * total_video_velocity_grid
-                        )
-
-                        # If this is the final sigma -> 0 transition, return x0 directly (matches ltx-pipelines behavior).
-                        if float(sigma_next.item()) == 0.0:
-                            latents = self._pack_latents(
-                                denoised_video_grid.to(latents_grid.dtype),
-                                self.transformer_spatial_patch_size,
-                                self.transformer_temporal_patch_size,
-                            ).to(latents.dtype)
-                        else:
-                            latents = self._pack_latents(
-                                (latents_grid + dt * total_video_velocity_grid).to(
-                                    latents_grid.dtype
-                                ),
-                                self.transformer_spatial_patch_size,
-                                self.transformer_temporal_patch_size,
-                            ).to(latents.dtype)
-
-                        prev_video_velocity_grid = cur_video_velocity_grid
-                        # Keep token-space path variables consistent (not used when freezing is active).
-                        cur_video_velocity = None
-                        total_video_velocity = None
-                    else:
-                        cur_video_velocity = (latents - denoised_video) / sigma
-                    cur_audio_velocity = (audio_latents - denoised_audio) / sigma
-
-                    if (
-                        freeze_latent_frame_indices is None
-                        or len(freeze_latent_frame_indices) == 0
-                    ):
-                        if prev_video_velocity is not None:
-                            total_video_velocity = (
-                                ge_gamma * (cur_video_velocity - prev_video_velocity)
-                                + prev_video_velocity
-                            )
-                            denoised_video = latents - sigma * total_video_velocity
-                        else:
-                            total_video_velocity = cur_video_velocity
-
-                    if prev_audio_velocity is not None:
-                        total_audio_velocity = (
-                            ge_gamma * (cur_audio_velocity - prev_audio_velocity)
-                            + prev_audio_velocity
-                        )
-                        denoised_audio = audio_latents - sigma * total_audio_velocity
-                    else:
-                        total_audio_velocity = cur_audio_velocity
-
-                    # If this is the final sigma -> 0 transition, return x0 directly (matches ltx-pipelines behavior).
-                    if float(sigma_next.item()) == 0.0:
-                        if (
-                            freeze_latent_frame_indices is None
-                            or len(freeze_latent_frame_indices) == 0
-                        ):
-                            latents = denoised_video.to(latents.dtype)
-                        audio_latents = denoised_audio.to(audio_latents.dtype)
-                        progress_bar.update()
-                        break
-
-                    # Euler step in sigma-space.
-                    if (
-                        freeze_latent_frame_indices is None
-                        or len(freeze_latent_frame_indices) == 0
-                    ):
-                        latents = (latents + dt * total_video_velocity).to(
-                            latents.dtype
-                        )
-                    audio_latents = (audio_latents + dt * total_audio_velocity).to(
-                        audio_latents.dtype
-                    )
-
-                    # Track previous velocities (use the *current* velocity, not the corrected one).
-                    if (
-                        freeze_latent_frame_indices is None
-                        or len(freeze_latent_frame_indices) == 0
-                    ):
-                        prev_video_velocity = cur_video_velocity
-                    prev_audio_velocity = cur_audio_velocity
-
-                    # call the callback, if provided
-                    if i == len(timesteps_loop) - 1 or (
-                        (i + 1) % max(int(getattr(self.scheduler, "order", 1)), 1) == 0
-                    ):
-                        progress_bar.update()
-                        denoise_progress_callback(
-                            float(i + 1) / float(max(num_steps, 1)),
-                            f"Denoising step {i + 1}/{num_steps}",
-                        )
-
-                  
-        else:
-            # Default (traditional Euler) scheduler stepping.
+        # Default (traditional Euler) scheduler stepping.
+        if True:
             # For now, duplicate the scheduler for use with the audio latents
             if audio_scheduler is None:
                 audio_scheduler = copy.deepcopy(self.scheduler)
@@ -1618,19 +1277,9 @@ class LTX2TI2VEngine(LTX2Shared):
 
                     self._current_timestep = t
 
-                    # Predict noise (default mode).
-                    # If CFG is enabled, the pipeline expects a "virtual 2x batch" layout: [uncond; cond].
-                    # With `cfg_sequential=True`, we compute those two halves sequentially (batch=B each),
-                    # then concatenate back to 2B so indexing/chunking semantics remain intact.
-                    if self.do_classifier_free_guidance and cfg_sequential:
+                    # Predict model output (default mode).
+                    if mm_guidance_enabled:
                         bsz = latents.shape[0]
-                        uncond_idx = slice(0, bsz)
-                        cond_idx = slice(bsz, 2 * bsz)
-
-                        latent_model_input = latents.to(prompt_embeds_dtype)
-                        audio_latent_model_input = audio_latents.to(prompt_embeds_dtype)
-
-                        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                         timestep_b = t.expand(bsz)
                         video_timestep_b = (
                             self._timesteps_from_denoise_mask_tokens(
@@ -1650,55 +1299,33 @@ class LTX2TI2VEngine(LTX2Shared):
                             if audio_denoise_mask is not None
                             else timestep_b
                         )
-                            
-                        
-                        
 
-                        with self.transformer.cache_context("cond_uncond"):
-                            noise_pred_video_uncond, noise_pred_audio_uncond = (
-                                self.transformer(
+                        video_skip = video_guider.should_skip_step(i)
+                        audio_skip = audio_guider.should_skip_step(i)
+                        if video_skip and audio_skip:
+                            noise_pred_video = last_mm_pred_video
+                            noise_pred_audio = last_mm_pred_audio
+                        else:
+                            if self.do_classifier_free_guidance:
+                                uncond_idx = slice(0, bsz)
+                                cond_idx = slice(bsz, 2 * bsz)
+                            else:
+                                uncond_idx = None
+                                cond_idx = slice(0, bsz)
+                            latent_model_input = latents.to(prompt_embeds_dtype)
+                            audio_latent_model_input = audio_latents.to(prompt_embeds_dtype)
+
+                            with self.transformer.cache_context("mm_guidance"):
+                                noise_pred_video_text, noise_pred_audio_text = self.transformer(
                                     hidden_states=latent_model_input,
                                     audio_hidden_states=audio_latent_model_input,
-                                    encoder_hidden_states=connector_prompt_embeds[
-                                        uncond_idx
-                                    ],
-                                    audio_encoder_hidden_states=connector_audio_prompt_embeds[
-                                        uncond_idx
-                                    ],
-                                    timestep=video_timestep_b,
-                                    audio_timestep=audio_timestep_b,
-                                    encoder_attention_mask=connector_attention_mask[
-                                        uncond_idx
-                                    ],
-                                    audio_encoder_attention_mask=connector_attention_mask[
-                                        uncond_idx
-                                    ],
-                                    num_frames=latent_num_frames,
-                                    height=latent_height,
-                                    width=latent_width,
-                                    fps=fps,
-                                    audio_num_frames=audio_num_frames,
-                                    video_coords=video_coords,
-                                    audio_coords=audio_coords,
-                                    attention_kwargs=attention_kwargs,
-                                    return_dict=False,
-                                )
-                            )
-                            noise_pred_video_text, noise_pred_audio_text = (
-                                self.transformer(
-                                    hidden_states=latent_model_input,
-                                    audio_hidden_states=audio_latent_model_input,
-                                    encoder_hidden_states=connector_prompt_embeds[
-                                        cond_idx
-                                    ],
+                                    encoder_hidden_states=connector_prompt_embeds[cond_idx],
                                     audio_encoder_hidden_states=connector_audio_prompt_embeds[
                                         cond_idx
                                     ],
                                     timestep=video_timestep_b,
                                     audio_timestep=audio_timestep_b,
-                                    encoder_attention_mask=connector_attention_mask[
-                                        cond_idx
-                                    ],
+                                    encoder_attention_mask=connector_attention_mask[cond_idx],
                                     audio_encoder_attention_mask=connector_attention_mask[
                                         cond_idx
                                     ],
@@ -1709,127 +1336,137 @@ class LTX2TI2VEngine(LTX2Shared):
                                     audio_num_frames=audio_num_frames,
                                     video_coords=video_coords,
                                     audio_coords=audio_coords,
+                                    rope_on_cpu=rope_on_cpu,
                                     attention_kwargs=attention_kwargs,
                                     return_dict=False,
                                 )
+
+                                noise_pred_video_uncond, noise_pred_audio_uncond = 0.0, 0.0
+                                if video_guider.do_unconditional_generation() or audio_guider.do_unconditional_generation():
+                                    if uncond_idx is None:
+                                        raise ValueError(
+                                            "CFG (unconditional embeddings) is required for multimodal CFG, but "
+                                            "do_classifier_free_guidance is disabled. Ensure video_guidance_scale or "
+                                            "audio_guidance_scale > 1.0."
+                                        )
+                                    noise_pred_video_uncond, noise_pred_audio_uncond = self.transformer(
+                                        hidden_states=latent_model_input,
+                                        audio_hidden_states=audio_latent_model_input,
+                                        encoder_hidden_states=connector_prompt_embeds[
+                                            uncond_idx
+                                        ],
+                                        audio_encoder_hidden_states=connector_audio_prompt_embeds[
+                                            uncond_idx
+                                        ],
+                                        timestep=video_timestep_b,
+                                        audio_timestep=audio_timestep_b,
+                                        encoder_attention_mask=connector_attention_mask[
+                                            uncond_idx
+                                        ],
+                                        audio_encoder_attention_mask=connector_attention_mask[
+                                            uncond_idx
+                                        ],
+                                        num_frames=latent_num_frames,
+                                        height=latent_height,
+                                        width=latent_width,
+                                        fps=fps,
+                                        audio_num_frames=audio_num_frames,
+                                        video_coords=video_coords,
+                                        audio_coords=audio_coords,
+                                        rope_on_cpu=rope_on_cpu,
+                                        attention_kwargs=attention_kwargs,
+                                        return_dict=False,
+                                    )
+
+                                noise_pred_video_ptb, noise_pred_audio_ptb = 0.0, 0.0
+                                if video_guider.do_perturbed_generation() or audio_guider.do_perturbed_generation():
+                                    noise_pred_video_ptb, noise_pred_audio_ptb = self.transformer(
+                                        hidden_states=latent_model_input,
+                                        audio_hidden_states=audio_latent_model_input,
+                                        encoder_hidden_states=connector_prompt_embeds[
+                                            cond_idx
+                                        ],
+                                        audio_encoder_hidden_states=connector_audio_prompt_embeds[
+                                            cond_idx
+                                        ],
+                                        timestep=video_timestep_b,
+                                        audio_timestep=audio_timestep_b,
+                                        encoder_attention_mask=connector_attention_mask[
+                                            cond_idx
+                                        ],
+                                        audio_encoder_attention_mask=connector_attention_mask[
+                                            cond_idx
+                                        ],
+                                        num_frames=latent_num_frames,
+                                        height=latent_height,
+                                        width=latent_width,
+                                        fps=fps,
+                                        audio_num_frames=audio_num_frames,
+                                        video_coords=video_coords,
+                                        audio_coords=audio_coords,
+                                        rope_on_cpu=rope_on_cpu,
+                                        attention_kwargs=attention_kwargs,
+                                        skip_video_self_attn_blocks=video_stg_skip_blocks,
+                                        skip_audio_self_attn_blocks=audio_stg_skip_blocks,
+                                        return_dict=False,
+                                    )
+
+                                noise_pred_video_mod, noise_pred_audio_mod = 0.0, 0.0
+                                if video_guider.do_isolated_modality_generation() or audio_guider.do_isolated_modality_generation():
+                                    noise_pred_video_mod, noise_pred_audio_mod = self.transformer(
+                                        hidden_states=latent_model_input,
+                                        audio_hidden_states=audio_latent_model_input,
+                                        encoder_hidden_states=connector_prompt_embeds[
+                                            cond_idx
+                                        ],
+                                        audio_encoder_hidden_states=connector_audio_prompt_embeds[
+                                            cond_idx
+                                        ],
+                                        timestep=video_timestep_b,
+                                        audio_timestep=audio_timestep_b,
+                                        encoder_attention_mask=connector_attention_mask[
+                                            cond_idx
+                                        ],
+                                        audio_encoder_attention_mask=connector_attention_mask[
+                                            cond_idx
+                                        ],
+                                        num_frames=latent_num_frames,
+                                        height=latent_height,
+                                        width=latent_width,
+                                        fps=fps,
+                                        audio_num_frames=audio_num_frames,
+                                        video_coords=video_coords,
+                                        audio_coords=audio_coords,
+                                        rope_on_cpu=rope_on_cpu,
+                                        attention_kwargs=attention_kwargs,
+                                        skip_a2v_cross_attn=True,
+                                        skip_v2a_cross_attn=True,
+                                        return_dict=False,
+                                    )
+
+                            noise_pred_video = (
+                                last_mm_pred_video
+                                if video_skip
+                                else video_guider.calculate(
+                                    noise_pred_video_text,
+                                    noise_pred_video_uncond,
+                                    noise_pred_video_ptb,
+                                    noise_pred_video_mod,
+                                ).float()
+                            )
+                            noise_pred_audio = (
+                                last_mm_pred_audio
+                                if audio_skip
+                                else audio_guider.calculate(
+                                    noise_pred_audio_text,
+                                    noise_pred_audio_uncond,
+                                    noise_pred_audio_ptb,
+                                    noise_pred_audio_mod,
+                                ).float()
                             )
 
-                        noise_pred_video = torch.cat(
-                            [noise_pred_video_uncond, noise_pred_video_text], dim=0
-                        ).float()
-                        noise_pred_audio = torch.cat(
-                            [noise_pred_audio_uncond, noise_pred_audio_text], dim=0
-                        ).float()
-                    else:
-                        latent_model_input = (
-                            torch.cat([latents] * 2)
-                            if self.do_classifier_free_guidance
-                            else latents
-                        )
-                        latent_model_input = latent_model_input.to(prompt_embeds_dtype)
-                        audio_latent_model_input = (
-                            torch.cat([audio_latents] * 2)
-                            if self.do_classifier_free_guidance
-                            else audio_latents
-                        )
-                        audio_latent_model_input = audio_latent_model_input.to(
-                            prompt_embeds_dtype
-                        )
-
-                        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                        timestep_2b = t.expand(latent_model_input.shape[0])
-
-                        # If CFG is enabled and we run a single 2B forward, coords must match the 2B batch.
-                        video_coords_call = video_coords
-                        audio_coords_call = audio_coords
-                        if (
-                            self.do_classifier_free_guidance
-                            and int(video_coords_call.shape[0]) * 2
-                            == int(latent_model_input.shape[0])
-                        ):
-                            video_coords_call = torch.cat(
-                                [video_coords_call, video_coords_call], dim=0
-                            )
-                            audio_coords_call = torch.cat(
-                                [audio_coords_call, audio_coords_call], dim=0
-                            )
-
-                        video_timestep_2b = (
-                            self._timesteps_from_denoise_mask_tokens(
-                                timestep=timestep_2b,
-                                denoise_mask_tokens=denoise_mask_model,
-                                frames=video_timestep_frames,
-                            )
-                            if denoise_mask_model is not None
-                            else timestep_2b
-                        )
-
-                        audio_timestep_2b = (
-                            self._timesteps_from_denoise_mask_tokens(
-                                timestep=timestep_2b,
-                                denoise_mask_tokens=audio_denoise_mask_model,
-                                frames=audio_timestep_frames,
-                            )
-                            if audio_denoise_mask_model is not None
-                            else timestep_2b
-                        )
-                            
-      
-                        with self.transformer.cache_context("cond_uncond"):
-                            noise_pred_video, noise_pred_audio = self.transformer(
-                                hidden_states=latent_model_input,
-                                audio_hidden_states=audio_latent_model_input,
-                                encoder_hidden_states=connector_prompt_embeds,
-                                audio_encoder_hidden_states=connector_audio_prompt_embeds,
-                                timestep=video_timestep_2b,
-                                audio_timestep=audio_timestep_2b,
-                                encoder_attention_mask=connector_attention_mask,
-                                audio_encoder_attention_mask=connector_attention_mask,
-                                num_frames=latent_num_frames,
-                                height=latent_height,
-                                width=latent_width,
-                                fps=fps,
-                                audio_num_frames=audio_num_frames,
-                                video_coords=video_coords_call,
-                                audio_coords=audio_coords_call,
-                                rope_on_cpu=rope_on_cpu,
-                                attention_kwargs=attention_kwargs,
-                                return_dict=False,
-                            )
-                        noise_pred_video = noise_pred_video.float()
-                        noise_pred_audio = noise_pred_audio.float()
-
-                    if self.do_classifier_free_guidance:
-                        noise_pred_video_uncond, noise_pred_video_text = (
-                            noise_pred_video.chunk(2)
-                        )
-                        noise_pred_video = (
-                            noise_pred_video_uncond
-                            + self.guidance_scale
-                            * (noise_pred_video_text - noise_pred_video_uncond)
-                        )
-
-                        noise_pred_audio_uncond, noise_pred_audio_text = (
-                            noise_pred_audio.chunk(2)
-                        )
-                        noise_pred_audio = (
-                            noise_pred_audio_uncond
-                            + self.guidance_scale
-                            * (noise_pred_audio_text - noise_pred_audio_uncond)
-                        )
-
-                        if self.guidance_rescale > 0:
-                            # Based on 3.4. in https://huggingface.co/papers/2305.08891
-                            noise_pred_video = self.rescale_noise_cfg(
-                                noise_pred_video,
-                                noise_pred_video_text,
-                                guidance_rescale=self.guidance_rescale,
-                            )
-                            noise_pred_audio = self.rescale_noise_cfg(
-                                noise_pred_audio,
-                                noise_pred_audio_text,
-                                guidance_rescale=self.guidance_rescale,
-                            )
+                            last_mm_pred_video = noise_pred_video
+                            last_mm_pred_audio = noise_pred_audio
 
                     # compute the previous noisy sample x_t -> x_t-1
                     if (
@@ -1989,12 +1626,19 @@ class LTX2TI2VEngine(LTX2Shared):
                 seed=seed,
                 image_strengths=effective_image_strengths,
                 image_pixel_frame_indices=effective_image_pixel_frame_indices,
-                guidance_scale=1.0,
-                guidance_rescale=0.0,
+                # Stage-2 refinement runs without guidance by default (matches prior behavior).
+                video_guidance_scale=1.0,
+                audio_guidance_scale=1.0,
+                video_guidance_rescale=0.0,
+                audio_guidance_rescale=0.0,
+                video_stg_scale=0.0,
+                audio_stg_scale=0.0,
+                video_modality_scale=1.0,
+                audio_modality_scale=1.0,
+                video_skip_step=0,
+                audio_skip_step=0,
                 use_distilled_stage_2=True,
                 noise_scale=noise_scale,
-                use_gradient_estimation=False,
-                ge_gamma=0.0,
                 vae_tiling_enabled=vae_tiling_enabled,
                 vae_use_framewise_encoding=vae_use_framewise_encoding,
                 vae_use_framewise_decoding=vae_use_framewise_decoding,
