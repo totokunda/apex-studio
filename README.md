@@ -107,7 +107,7 @@ The canonical list of shipped manifests lives under `apps/api/manifest/` (this R
   - [Wan 2.2 A14B Stable Video Infinity](apps/api/manifest/video/wan2.2-a14b-stable-video-infinity-1.0.0.v1.yml)
   - [LTX 2.0 TI2V Distilled](apps/api/manifest/video/ltx2-19b-text-to-image-to-video-distilled-1.0.0.v1.yml)
   - [LTX 2.0 TI2V](apps/api/manifest/video/ltx2-19b-text-to-image-to-video-1.0.0.v1.yml)
-    [MOVA Image to Video](apps/api/manifest/video/mova-image-to-video-audio-1.0.0.v1.yml)
+  - [MOVA Image to Video](apps/api/manifest/video/mova-image-to-video-audio-1.0.0.v1.yml)
 - **Upscalers**
   - [FlashVSR 1.1 Full](apps/api/manifest/upscalers/flashvsr-1.1-full.yml)
   - [FlashVSR 1.1 Tiny](apps/api/manifest/upscalers/flashvsr-1.1-tiny.yml)
