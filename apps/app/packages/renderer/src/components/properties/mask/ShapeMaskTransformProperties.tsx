@@ -102,8 +102,11 @@ const ShapeMaskTransformProperties: React.FC<
     if (!result) return;
 
     const masks = (clip as any).masks || [];
+    const now = Date.now();
     const updatedMasks = masks.map((m: MaskClipProps) =>
-      m.id === mask.id ? { ...m, keyframes: result.keyframes } : m,
+      m.id === mask.id
+        ? { ...m, keyframes: result.keyframes, lastModified: now }
+        : m,
     );
 
     updateClip(clipId, { masks: updatedMasks });
