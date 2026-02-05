@@ -203,10 +203,16 @@ const LoraDownloadRow: React.FC<{
       ? !!(item as any).verified
       : undefined;
 
+  const prevJobIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (jobId && !jobUpdates?.length) setStartDownloading(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // `jobId` can appear after first render (mutation success + store update). If we
+    // only set `startDownloading` on mount, the UI can get stuck showing neither
+    // the progress section nor the "Starting download…" placeholder.
+    if (!jobId) return;
+    if (prevJobIdRef.current === jobId) return;
+    prevJobIdRef.current = jobId;
+    if (!jobUpdates?.length) setStartDownloading(true);
+  }, [jobId, jobUpdates?.length]);
 
   useEffect(() => {
     if (isDownloading || !jobId) setStartDownloading(false);
@@ -748,6 +754,21 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
         .map((j) => j.job_id as string),
     );
 
+    // Polling can lag behind job start, so also subscribe to any jobIds we already
+    // know belong to this manifest (from the persisted jobId->manifest mapping).
+    const manifestMappedJobIds = new Set(
+      Object.keys(jobIdToManifestId || {}).filter(
+        (jobId) =>
+          !!jobId &&
+          (!currentManifestId || jobIdToManifestId?.[jobId] === currentManifestId),
+      ),
+    );
+
+    const desiredJobIds = new Set<string>([
+      ...Array.from(activeJobIds),
+      ...Array.from(manifestMappedJobIds),
+    ]);
+
     const cleanupJob = async (jobId: string) => {
       try {
         const parts = getJobIdToParts(jobId);
@@ -774,7 +795,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
     };
 
     // Connect to new jobs (only those tied to this manifest via the store mapping).
-    activeJobIds.forEach((jobId) => {
+    desiredJobIds.forEach((jobId) => {
       const mappedManifestId = jobIdToManifestId?.[jobId];
       if (currentManifestId && mappedManifestId !== currentManifestId) return;
       if (subscribedRef.current.has(jobId)) return;
@@ -854,7 +875,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
       const mappedManifestId = jobIdToManifestId?.[jobId];
       const isFinalizing = finalizingJobIds.has(jobId) || terminalJobIds.has(jobId);
       const stillRelevant =
-        (activeJobIds.has(jobId) || isFinalizing) &&
+        (desiredJobIds.has(jobId) || isFinalizing) &&
         (!currentManifestId || mappedManifestId === currentManifestId);
       if (!stillRelevant) {
         cleanup();

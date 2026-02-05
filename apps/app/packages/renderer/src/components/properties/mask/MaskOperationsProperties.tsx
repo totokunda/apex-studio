@@ -26,8 +26,9 @@ const MaskOperationsProperties: React.FC<MaskOperationsPropertiesProps> = ({
         return;
 
       const masks = (currentClip as any).masks || [];
+      const now = Date.now();
       const updatedMasks = masks.map((m: MaskClipProps) =>
-        m.id === mask.id ? { ...m, ...updates } : m,
+        m.id === mask.id ? { ...m, ...updates, lastModified: now } : m,
       );
 
       updateClip(clipId, { masks: updatedMasks });
