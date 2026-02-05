@@ -14,6 +14,7 @@ from enum import Enum
 from src.quantize.quants import quantize, QuantConfig
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
+from gguf import quants as gguf_quants
 
 QUANTIZATION_THRESHOLD = 4096
 MAX_TENSOR_NAME_LENGTH = 127
@@ -21,27 +22,80 @@ MAX_TENSOR_DIMS = 4
 
 
 class ModelArchitecture(Enum):
+    # NOTE: These values are written into GGUF metadata as `arch=...` and are also
+    # used to pick architecture-specific "preserve dtype" rules during quantization.
+    #
+    # Keep these aligned with our manifest `components[type=transformer].base` families:
+    # e.g. `wan.base` -> "wan", `flux2.base` -> "flux2", `zimage.base` -> "zimage", etc.
+    #
+    # Some sub-families intentionally get their own ids when the dtype-preservation
+    # rules need to be more specific than the base family (e.g. "foley").
     WAN = "wan"
     COSMOS = "cosmos"
     COGVIDEO = "cogvideo"
     HUNYUAN = "hunyuan"
+    HUNYUANVIDEO = "hunyuanvideo"
+    FOLEY = "foley"
+    HUNYUANVIDEO15 = "hunyuanvideo15"
+    HUNYUANIMAGE = "hunyuanimage"
     HUNYUANIMAGE3 = "hunyuanimage3"
     SKYREELS = "skyreels"
     LTX = "ltx"
+    LTX2 = "ltx2"
     MAGI = "magi"
     MOCHI = "mochi"
     STEPVIDEO = "stepvideo"
+    FLUX = "flux"
+    FLUX2 = "flux2"
+    CHROMA = "chroma"
+    ZIMAGE = "zimage"
+    QWENIMAGE = "qwenimage"
+    ANIMA = "anima"
+    SEEDVR = "seedvr"
+    # Alias: some tooling/checkpoints refer to the same family as "seedvr2".
+    SEEDVR2 = "seedvr2"
+    OVIS = "ovis"
+    KANDINSKY5 = "kandinsky5"
+    LONGCAT = "longcat"
+    HIDREAM = "hidream"
+    FIBO = "fibo"
 
+
+#
+# Dtype preservation rules (for GGUF export)
+# -----------------------------------------
+#
+# We quantize most large tensors, but keeping certain sensitive tensors in BF16/F16
+# tends to significantly improve output quality with negligible size impact:
+# - normalization parameters (LayerNorm/RMSNorm, QK norms)
+# - embedding/projection modules (pos/time/rope, conditioning projections, etc.)
+#
+# The rules are implemented as a list of *substrings*; if a tensor name contains
+# any of these substrings, we will keep it in BF16 (see `_prepare_and_quantize_tensor`).
+#
+COMMON_PRESERVE_SUBSTRINGS: list[str] = [
+    # Norms are almost always sensitive and tiny.
+    "norm",
+    # Position / RoPE related buffers or weights.
+    "pos_embed",
+    "rope",
+    # Time embeddings / timestep projections.
+    "time_embed",
+    "time_proj",
+    "timestep",
+    # Diffusion-specific modulation tables.
+    "scale_shift_table",
+]
 
 FP32_WEIGHTS_PRESERVE_DTYPE = {
     # WAN-family transformers (wan.base, wan.fun, wan.causal, wan.vace, wan.multitalk, wan.apex_framepack)
     ModelArchitecture.WAN: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "patch_embedding",
         "audio_proj",
         "text_embedder",
         "image_embedder",
         "time_embedder",
-        "scale_shift_table",
         "norm1",
         "norm2",
         "norm3",
@@ -50,11 +104,12 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
         "norm_k",
         "norm_added_k",
         "pos_embed",
+        "proj_out",
     ],
     # Cosmos transformers
     ModelArchitecture.COSMOS: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "patch_embed",
-        "time_embed",
         "learnable_pos_embed",
         "norm1",
         "norm2",
@@ -65,6 +120,7 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
     ],
     # CogVideoX transformers
     ModelArchitecture.COGVIDEO: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "patch_embed",
         "time_proj",
         "time_embedding",
@@ -77,6 +133,7 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
     ],
     # Hunyuan transformers (base, avatar, framepack)
     ModelArchitecture.HUNYUAN: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "context_embedder",
         "time_text_embed",
         "audio_projection",
@@ -86,9 +143,61 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
         "norm_out",
         "norm1_context",
         "norm2_context",
+        "proj_out",
+    ],
+    # HunyuanVideo transformers (hunyuanvideo.base, hunyuanvideo.avatar, hunyuanvideo.framepack)
+    ModelArchitecture.HUNYUANVIDEO: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "x_embedder",
+        "context_embedder",
+        "time_text_embed",
+        "text_embedder",
+        "guidance_embedder",
+        "caption_projection",
+        "proj_out",
+    ],
+    # HunyuanVideo-Foley transformers (hunyuanvideo.foley)
+    ModelArchitecture.FOLEY: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        # Embedding / projection stacks
+        "audio_embedder",
+        "visual_proj",
+        "cond_in",
+        "time_in",
+        "sync_in",
+        # Learnable empty-condition params
+        "empty_clip_feat",
+        "empty_sync_feat",
+        "sync_pos_emb",
+        # Output head
+        "final_layer",
+    ],
+    # HunyuanVideo 1.5 transformers (hunyuanvideo15.base)
+    ModelArchitecture.HUNYUANVIDEO15: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "x_embedder",
+        "image_embedder",
+        "context_embedder",
+        "time_embed",
+        "time_text_embed",
+        "cond_type_embed",
+        "proj_in",
+        "rope",
+        "proj_out",
+    ],
+    # HunyuanImage transformers (hunyuanimage.base)
+    ModelArchitecture.HUNYUANIMAGE: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "x_embedder",
+        "context_embedder",
+        "time_guidance_embed",
+        "time_text_embed",
+        "rope",
+        "proj_out",
     ],
     # Hunyuan Image 3 transformers
     ModelArchitecture.HUNYUANIMAGE3: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         # Embedding / projection modules
         "wte",
         "timestep_emb",
@@ -104,10 +213,10 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
     ],
     # SkyReels transformers
     ModelArchitecture.SKYREELS: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "time_embedder",
         "fps_embedding",
         "fps_projection",
-        "scale_shift_table",
         "norm1",
         "norm2",
         "norm3",
@@ -115,19 +224,40 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
         "norm_q",
         "norm_k",
         "pos_embed",
+        "proj_out",
     ],
     # LTX-Video transformers
     ModelArchitecture.LTX: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "time_embed",
-        "scale_shift_table",
         "caption_projection",
         "norm1",
         "norm2",
         "norm_out",
-        "scale_shift_table",
+        "proj_out",
+    ],
+    # LTX-2 transformers (ltx2.base / ltx2.base2)
+    ModelArchitecture.LTX2: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "patchify_proj",
+        "adaln_single",
+        "caption_projection",
+        "proj_out",
+        # Audio/video multi-modal stack
+        "audio_patchify_proj",
+        "audio_adaln_single",
+        "audio_caption_projection",
+        "audio_proj_out",
+        "audio_norm_out",
+        "audio_scale_shift_table",
+        "av_ca_",
+        # Arg preprocessors are mostly small, but sensitive.
+        "video_args_preprocessor",
+        "audio_args_preprocessor",
     ],
     # MAGI transformers
     ModelArchitecture.MAGI: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "norm1",
         "norm2",
         "norm3",
@@ -144,6 +274,7 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
     ],
     # Mochi transformers
     ModelArchitecture.MOCHI: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "patch_embed",
         "time_embed",
         "norm1",
@@ -154,24 +285,192 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
         "norm2_context",
         "norm3_context",
         "norm4_context",
+        "proj_out",
     ],
     # StepVideo transformers
     ModelArchitecture.STEPVIDEO: [
+        *COMMON_PRESERVE_SUBSTRINGS,
         "pos_embed",
         "adaln_single",
         "caption_norm",
         "caption_projection",
-        "scale_shift_table",
         "norm1",
         "norm2",
         "norm3",
         "norm_out",
+        "proj_out",
+    ],
+    ModelArchitecture.FLUX: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "pos_embed",
+        "context_embedder",
+        "x_embedder",
+        "distilled_guidance_layer",
+        "time_text_embed",
+        "norm_out",
+        "proj_out",
+    ],
+    ModelArchitecture.FLUX2: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "pos_embed",
+        "norm_out",
+        # Flux2 combined timestep + guidance embedding stack.
+        "time_guidance_embed",
+        # Flux1 legacy names (kept for compatibility with older checkpoints/scripts).
+        "distilled_guidance_layer",
+        "time_text_embed",
+        "x_embedder",
+        "proj_out",
+        # Flux2 modulation stacks are sensitive.
+        "double_stream_modulation",
+        "single_stream_modulation",
+    ],
+    # Chroma is a Flux-style transformer variant (chroma.base)
+    ModelArchitecture.CHROMA: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "pos_embed",
+        "time_text_embed",
+        "distilled_guidance_layer",
+        "context_embedder",
+        "x_embedder",
+        "norm_out",
+        "proj_out",
+    ],
+    # Z-Image (zimage.base / zimage.control)
+    ModelArchitecture.ZIMAGE: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "t_embedder",
+        "cap_embedder",
+        "rope_embedder",
+        "all_x_embedder",
+        "all_final_layer",
+        "final_layer",
+        "norm_final",
+        "x_pad_token",
+        "cap_pad_token",
+        "siglip_pad_token",
+        "siglip_embedder",
+        # Control variant uses these module names.
+        "control_layers",
+        "control_all_x_embedder",
+        "before_proj",
+        "after_proj",
+        # Block norms (naming differs from other DiTs).
+        "attention_norm",
+        "ffn_norm",
+        "adaLN_modulation",
+    ],
+    # Qwen-Image (qwenimage.base)
+    ModelArchitecture.QWENIMAGE: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "pos_embed",
+        "time_text_embed",
+        "txt_norm",
+        "img_in",
+        "txt_in",
+        "norm_out",
+        "proj_out",
+    ],
+    # Anima (anima.base)
+    ModelArchitecture.ANIMA: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "t_embedder",
+        "t_embedding_norm",
+        "x_embedder",
+        "final_layer",
+        "pos_embedder",
+        "extra_pos_embedder",
+        "layer_norm",
+        "q_norm",
+        "k_norm",
+        "adaln_modulation",
+    ],
+    # SeedVR (seedvr.base)
+    ModelArchitecture.SEEDVR: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "vid_in",
+        "txt_in",
+        "emb_in",
+        "emb_scale",
+        "vid_out",
+        # base_v2 optionally adds an output norm + AdaLN modulation stack.
+        "vid_out_norm",
+        "vid_out_ada",
+    ],
+    # SeedVR2 (seedvr.base / seedvr.base_v2) alias
+    ModelArchitecture.SEEDVR2: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "vid_in",
+        "txt_in",
+        "emb_in",
+        "emb_scale",
+        "vid_out",
+        "vid_out_norm",
+        "vid_out_ada",
+    ],
+    # Ovis (ovis.base)
+    ModelArchitecture.OVIS: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "pos_embed",
+        "timestep_embedder",
+        "context_embedder_norm",
+        "context_embedder",
+        "x_embedder",
+        "norm_out",
+        "proj_out",
+    ],
+    # Kandinsky 5 (kandinsky5.base)
+    ModelArchitecture.KANDINSKY5: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "time_embeddings",
+        "text_embeddings",
+        "pooled_text_embeddings",
+        "visual_embeddings",
+        "text_rope_embeddings",
+        "visual_rope_embeddings",
+        "modulation",
+        "out_layer",
+    ],
+    # LongCat (longcat.base)
+    ModelArchitecture.LONGCAT: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "x_embedder",
+        "t_embedder",
+        "y_embedder",
+        "final_layer",
+        "adaLN_modulation",
+        "mod_norm",
+        "pre_crs_attn_norm",
+    ],
+    # HiDream (hidream.base)
+    ModelArchitecture.HIDREAM: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "t_embedder",
+        "p_embedder",
+        "x_embedder",
+        "pe_embedder",
+        "caption_projection",
+        "final_layer",
+    ],
+    # Bria Fibo (fibo.base)
+    ModelArchitecture.FIBO: [
+        *COMMON_PRESERVE_SUBSTRINGS,
+        "pos_embed",
+        "time_embed",
+        "guidance_embed",
+        "context_embedder",
+        "x_embedder",
+        "caption_projection",
+        "norm_out",
+        "proj_out",
     ],
 }
 
 
 def get_f32_weights_preserve_dtype(model_architecture: ModelArchitecture):
-    return FP32_WEIGHTS_PRESERVE_DTYPE[model_architecture]
+    # Be permissive: when new architectures are added upstream, falling back to
+    # the common rules is better than crashing with a KeyError.
+    return FP32_WEIGHTS_PRESERVE_DTYPE.get(model_architecture, COMMON_PRESERVE_SUBSTRINGS)
 
 
 class LazySafetensorsDict(Mapping):
@@ -287,15 +586,15 @@ def _prepare_and_quantize_tensor(args):
     if old_dtype == torch.bfloat16:
         data_qtype = gguf.GGMLQuantizationType.BF16
     elif old_dtype == torch.float32:
-        data_qtype = gguf.GGMLQuantizationType.F32
+        data_qtype = gguf.GGMLQuantizationType.BF16
     else:
         data_qtype = qconfig.qtype
     num_elements = int(np.prod(data.shape))
     if n_dims == 1:
-        data_qtype = gguf.GGMLQuantizationType.F32
+        data_qtype = gguf.GGMLQuantizationType.BF16
     elif n_dims == 5:
         data_qtype = (
-            gguf.GGMLQuantizationType.F32
+            gguf.GGMLQuantizationType.BF16
             if old_dtype == torch.float32
             else (
                 gguf.GGMLQuantizationType.BF16
@@ -304,17 +603,39 @@ def _prepare_and_quantize_tensor(args):
             )
         )
     elif num_elements <= QUANTIZATION_THRESHOLD:
-        data_qtype = gguf.GGMLQuantizationType.F32
+        data_qtype = gguf.GGMLQuantizationType.BF16
     elif check_key_in_preserve_weights_dtype(key, preserve_weights_dtype):
-        data_qtype = gguf.GGMLQuantizationType.F32
+        data_qtype = gguf.GGMLQuantizationType.BF16
     else:
         data_qtype = qconfig.qtype
 
+    # Guard against writing invalid block-quantized tensors.
+    #
+    # Many GGUF quant types (Q8_0, Q4_K, Q6_K, ...) are block-quantized along the
+    # last dimension. That last dimension must be a multiple of the quant block size.
+    # Conv kernels (e.g. Conv1d with kernel_size=3) often have shape[..., 3] and are
+    # therefore incompatible. If we write those tensors as quantized, the resulting
+    # GGUF becomes unreadable by gguf readers.
+    try:
+        block_size, _ = gguf_quants.GGML_QUANT_SIZES.get(data_qtype, (1, 0))
+    except Exception:
+        block_size = 1
+    if block_size > 1 and (data.shape[-1] % block_size) != 0:
+        data_qtype = (
+            gguf.GGMLQuantizationType.BF16
+            if old_dtype == torch.bfloat16
+            else gguf.GGMLQuantizationType.F16
+        )
+
     try:
         data = quantize(data, data_qtype)
-    except (AttributeError, gguf.QuantError) as e:
+    except (AttributeError, gguf.QuantError, ValueError) as e:
         logger.warning(f"Falling back to F16: {e}")
-        data_qtype = gguf.GGMLQuantizationType.F16
+        data_qtype = (
+            gguf.GGMLQuantizationType.BF16
+            if old_dtype == torch.bfloat16
+            else gguf.GGMLQuantizationType.F16
+        )
         data = quantize(data, data_qtype)
 
     return (key, data, data_qtype)
@@ -353,7 +674,7 @@ def convert_model(
     qconfig: QuantConfig = QuantConfig(
         gguf.LlamaFileType.MOSTLY_F16, gguf.GGMLQuantizationType.F16
     ),
-    num_workers: int = None,
+    num_workers: int = 1,
 ):
     preserve_weights_dtype = get_f32_weights_preserve_dtype(model_architecture)
 
@@ -381,9 +702,13 @@ def convert_model(
     files_to_load += glob(os.path.join(model_path, pt_pattern), recursive=True)
 
     files_to_load += glob(os.path.join(model_path, pth_pattern), recursive=True)
+    
+    # check if model_path is a file 
+    if os.path.isfile(model_path):
+        files_to_load = [model_path]
 
     # Parallel quantization with ProcessPoolExecutor for true parallel CPU processing
-    if num_workers is None:
+    if num_workers is None or num_workers < 1:
         num_workers = multiprocessing.cpu_count()
 
     print(f"Quantizing with {num_workers} workers")

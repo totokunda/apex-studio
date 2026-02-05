@@ -110,9 +110,11 @@ class ModelBase:
         split_max_tensors: int = 0,
         split_max_size: int = 0,
         dry_run: bool = False,
+        
         small_first_shard: bool = False,
         hparams: dict[str, Any] | None = None,
         remote_hf_model_id: str | None = None,
+        
     ):
         if (
             type(self) is ModelBase
@@ -412,7 +414,6 @@ class ModelBase:
                             gguf.MODEL_TENSOR.POS_EMBD,
                             gguf.MODEL_TENSOR.TOKEN_TYPES,
                             gguf.MODEL_TENSOR.SSM_CONV1D,
-                            gguf.MODEL_TENSOR.SHORTCONV_CONV,
                             gguf.MODEL_TENSOR.TIME_MIX_FIRST,
                             gguf.MODEL_TENSOR.TIME_MIX_W1,
                             gguf.MODEL_TENSOR.TIME_MIX_W2,
@@ -423,8 +424,6 @@ class ModelBase:
                             gguf.MODEL_TENSOR.POSNET_NORM2,
                             gguf.MODEL_TENSOR.V_ENC_EMBD_POS,
                             gguf.MODEL_TENSOR.A_ENC_EMBD_POS,
-                            gguf.MODEL_TENSOR.ALTUP_CORRECT_COEF,
-                            gguf.MODEL_TENSOR.ALTUP_PREDICT_COEF,
                         )
                     )
                     or not new_name.endswith(".weight")
@@ -435,11 +434,7 @@ class ModelBase:
                     self.match_model_tensor_name(new_name, key, bid)
                     for key in (
                         gguf.MODEL_TENSOR.TOKEN_EMBD,
-                        gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
                         gguf.MODEL_TENSOR.OUTPUT,
-                        gguf.MODEL_TENSOR.ALTUP_ROUTER,
-                        gguf.MODEL_TENSOR.LAUREL_L,
-                        gguf.MODEL_TENSOR.LAUREL_R,
                     )
                 ):
                     if self.ftype in (
@@ -541,6 +536,9 @@ class ModelBase:
     @staticmethod
     def get_model_part_names(dir_model: Path, prefix: str, suffix: str) -> list[str]:
         part_names: list[str] = []
+        # check if dir_model is a file
+        if os.path.isfile(dir_model):
+            return [dir_model.name]
         for filename in os.listdir(dir_model):
             if filename.startswith(prefix) and filename.endswith(suffix):
                 part_names.append(filename)
@@ -605,6 +603,9 @@ class ModelBase:
         try:
             if arch == "UMT5EncoderModel":
                 arch = "T5EncoderModel"
+            
+            if arch == "Mistral3ForConditionalGeneration":
+                arch = "MistralForCausalLM"
             return cls._model_classes[model_type][arch]
         except KeyError:
             raise NotImplementedError(f"Architecture {arch!r} not supported!") from None
@@ -1113,7 +1114,9 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
-        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        # Prefer merges/special token files from the tokenizer directory if provided.
+        special_dir = self.dir_tokenizer if self.dir_tokenizer is not None else self.dir_model
+        special_vocab = gguf.SpecialVocab(special_dir, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_qwen(self):
@@ -1188,7 +1191,9 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_scores(scores)
         self.gguf_writer.add_token_types(toktypes)
 
-        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        # Prefer special tokens from tokenizer dir if provided.
+        special_dir = self.dir_tokenizer if self.dir_tokenizer is not None else self.dir_model
+        special_vocab = gguf.SpecialVocab(special_dir, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _create_vocab_sentencepiece(self):
@@ -1743,6 +1748,9 @@ class LlamaModel(TextModel):
             "vision_language_adapter.",
             "patch_merger.",
             "pre_mm_projector_norm",
+            # Qwen2.x-VL style vision tower prefix
+            "visual.",
+            "model.visual.",
         ]
 
         is_multimodal_tensor = (
@@ -1855,6 +1863,80 @@ class LlamaModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register(
+    # FLUX.2 Klein uses a Qwen3 text encoder but the tensor layout is LLAMA-like.
+    # gguf has a dedicated QWEN3 arch + name map, so we can reuse LlamaModel's
+    # tensor handling (incl. q/k permutation) and only override vocab handling.
+    "Qwen3ForCausalLM",
+)
+class Qwen3Model(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+    def set_vocab(self):
+        # Prefer Qwen tokenizer logic; fall back to GPT2 BPE if tokenizer impl
+        # differs (still works for local merges/vocab files).
+        try:
+            self._set_vocab_qwen()
+        except Exception:
+            self._set_vocab_gpt2()
+
+
+@ModelBase.register(
+    # Qwen2.5-VL (multimodal) uses the QWEN2VL tensor map in GGUF.
+    # In our usage as a diffusion *text encoder*, we export only the text weights
+    # (vision/mmproj is handled separately and can be merged at packaging time).
+    "Qwen2_5_VLForConditionalGeneration",
+    # Kept for forward/backward compatibility with potential upstream naming.
+    "Qwen2VLForConditionalGeneration",
+)
+class Qwen2VLModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.QWEN2VL
+
+    def set_vocab(self):
+        # Qwen-Image provides a GPT2 BPE tokenizer (vocab.json + merges.txt) under
+        # the `tokenizer/` subfolder. Avoid SentencePiece dependency here and
+        # ensure merges/special tokens are read from the tokenizer directory.
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_dir = self.dir_tokenizer if self.dir_tokenizer is not None else self.dir_model
+        special_vocab = gguf.SpecialVocab(special_dir, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def set_gguf_parameters(self):
+        # Qwen2-VL uses "mrope" sections; llama.cpp requires
+        # `qwen2vl.rope.dimension_sections` to quantize.
+        super().set_gguf_parameters()
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        mrope_section = rope_scaling.get("mrope_section")
+        if mrope_section is not None:
+            dims = list(mrope_section)
+            if len(dims) == 3:
+                # llama.cpp expects 4 values; Unsloth reference GGUF uses a trailing 0
+                # (e.g. [16, 24, 24, 0]) for Qwen2.5-VL.
+                dims.append(0)
+            self.gguf_writer.add_rope_dimension_sections(dims)
+
+
+@ModelBase.register(
+    # Gemma3 multimodal wrapper (used by LTX2 text encoder).
+    "Gemma3ForConditionalGeneration",
+    # Some exports use the causal LM naming.
+    "Gemma3ForCausalLM",
+)
+class Gemma3Model(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.GEMMA3
+    # Gemma does not use the LLaMA q/k permute path.
+    undo_permute = False
+
+    def set_vocab(self):
+        # Gemma uses SentencePiece (`tokenizer.model`).
+        self._set_vocab_sentencepiece()
 
 
 @ModelBase.register("Step1Model")

@@ -1,0 +1,253 @@
+api_version: apex/v1
+kind: Model
+type: audio
+metadata:
+  id: hunyuanvideo-foley
+  model: hunyuanvideo
+  name: HunyuanVideo-Foley
+  version: 0.1.2
+  description: Generate high-fidelity 48kHz Foley audio from a video and a text prompt.
+  tags:
+  - hunyuanvideo
+  - foley
+  - video-to-audio
+  author: Tencent
+  license: Tencent Hunyuan Community License Agreement
+  homepage: https://huggingface.co/tencent/HunyuanVideo-Foley
+  categories:
+  - video-to-audio
+spec:
+  engine: hunyuanvideo
+  model_type: foley
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - mps
+    - cpu
+  defaults:
+    guidance_scale: 4.5
+    num_inference_steps: 50
+    offload: true
+  components:
+  - type: scheduler
+    name: scheduler
+    label: HunyuanVideo-Foley Scheduler
+    base: src.scheduler.flow.FoleyFlowMatchDiscreteScheduler
+    scheduler_options:
+    - name: FoleyFlowMatchDiscreteScheduler
+      label: Foley FlowMatch Discrete Scheduler
+      description: The FlowMatch Discrete Scheduler is a scheduler for the HunyuanVideo-Foley model.
+      config:
+        denoise_type: "flow"
+        flow_path_type: "linear"
+        flow_predict_type: "velocity"
+        flow_reverse: True
+        flow_solver: "euler"
+        sample_flow_shift: 1.0
+        sample_use_flux_shift: False
+        flux_base_shift: 0.5
+        flux_max_shift: 1.15
+  - type: transformer
+    name: foley_model
+    label: HunyuanVideo-Foley Diffusion Model
+    base: hunyuanvideo.foley
+    config:
+      model_name: hunyuanvideo-foley-xxl
+      model_type: 1d
+      model_precision: bf16
+      model_kwargs:
+        depth_triple_blocks: 18
+        depth_single_blocks: 36
+        hidden_size: 1536
+        num_heads: 12
+        mlp_ratio: 4
+        mlp_act_type: "gelu_tanh"
+        qkv_bias: True
+        qk_norm: True
+        qk_norm_type: "rms"
+        attn_mode: "torch"
+        embedder_type: "default"
+        interleaved_audio_visual_rope: True
+        enable_learnable_empty_visual_feat: True
+        sync_modulation: False
+        add_sync_feat_to_audio: True
+        cross_attention: True
+        use_attention_mask: False
+        condition_projection: "linear"
+        sync_feat_dim: 768 # syncformer 768 dim
+        condition_dim: 768  # clap 768 text condition dim (clip-text)
+        clip_dim: 768  # siglip2 visual dim
+        audio_vae_latent_dim: 128 
+        audio_frame_rate: 50
+        patch_size: 1
+        rope_dim_list: null
+        rope_theta: 10000
+        text_length: 77
+        clip_length: 64 
+        sync_length: 192
+        depth_triple_ssl_encoder: null
+        depth_single_ssl_encoder: 8
+        use_repa_with_audiossl: True
+    model_path:
+    - path: /home/tosin_coverquick_co/apex-diffusion/components/hunyuanvideo_foley.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+  - type: vae
+    name: dac_model
+    label: DAC VAE 128d 48kHz
+    base: dac
+    model_path: /home/tosin_coverquick_co/apex-diffusion/components/_vae_128d_48k.pth
+    config:
+      encoder_dim: 128
+      encoder_rates: [2, 3, 4, 5, 8]
+      latent_dim: 128
+      decoder_dim: 2048
+      decoder_rates: [8, 5, 4, 3, 2]
+      n_codebooks: 9
+      codebook_size: 1024
+      codebook_dim: 8
+      quantizer_dropout: false
+      sample_rate: 48000
+      continuous: true
+  - type: text_encoder
+    name: clap_model
+    label: CLAP Text Encoder
+    base: ClapTextModelWithProjection
+    config_path: laion/larger_clap_general/config.json
+    config:
+      num_hidden_layers: 12
+    model_path:
+    - path: laion/larger_clap_general
+      variant: default
+      precision: fp16
+      type: safetensors
+    tokenizer_class: RobertaTokenizer
+    tokenizer_name: laion/larger_clap_general
+  - type: helper
+    name: siglip_model
+    label: SigLIP2 Model
+    module: transformers
+    base: SiglipModel
+    config_path: google/siglip2-base-patch16-512/config.json
+    model_path:
+    - path: google/siglip2-base-patch16-512
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: helper
+    name: syncformer_model
+    label: Synchformer Model
+    base: hunyuanvideofoley.synchformer
+    model_path:
+    - path: tencent/HunyuanVideo-Foley/synchformer_state_dict.pth
+      variant: default
+      precision: bf16
+      type: pth
+  ui:
+    panels:
+    - name: video
+      label: Video
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    - name: performance
+      label: Performance
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - offload
+    inputs:
+    - id: video
+      label: Video
+      description: The input video to generate Foley audio from.
+      type: video
+      panel: video
+      required: true
+    - id: prompt
+      label: Prompt
+      description: Describe the Foley audio you want to generate for the video.
+      placeholder: Crunchy footsteps on gravel, distant traffic, soft wind, and a brief metallic clink.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the audio generation.
+      placeholder: noisy, harsh, distorted, clipping
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: noisy, harsh
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps.
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      description: Classifier-free guidance strength.
+      type: number+slider
+      value_type: float
+      panel: sampling
+      default: 4.5
+      min: 1.0
+      max: 15.0
+      step: 0.5
+      required: false
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility.
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: use_video_duration
+      label: Use Video Duration
+      description: Use the duration of the video to determine the number of frames.
+      type: boolean
+      panel: sampling
+      required: false
+      default: true

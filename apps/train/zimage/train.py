@@ -318,6 +318,78 @@ def _try_offload_non_train_components(engine: UniversalEngine) -> None:
         pass
 
 
+def _parse_step_from_dirname(name: str) -> Optional[int]:
+    """
+    Accept checkpoint dirs like:
+    - step_000500
+    - interrupt_step_000500
+    - final (treated as step=None)
+    """
+    try:
+        if name.startswith("step_"):
+            return int(name.split("_", 1)[1])
+        if name.startswith("interrupt_step_"):
+            return int(name.split("_", 2)[2])
+    except Exception:
+        return None
+    return None
+
+
+def _find_latest_checkpoint_dir(run_dir: Path) -> Optional[Path]:
+    """
+    Finds the latest checkpoint dir under a run folder (lora/<run_name>/...).
+    Prefers the highest numbered step among step_* and interrupt_step_*.
+    Falls back to run_dir/final if present.
+    """
+    if not run_dir.exists() or not run_dir.is_dir():
+        return None
+
+    best_step: Optional[int] = None
+    best_dir: Optional[Path] = None
+    for child in run_dir.iterdir():
+        if not child.is_dir():
+            continue
+        step = _parse_step_from_dirname(child.name)
+        if step is None:
+            continue
+        # Ensure it looks like a real checkpoint
+        if not (child / "trainer_state.pt").exists():
+            continue
+        if best_step is None or step > best_step:
+            best_step = step
+            best_dir = child
+
+    if best_dir is not None:
+        return best_dir
+
+    final_dir = run_dir / "final"
+    if (final_dir / "trainer_state.pt").exists():
+        return final_dir
+
+    return None
+
+
+def _optimizer_state_to_device(optim: torch.optim.Optimizer, device: torch.device) -> None:
+    """
+    When loading an optimizer state dict with map_location="cpu", state tensors
+    (e.g. Adam exp_avg/exp_avg_sq) may end up on CPU even if params are on GPU.
+    This best-effort helper moves any tensor state to the target device.
+    """
+    try:
+        for state in optim.state.values():
+            if not isinstance(state, dict):
+                continue
+            for k, v in list(state.items()):
+                if torch.is_tensor(v):
+                    try:
+                        state[k] = v.to(device=device)
+                    except Exception:
+                        # Some optimizers (e.g. bitsandbytes) may have non-standard tensor types.
+                        pass
+    except Exception:
+        pass
+
+
 def _sample_and_save(
     *,
     engine: UniversalEngine,
@@ -419,6 +491,21 @@ def main() -> None:
         default="run",
         help="Name of this run. Outputs are written to lora/<run_name>/",
     )
+    resume_group = p.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume_run",
+        action="store_true",
+        help="Resume from the latest checkpoint under lora/<run_name>/ (continues the same run).",
+    )
+    resume_group.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help=(
+            "Resume from an existing checkpoint. "
+            "Can point to a run dir (e.g. lora/my_run) or a checkpoint dir (e.g. lora/my_run/step_1000)."
+        ),
+    )
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--batch_size", type=int, default=1)
     p.add_argument("--gradient_accumulation_steps", type=int, default=1)
@@ -458,15 +545,47 @@ def main() -> None:
     # Sampling / qualitative monitoring
     p.add_argument("--sample_every", type=int, default=50, help="Generate a sample image every N optimizer steps.")
     p.add_argument("--sample_prompt", type=str, default="A woman with long, wavy hair, wearing a red dress, standing in a field of flowers.")
-    p.add_argument("--sample_height", type=int, default=1024)
-    p.add_argument("--sample_width", type=int, default=1024)
+    p.add_argument("--sample_height", type=int, default=720)
+    p.add_argument("--sample_width", type=int, default=720)
     p.add_argument("--sample_steps", type=int, default=30)
     p.add_argument("--sample_guidance", type=float, default=4.0)
     p.add_argument("--sample_seed", type=int, default=42)
 
     args = p.parse_args()
 
-    output_dir = os.path.join("lora", str(args.run_name))
+    output_dir_path = Path("lora") / str(args.run_name)
+
+    resume_ckpt_dir: Optional[Path] = None
+    if args.resume_run:
+        # Resume from the latest checkpoint under this run dir.
+        resume_ckpt_dir = _find_latest_checkpoint_dir(output_dir_path)
+        if resume_ckpt_dir is None:
+            raise ValueError(
+                f"--resume_run was set but no checkpoint was found under {output_dir_path}. "
+                "Expected a folder like step_000500/ with trainer_state.pt."
+            )
+    elif args.resume is not None:
+        rp = Path(str(args.resume)).expanduser()
+        # If user passes trainer_state.pt directly.
+        if rp.is_file() and rp.name == "trainer_state.pt":
+            rp = rp.parent
+
+        if (rp / "trainer_state.pt").exists():
+            # Direct checkpoint dir.
+            resume_ckpt_dir = rp
+        else:
+            # Assume run dir; find latest checkpoint within.
+            resume_ckpt_dir = _find_latest_checkpoint_dir(rp)
+            if resume_ckpt_dir is None:
+                raise ValueError(
+                    f"--resume was set to {rp} but no checkpoint was found. "
+                    "Pass a checkpoint dir containing trainer_state.pt, or a run dir containing step_*/trainer_state.pt."
+                )
+
+        # Keep writing into that same run dir.
+        output_dir_path = resume_ckpt_dir.parent
+
+    output_dir = str(output_dir_path)
     os.makedirs(output_dir, exist_ok=True)
     _seed_everything(args.seed)
 
@@ -486,23 +605,32 @@ def main() -> None:
 
     # PEFT LoRA
     try:
-        from peft import get_peft_model, LoraConfig
+        from peft import LoraConfig, PeftModel, get_peft_model
     except Exception as e:
         raise RuntimeError("peft is required to train LoRA. Please install peft.") from e
 
-    lora_alpha = args.lora_alpha if args.lora_alpha is not None else args.lora_rank
-    target_modules = [m.strip() for m in args.lora_target_modules.split(",") if m.strip()]
-    print(f"Training LoRA with rank {args.lora_rank}, alpha {lora_alpha}, target modules {target_modules}, dropout {args.lora_dropout}")
+    is_resuming = resume_ckpt_dir is not None
+    if is_resuming:
+        # Load adapter config + weights from checkpoint dir.
+        # This ensures we resume with the exact LoRA settings used for the run.
+        tqdm.write(f"[resume] loading checkpoint from: {resume_ckpt_dir}")
+        model = PeftModel.from_pretrained(transformer, str(resume_ckpt_dir), is_trainable=True)
+    else:
+        lora_alpha = args.lora_alpha if args.lora_alpha is not None else args.lora_rank
+        target_modules = [m.strip() for m in args.lora_target_modules.split(",") if m.strip()]
+        print(
+            f"Training LoRA with rank {args.lora_rank}, alpha {lora_alpha}, "
+            f"target modules {target_modules}, dropout {args.lora_dropout}"
+        )
 
-    lora_cfg = LoraConfig(
-        r=args.lora_rank,
-        alpha=lora_alpha,
-        target_modules=target_modules,
-        lora_dropout=args.lora_dropout,
-        bias="none",
-        
-    )
-    model = get_peft_model(transformer, lora_cfg)
+        lora_cfg = LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=lora_alpha,
+            target_modules=target_modules,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+        )
+        model = get_peft_model(transformer, lora_cfg)
 
     model.to(device)
     model.train()
@@ -566,27 +694,72 @@ def main() -> None:
 
     global_step = 0  # optimizer steps
     micro_step = 0   # forward/backward steps
+
+    # If resuming, restore trainer state (optimizer, scheduler, scaler, steps).
+    if is_resuming and resume_ckpt_dir is not None:
+        state_path = resume_ckpt_dir / "trainer_state.pt"
+        if not state_path.exists():
+            raise ValueError(f"Resume checkpoint is missing trainer_state.pt: {state_path}")
+        ckpt = torch.load(str(state_path), map_location="cpu")
+        try:
+            global_step = int(ckpt.get("global_step", 0))
+        except Exception:
+            global_step = 0
+        try:
+            micro_step = int(ckpt.get("micro_step", 0))
+        except Exception:
+            micro_step = 0
+
+        try:
+            if "optimizer" in ckpt and ckpt["optimizer"] is not None:
+                optim.load_state_dict(ckpt["optimizer"])
+                _optimizer_state_to_device(optim, device)
+        except Exception as e:
+            tqdm.write(f"[resume] warning: could not load optimizer state: {e}")
+
+        try:
+            if "lr_scheduler" in ckpt and ckpt["lr_scheduler"] is not None:
+                lr_sched.load_state_dict(ckpt["lr_scheduler"])
+        except Exception as e:
+            tqdm.write(f"[resume] warning: could not load lr scheduler state: {e}")
+
+        try:
+            if scaler.is_enabled() and ckpt.get("scaler") is not None:
+                scaler.load_state_dict(ckpt["scaler"])
+        except Exception as e:
+            tqdm.write(f"[resume] warning: could not load grad scaler state: {e}")
+
+        tqdm.write(f"[resume] restored global_step={global_step} micro_step={micro_step} output_dir={output_dir}")
+
     start_time = time.time()
 
-    progress = tqdm(total=total_optim_steps, desc="Training", dynamic_ncols=True)
+    progress = tqdm(
+        total=total_optim_steps,
+        initial=min(int(global_step), int(total_optim_steps)),
+        desc="Training",
+        dynamic_ncols=True,
+    )
 
     # Step logging
     log_csv_path = args.log_csv or os.path.join(output_dir, "train_log.csv")
-    log_f = open(log_csv_path, "w", newline="", encoding="utf-8")
+    log_exists = os.path.exists(log_csv_path)
+    log_mode = "a" if (is_resuming and log_exists) else "w"
+    log_f = open(log_csv_path, log_mode, newline="", encoding="utf-8")
     log_w = csv.writer(log_f)
-    log_w.writerow(
-        [
-            "global_step",
-            "epoch",
-            "loss",
-            "loss_ma",
-            "lr",
-            "grad_norm",
-            "sigma_mean",
-            "t_norm_mean",
-            "seconds_elapsed",
-        ]
-    )
+    if log_mode == "w":
+        log_w.writerow(
+            [
+                "global_step",
+                "epoch",
+                "loss",
+                "loss_ma",
+                "lr",
+                "grad_norm",
+                "sigma_mean",
+                "t_norm_mean",
+                "seconds_elapsed",
+            ]
+        )
     log_f.flush()
     loss_window = deque(maxlen=50)
 
@@ -594,7 +767,7 @@ def main() -> None:
     samples_dir = os.path.join(output_dir, "samples")
 
     # Qualitative baseline at step 0 (before any optimizer updates)
-    if args.sample_every and int(args.sample_every) > 0:
+    if (not is_resuming) and args.sample_every and int(args.sample_every) > 0:
         tqdm.write("[sample] running baseline sample at step 0")
         _sample_and_save(
             engine=engine,

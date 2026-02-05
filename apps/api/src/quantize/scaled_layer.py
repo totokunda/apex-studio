@@ -17,61 +17,49 @@ except Exception:  # pragma: no cover - optional dependency
 # -------------------- FP8 quantization helpers --------------------
 
 
-def get_fp_maxval(
-    bits: int = 8, mantissa_bit: int = 3, sign_bits: int = 1
-) -> torch.Tensor:
-    """
-    Compute the maximum representable value for a custom FP format.
-    Defaults to FP8 E4M3 (bits=8, mantissa_bit=3, sign_bits=1).
-    """
+
+def get_fp_maxval(bits=8, mantissa_bit=3, sign_bits=1):
     _bits = torch.tensor(bits)
     _mantissa_bit = torch.tensor(mantissa_bit)
     _sign_bits = torch.tensor(sign_bits)
     M = torch.clamp(torch.round(_mantissa_bit), 1, _bits - _sign_bits)
     E = _bits - _sign_bits - M
     bias = 2 ** (E - 1) - 1
-    mantissa = 1.0
+    mantissa = 1
     for i in range(mantissa_bit - 1):
-        mantissa += 1.0 / (2 ** (i + 1))
+        mantissa += 1 / (2 ** (i+1))
     maxval = mantissa * 2 ** (2**E - 1 - bias)
     return maxval
 
-
-def quantize_to_fp8(
-    x: torch.Tensor,
-    bits: int = 8,
-    mantissa_bit: int = 3,
-    sign_bits: int = 1,
-) -> tuple[torch.Tensor, torch.Tensor]:
+def quantize_to_fp8(x, bits=8, mantissa_bit=3, sign_bits=1):
     """
-    Quantize-dequantize `x` to an FP8-like grid (default E4M3) and return:
-      - qdq_out: quantize-dequantized tensor (same dtype as input)
-      - log_scales: per-value log2 scaling factors
+    Default is E4M3.
     """
-    bits_t = torch.tensor(bits)
-    mantissa_bit_t = torch.tensor(mantissa_bit)
-    sign_bits_t = torch.tensor(sign_bits)
-    M = torch.clamp(torch.round(mantissa_bit_t), 1, bits_t - sign_bits_t)
-    E = bits_t - sign_bits_t - M
+    bits = torch.tensor(bits)
+    mantissa_bit = torch.tensor(mantissa_bit)
+    sign_bits = torch.tensor(sign_bits)
+    M = torch.clamp(torch.round(mantissa_bit), 1, bits - sign_bits)
+    E = bits - sign_bits - M
     bias = 2 ** (E - 1) - 1
-
-    mantissa = 1.0
+    mantissa = 1
     for i in range(mantissa_bit - 1):
-        mantissa += 1.0 / (2 ** (i + 1))
-
+        mantissa += 1 / (2 ** (i+1))
     maxval = mantissa * 2 ** (2**E - 1 - bias)
-    minval = -maxval if sign_bits == 1 else torch.zeros_like(maxval)
-
+    minval = - maxval
+    minval = - maxval if sign_bits == 1 else torch.zeros_like(maxval)
     input_clamp = torch.min(torch.max(x, minval), maxval)
-    log_scales = torch.clamp(
-        (torch.floor(torch.log2(torch.abs(input_clamp)) + bias)).detach(), 1.0
-    )
+    log_scales = torch.clamp((torch.floor(torch.log2(torch.abs(input_clamp)) + bias)).detach(), 1.0)
     log_scales = 2.0 ** (log_scales - M - bias.type(x.dtype))
-
-    # Dequantize back to the original dtype/grid
+    # dequant
     qdq_out = torch.round(input_clamp / log_scales) * log_scales
     return qdq_out, log_scales
 
+def fp8_tensor_quant(x, scale, bits=8, mantissa_bit=3, sign_bits=1):
+    for i in range(len(x.shape) - 1):
+        scale = scale.unsqueeze(-1)
+    new_x = x / scale
+    quant_dequant_x, log_scales = quantize_to_fp8(new_x, bits=bits, mantissa_bit=mantissa_bit, sign_bits=sign_bits)
+    return quant_dequant_x, scale, log_scales
 
 def quantize_to_fp4(
     x: torch.Tensor,
@@ -127,27 +115,11 @@ def dequantize_from_fp4(
     return q.to(out_dtype) * scales.to(out_dtype)
 
 
-def fp8_tensor_quant(
-    x: torch.Tensor,
-    scale: torch.Tensor,
-    bits: int = 8,
-    mantissa_bit: int = 3,
-    sign_bits: int = 1,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Normalize `x` by `scale`, then quantize-dequantize to FP8 grid.
-    Returns:
-      - quant_dequant_x: qdq(x / scale)
-      - scale: broadcasted scale used
-      - log_scales: per-value log2 scaling factors
-    """
-    for _ in range(len(x.shape) - 1):
+def fp8_tensor_quant(x, scale, bits=8, mantissa_bit=3, sign_bits=1):
+    for i in range(len(x.shape) - 1):
         scale = scale.unsqueeze(-1)
-
     new_x = x / scale
-    quant_dequant_x, log_scales = quantize_to_fp8(
-        new_x, bits=bits, mantissa_bit=mantissa_bit, sign_bits=sign_bits
-    )
+    quant_dequant_x, log_scales = quantize_to_fp8(new_x, bits=bits, mantissa_bit=mantissa_bit, sign_bits=sign_bits)
     return quant_dequant_x, scale, log_scales
 
 

@@ -90,6 +90,8 @@ class RembgDetector(BasePreprocessor):
 
                 class _ProgressTqdm(_tqdm_mod.tqdm):
                     def __init__(self, *args, **kwargs):
+                        # HF Hub passes `name=` to group progress bars; tqdm doesn't accept it.
+                        kwargs.pop("name", None)
                         super().__init__(*args, **kwargs)
                         # Use provided desc if available; fall back to model name hint
                         self._filename = kwargs.get("desc") or model_name

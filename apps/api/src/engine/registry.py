@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -8,7 +10,10 @@ import importlib
 import inspect
 from src.utils.yaml import load_yaml
 import torch
-from src.engine.base_engine import BaseEngine
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.engine.base_engine import BaseEngine
 from src.manifest.resolver import resolve_manifest_reference
 from loguru import logger
 import traceback
@@ -30,10 +35,14 @@ class EngineRegistry:
     """
 
     def __init__(self):
+        # Import BaseEngine lazily to avoid circular imports during module import.
+        from src.engine.base_engine import BaseEngine as _BaseEngine  # noqa: PLC0415
+
         # Auto-discovered engines:
         #   engine_type (folder name) → model_type (filename) → engine class
         # All keys are stored lowercase for consistency.
-        self._discovered: Dict[str, Dict[str, Type[BaseEngine]]] = {}
+        self._BaseEngine = _BaseEngine
+        self._discovered: Dict[str, Dict[str, Type[_BaseEngine]]] = {}
 
         self._auto_discover_engines()
 
@@ -74,8 +83,8 @@ class EngineRegistry:
                     attr = getattr(module, attr_name)
                     if (
                         inspect.isclass(attr)
-                        and issubclass(attr, BaseEngine)
-                        and attr is not BaseEngine  # ignore classes with shared in name
+                        and issubclass(attr, self._BaseEngine)
+                        and attr is not self._BaseEngine  # ignore classes with shared in name
                         and not (
                             attr_name.lower().startswith("shared")
                             or attr_name.lower().endswith("shared")
@@ -134,6 +143,8 @@ class EngineRegistry:
           is instantiated directly.
         - Otherwise, a ``ValueError`` is raised.
         """
+        
+        from src.engine.base_engine import BaseEngine as _BaseEngine
 
         resolved = resolve_manifest_reference(yaml_path) or yaml_path
         engine_kwargs = {}
@@ -154,7 +165,7 @@ class EngineRegistry:
             self.get_engine_class(engine_type, model_type) if model_type else None
         )
 
-        if impl_class is not None and impl_class is not BaseEngine:
+        if impl_class is not None and impl_class is not _BaseEngine:
             return impl_class(
                 yaml_path=resolved, model_type=model_type, **{**engine_kwargs, **kwargs}
             )

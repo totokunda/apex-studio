@@ -7,7 +7,8 @@ do not need to be imported or re-exported here; they are picked up via
 autodiscovery.
 """
 
-from .base_engine import BaseEngine
+from typing import TYPE_CHECKING
+
 from .registry import (
     EngineRegistry,
     UniversalEngine,
@@ -15,6 +16,10 @@ from .registry import (
     create_engine,
     list_available_engines,
 )
+
+if TYPE_CHECKING:
+    # Avoid import-time circular dependencies by only importing for type checking.
+    from .base_engine import BaseEngine
 
 __all__ = [
     "EngineRegistry",
@@ -24,3 +29,12 @@ __all__ = [
     "list_available_engines",
     "BaseEngine",
 ]
+
+
+def __getattr__(name: str):
+    # Lazily expose BaseEngine without importing it at module import time.
+    if name == "BaseEngine":
+        from .base_engine import BaseEngine  # noqa: PLC0415
+
+        return BaseEngine
+    raise AttributeError(name)

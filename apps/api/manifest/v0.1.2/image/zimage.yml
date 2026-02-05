@@ -1,0 +1,245 @@
+api_version: apex/v1
+kind: Model
+type: image
+metadata:
+  id: zimage
+  model: zimage
+  name: ZImage
+  version: 0.1.2
+  description: ZImage is a 6B parameter model for text-to-image for efficient image
+    generation.
+  tags:
+  - zimage
+  - t2i
+  author: Tongy-MAI
+  license: Apache-2.0
+  demo_path: models/zimage.png
+  categories:
+  - text-to-image
+spec:
+  engine: zimage
+  model_type: t2i
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is a scheduler for the ZImage
+        Turbo model.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: Tongyi-MAI/Z-Image-Turbo/scheduler/scheduler_config.json
+  - type: vae
+    label: ZImage Turbo VAE
+    base: auto
+    model_path:
+    - path: Tongyi-MAI/Z-Image-Turbo/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+      file_size: 167667707
+  - type: text_encoder
+    label: ZImage Text Encoder
+    base: Qwen3ForCausalLM
+    name: text_encoder
+    config_path: Tongyi-MAI/Z-Image-Turbo/text_encoder/config.json
+    model_path:
+    - path: Comfy-Org/z_image_turbo/split_files/text_encoders/qwen_3_4b.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+      file_size: 8045015784
+    tokenizer_class: Qwen2Tokenizer
+    tokenizer_name: Tongyi-MAI/Z-Image-Turbo
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: transformer
+    label: ZImage Transformer
+    base: zimage.base
+    config_path: Tongyi-MAI/Z-Image/transformer/config.json
+    model_path:
+    - path: Tongyi-MAI/Z-Image/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 12309923341
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 4.0
+      return_latents: false
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - seed
+        - - num_inference_steps
+        - - guidance_scale
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: The prompt for text-to-image generation.
+      placeholder: A serene lake surrounded by pine trees at sunrise, ultra realistic.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: The negative prompt for text-to-image generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: prompting
+      default: ' '
+      required: false
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 1024
+      options:
+      - name: 2K Ultra HD
+        value: 2048
+        height: 2048
+      - name: Ultra HD
+        value: 1024
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '1:1'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 2048
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 2048
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: num_inference_steps
+      label: Number of Inference Steps
+      description: The number of inference steps to use for the generation.
+      type: number
+      value_type: integer
+      panel: sampling
+      required: false
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: guidance_scale
+      label: Guidance Scale
+      description: The guidance scale for the generation.
+      type: number
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0

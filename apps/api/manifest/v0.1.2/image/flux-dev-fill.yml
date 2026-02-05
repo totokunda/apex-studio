@@ -1,0 +1,339 @@
+api_version: apex/v1
+kind: Model
+type: image
+metadata:
+  id: flux-dev-fill
+  model: flux
+  name: Flux Dev Fill
+  version: 0.1.2
+  description: Flux fill is a 12B parameter model for image inpainting/outpainting.
+  tags:
+  - flux
+  - dev
+  - fill
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/flux-dev-fill.png
+  categories:
+  - inpaint
+spec:
+  engine: flux
+  model_type: fill
+  engine_type: torch
+  denoise_type: base
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler for Flux Dev Fill.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: totoku/apex-models/FLUX.1-Fill-dev/scheduler/scheduler_config.json
+  - type: vae
+    label: Flux VAE
+    base: auto
+    config_path: totoku/apex-models/Chroma1-HD/vae/config.json
+    model_path:
+    - path: totoku/apex-models/Chroma1-HD/vae/vae-bf16.safetensors
+      variant: default
+      precision: fp16
+      file_size: 167667722
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    name: text_encoder
+    label: CLIP Text Encoder
+    base: CLIPTextModel
+    model_path:
+    - path: totoku/apex-models/FLUX.1-dev/text_encoder
+      variant: default
+      precision: fp16
+      file_size: 246144965
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    tokenizer_class: CLIPTokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: FLUX.1-dev/tokenizer
+  - type: vae
+    label: Flux VAE
+    base: auto
+    config_path: totoku/apex-models/Chroma1-HD/vae/config.json
+    model_path:
+    - path: totoku/apex-models/Chroma1-HD/vae/vae-bf16.safetensors
+      precision: bf16
+      type: safetensors
+      variant: default
+      file_size: 167667721
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    label: T5 Text Encoder
+    name: text_encoder_2
+    base: T5EncoderModel
+    config_path: totoku/apex-models/Chroma1-HD/text_encoder/config.json
+    model_path:
+    - path: totoku/apex-models/Chroma1-HD/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Chroma1-HD/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8
+      type: safetensors
+    - path: totoku/apex-models/Chroma1-HD/text_encoder/text_encoder-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Chroma1-HD/text_encoder
+  - type: transformer
+    label: Flux Fill Transformer
+    base: flux.base
+    model_path:
+    - path: totoku/apex-models/FLUX.1-Fill-dev/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+    - path: totoku/apex-models/FLUX.1-Fill-dev/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8
+      type: safetensors
+    - path: totoku/apex-models/FLUX.1-Fill-dev/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/FLUX.1-Fill-dev/transformer/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/FLUX.1-Fill-dev/transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+    config_path: totoku/apex-models/FLUX.1-Fill-dev/transformer/config.json
+  defaults:
+    run:
+      num_inference_steps: 40
+      guidance_scale: 5.0
+      true_cfg_scale: 4.0
+      strength: 1.0
+      return_latents: false
+      text_encoder_kwargs:
+        clean_text: false
+        max_sequence_length: 77
+        pad_with_zero: false
+      text_encoder_2_kwargs:
+        clean_text: false
+        pad_with_zero: false
+        max_sequence_length: 512
+      joint_attention_kwargs: {}
+  ui:
+    panels:
+    - name: input
+      label: Input
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - mask_image
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+          - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - true_cfg_scale
+        - - strength
+        - - seed
+    inputs:
+    - id: mask_image
+      label: Mask
+      description: White/opaque regions will be filled; black/transparent are kept.
+      type: image+mask
+      map_to: image
+      panel: input
+      required: true
+      map_h: height
+      map_w: width
+    - id: image
+      label: Image
+      description: The base image to fill/inpaint.
+      type: image
+      panel: input
+      required: true
+    - id: prompt
+      description: Describe what you want to generate in the masked regions.
+      placeholder: A vase of flowers on the table.
+      label: Prompt
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what you want to avoid in the generation.
+      type: text
+      panel: advanced_prompting
+      required: false
+      placeholder: blurry, low quality, distorted, artifacts
+    - id: resolution
+      label: Resolution
+      description: Select the target resolution (longer side).
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+      - name: Ultra HD
+        value: 1024
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 16
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps (higher = better quality but slower).
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: guidance_scale
+      label: Guidance Scale
+      description: Classifier-free guidance scale.
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 30.0
+      min: 1.0
+      max: 50.0
+      step: 0.5
+    - id: true_cfg_scale
+      label: True CFG Scale
+      description: True CFG scale for the generation.
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: strength
+      label: Denoise Strength
+      description: How much to deviate from the init image (0.1-1.0).
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 0.1
+      max: 1.0
+      step: 0.05
+    - id: seed
+      label: Seed
+      description: Enter a random seed for controllably random generation.
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false

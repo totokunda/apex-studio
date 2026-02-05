@@ -268,7 +268,10 @@ class ChromaT2IEngine(BaseEngine):
 
         if offload:
             safe_emit_progress(progress_callback, 0.95, "Offloading text encoder")
-            del self.text_encoder
+            self._offload("text_encoder")
+            
+            
+
         safe_emit_progress(progress_callback, 1.0, "Prompt encoding complete")
 
         return (

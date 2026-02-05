@@ -1,0 +1,277 @@
+api_version: apex/v1
+kind: Model
+type: image
+metadata:
+  id: flux2-dev-text-to-image-edit-turbo
+  model: flux2
+  name: Flux Dev 2 Turbo
+  version: 0.1.2
+  description: Flux2 Turbo is a 32B parameter model for text-to-image and image-to-image
+    generation.
+  tags:
+  - flux2
+  - dev
+  - image-edit
+  - i2i
+  - turbo
+  categories:
+  - image-edit
+  - text-to-image
+  author: Black Forest Labs
+  license: Apache-2.0
+  demo_path: models/flux-dev-2-text-to-image-edit-turbo.png
+spec:
+  engine: flux2
+  model_type: ti2i
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  loras:
+  - name: Flux Dev 2 Turbo LORA
+    label: Flux Dev 2 Turbo LORA
+    source: fal/FLUX.2-dev-Turbo/flux.2-turbo-lora.safetensors
+    required: true
+    verified: true
+    scale: 1.0
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is used for Flux Dev.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: totoku/apex-models/FLUX.2-dev/scheduler/scheduler_config.json
+  - type: vae
+    label: Flux VAE
+    base: flux2
+    config_path: totoku/apex-models/FLUX.2-dev/vae/config.json
+    model_path:
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+  - type: text_encoder
+    name: text_encoder
+    label: Flux2 Text Encoder
+    base: Mistral3ForConditionalGeneration
+    gguf_kwargs:
+      key_map: mistral
+    offloading_module: language_model
+    model_path:
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-mmproj-BF16-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-mmproj-BF16-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+    config_path: totoku/apex-models/FLUX.2-dev/text_encoder/config.json
+    tokenizer_class: PixtralProcessor
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: FLUX.2-dev/tokenizer
+  - type: transformer
+    label: Flux Transformer
+    base: flux2.base
+    config_path: totoku/apex-models/FLUX.2-dev/transformer/config.json
+    model_path:
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 4.0
+      sigmas:
+      - 1.0
+      - 0.6509
+      - 0.4374
+      - 0.2932
+      - 0.1893
+      - 0.1108
+      - 0.0495
+      - 0.00031
+      return_latents: false
+  ui:
+    panels:
+    - name: images
+      label: Images
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: image
+      label: Images
+      description: The input image to edit.
+      type: image_list
+      panel: input
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+        height: 720
+      - name: Ultra HD
+        value: 1024
+        height: 1024
+      - name: SD
+        value: 480
+        height: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps. You probably should not change this.
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 8
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 2.5
+      min: 1.0
+      max: 15.0
+      step: 0.5

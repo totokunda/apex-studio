@@ -17,18 +17,33 @@ CAPTIONS_CSV="${CAPTIONS_CSV:-$SCRIPT_DIR/captions.csv}"
 TRAINING_INPUTS_DIR="${TRAINING_INPUTS_DIR:-$SCRIPT_DIR/training_inputs}"
 OPTIMIZER="${OPTIMIZER:-adamw8bit}"
 RUN_NAME="${RUN_NAME:-run}"
-MAX_STEPS="${MAX_STEPS:-5000}"
+MAX_STEPS="${MAX_STEPS:-3000}"
 SAMPLE_PROMPT="${SAMPLE_PROMPT:-Digital anime still featuring Hisoka Morow from the shoulders up with a confident, slightly smirking expression. Dim indoor lighting and warm shadows create a moody atmosphere.}"
 SAMPLE_EVERY="${SAMPLE_EVERY:-100}"
 TARGET_MODULES="${TARGET_MODULES:-to_q,to_k,to_v,to_out.0,w1,w2,w3}"
+
+RESUME_RUN="${RESUME_RUN:-0}"
+RESUME_PATH="${RESUME_PATH:-}"
+
+EXTRA_ARGS=()
+if [ -n "$RESUME_PATH" ] && [ "$RESUME_RUN" != "0" ]; then
+  echo "ERROR: Set only one of RESUME_RUN=1 or RESUME_PATH=/path/to/run_or_checkpoint" >&2
+  exit 1
+fi
+if [ "$RESUME_RUN" != "0" ]; then
+  EXTRA_ARGS+=(--resume_run)
+fi
+if [ -n "$RESUME_PATH" ]; then
+  EXTRA_ARGS+=(--resume "$RESUME_PATH")
+fi
 
 $PYTHON "$SCRIPT_DIR/train.py" \
   --vae_encodings "$TRAINING_INPUTS_DIR/vae_encodings.safetensors" \
   --text_encodings "$TRAINING_INPUTS_DIR/text_encodings.safetensors" \
   --captions_csv "$CAPTIONS_CSV" \
   --caption_dropout 0.05 \
-  --lora_rank 32 \
-  --lora_alpha 16 \
+  --lora_rank 16 \
+  --lora_alpha 8 \
   --learning_rate 1e-4 \
   --optimizer "$OPTIMIZER" \
   --batch_size 1 \
@@ -40,4 +55,5 @@ $PYTHON "$SCRIPT_DIR/train.py" \
   --save_every 250 \
   --sample_prompt "$SAMPLE_PROMPT" \
   --sample_every "$SAMPLE_EVERY" \
-  --lora_target_modules "$TARGET_MODULES"
+  --lora_target_modules "$TARGET_MODULES" \
+  "${EXTRA_ARGS[@]}"
