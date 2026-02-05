@@ -1,0 +1,469 @@
+api_version: apex/v1
+kind: Model
+type: video
+metadata:
+  id: ovi-10b-5s
+  model: wan
+  name: Ovi 10B 5s
+  version: 0.1.2
+  description: Ovi 10B is a 10B parameter model for text-to-video and image to video
+    generation capable of generating 5s videos.
+  tags:
+  - ovi
+  - t2v
+  - i2v
+  - 10b
+  - 5s
+  author: Character AI
+  license: Apache-2.0
+  demo_path: models/ovi-5s.mp4
+  categories:
+  - text-to-video
+  - image-to-video
+spec:
+  engine: wan
+  model_type: ovi
+  engine_type: torch
+  default_duration_secs: 5.0
+  fps: 24
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  components:
+  - type: scheduler
+    name: transformer_scheduler
+    label: Transformer Scheduler
+    default: transformer_scheduler_unipc
+    scheduler_options:
+    - name: transformer_scheduler_unipc
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for Ovi 10B.
+      base: src.scheduler.unipc.UniPCMultistepScheduler
+      config:
+        shift: 1.0
+        num_train_timesteps: 1000
+  - type: scheduler
+    name: audio_scheduler
+    label: Audio Scheduler
+    default: audio_scheduler_unipc
+    scheduler_options:
+    - name: audio_scheduler_unipc
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for Ovi 10B.
+      base: src.scheduler.unipc.UniPCMultistepScheduler
+      config:
+        shift: 1.0
+        num_train_timesteps: 1000
+  - type: vae
+    name: transformer_vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: yetter-ai/Wan2.2-TI2V-5B-Turbo-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1409402453
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+  - type: vae
+    name: audio_vae
+    label: Audio VAE
+    base: mmaudio
+    extra_kwargs:
+      require_conversion: true
+    model_path:
+    - path: hkchengrex/MMAudio/ext_weights/best_netG.pt
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 449217313
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: extra_model_path
+    name: audio_vae_extra_model_path
+    label: Audio VAE Extra Model Path
+    component: audio_vae
+    model_path:
+    - path: hkchengrex/MMAudio/ext_weights/v1-16.pth
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 686652758
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
+  - type: transformer
+    base: wan.ovi
+    label: Ovi Transformer
+    name: 960x960_5s
+    ignore_offloading_modules:
+    - video_model.patch_embedding
+    - video_model.head
+    - audio_model.patch_embedding
+    - audio_model.head
+    block_modules:
+    - fusion_blocks
+    model_path:
+    - path: chetwinlow1/Ovi/model_960x960.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 23321751056
+      resource_requirements:
+        min_vram_gb: 22
+        recommended_vram_gb: 30
+    - path: totoku/ovi/transformer/ovi-fp8-960x960.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 12374673968
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 22
+    config:
+      video:
+        patch_size:
+        - 1
+        - 2
+        - 2
+        model_type: t2v
+        dim: 3072
+        ffn_dim: 14336
+        freq_dim: 256
+        num_heads: 24
+        num_layers: 30
+        in_dim: 48
+        out_dim: 48
+        text_len: 512
+        window_size:
+        - -1
+        - -1
+        qk_norm: true
+        cross_attn_norm: true
+        eps: 1.0e-06
+      audio:
+        patch_size:
+        - 1
+        model_type: t2a
+        dim: 3072
+        ffn_dim: 14336
+        freq_dim: 256
+        num_heads: 24
+        num_layers: 30
+        in_dim: 20
+        out_dim: 20
+        text_len: 512
+        window_size:
+        - -1
+        - -1
+        qk_norm: true
+        cross_attn_norm: true
+        eps: 1.0e-06
+        temporal_rope_scaling_factor: 0.19676
+  defaults:
+    run:
+      num_inference_steps: 50
+      video_guidance_scale: 4.0
+      audio_guidance_scale: 3.0
+      easy_cache_thresh: 0.05
+      easy_cache_ret_steps: 10
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: image
+      label: Image
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+        - - audio_negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - video_guidance_scale
+        - - audio_guidance_scale
+        - - seed
+        - - shift
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+        - - rope_on_cpu
+    - name: easy_cache
+      label: Easy Cache
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - easy_cache_thresh
+        - - easy_cache_ret_steps
+    inputs:
+    - id: image
+      label: Image
+      description: The input image to generate a video from.
+      type: image_list
+      panel: image
+      map_h: height
+      map_w: width
+      scale_by: resolution
+      required: false
+      min: 0
+      max: 1
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate using the <S> and <E> tags
+        for start and end of the text.
+      placeholder: A man in the video grumbles angrily and says <S>I love open source.
+        I can create anything I want.<E> in a deep low voice.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: jitter, bad hands, blur, distortion
+    - id: audio_negative_prompt
+      label: Audio Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: robotic, muffled, echo, distorted
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: robotic, muffled, echo, distorted
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 960
+      options:
+      - name: Full HD
+        value: 960
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: '1:1'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 960
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 960
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: video_guidance_scale
+      label: Video Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: audio_guidance_scale
+      label: Audio Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: shift
+      label: Scheduler Shift
+      description: Shift for the scheduler
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: easy_cache_thresh
+      label: Easy Cache Threshold
+      description: Threshold for the easy cache
+      type: number+slider
+      value_type: float
+      panel: easy_cache
+      required: false
+      default: 0.05
+      min: 0.0
+      max: 1.0
+      step: 0.001
+    - id: easy_cache_ret_steps
+      label: Easy Cache Return Steps
+      description: Number of steps to return for the easy cache
+      type: number+slider
+      value_type: integer
+      panel: easy_cache
+      required: false
+      default: 10
+      min: 1
+      max: 100
+      step: 1
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false

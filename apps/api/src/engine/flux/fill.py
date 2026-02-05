@@ -156,15 +156,15 @@ class FluxFillEngine(FluxShared):
             len(timesteps) - num_inference_steps * self.scheduler.order, 0
         )
 
-        if not hasattr(self, "transformer") or not self.transformer:
-            safe_emit_progress(progress_callback, 0.43, "Loading transformer")
-            self.load_component_by_type("transformer")
+        
 
         safe_emit_progress(progress_callback, 0.44, "Moving transformer to device")
         self.to_device(self.transformer)
         safe_emit_progress(progress_callback, 0.45, "Transformer ready")
+        
+        transformer_config = self.load_config_by_type("transformer")
 
-        if self.transformer.config.guidance_embeds:
+        if transformer_config.guidance_embeds:
             guidance = torch.full(
                 [1], guidance_scale, device=self.device, dtype=torch.float32
             )
@@ -211,6 +211,12 @@ class FluxFillEngine(FluxShared):
             0.50,
             f"Starting denoise (CFG: {'on' if use_cfg_guidance else 'off'})",
         )
+        
+        if not hasattr(self, "transformer") or not self.transformer:
+            safe_emit_progress(progress_callback, 0.51, "Loading transformer")
+            self.load_component_by_type("transformer")
+            
+        
         latents = self.denoise(
             latents=latents,
             timesteps=timesteps,

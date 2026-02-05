@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 from src.quantize.dequant import is_quantized, dequantize_tensor
 from src.quantize.ggml_tensor import GGMLTensor
 from typing import Callable
+from diffusers.models.normalization import RMSNorm
 
 
 def cast_to(
@@ -276,6 +277,18 @@ class GGMLGroupNorm(GGMLLayer, nn.GroupNorm):
         return F.group_norm(x, self.num_groups, w, b, self.eps)
 
 
+class GGMLRMSNorm(GGMLLayer, nn.RMSNorm):
+    def __init__(self, *args, dequant_dtype: Optional[torch.dtype] = None, **kwargs):
+        dim = kwargs.pop("dim")
+        kwargs["normalized_shape"] = (dim,)
+        super().__init__(*args, **kwargs)
+        self.dequant_dtype = dequant_dtype
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        w, b = self.cast_bias_weight(x)
+        return F.rms_norm(x, self.normalized_shape, w, self.eps)
+
+
 _TYPE_MAP = {
     nn.Linear: GGMLLinear,
     nn.Conv3d: GGMLConv3d,
@@ -284,6 +297,8 @@ _TYPE_MAP = {
     nn.Embedding: GGMLEmbedding,
     nn.LayerNorm: GGMLLayerNorm,
     nn.GroupNorm: GGMLGroupNorm,
+    nn.RMSNorm: GGMLRMSNorm,
+    RMSNorm: GGMLRMSNorm,
 }
 
 

@@ -57,6 +57,7 @@ from src.converters.text_encoder_converters import (
 
 from src.converters.vae_converters import (
     LTXVAEConverter,
+    LTX2VAEConverter,
     MagiVAEConverter,
     MMAudioVAEConverter,
     TinyWANVAEConverter,
@@ -112,9 +113,9 @@ def get_transformer_converter(model_base: str):
         return Flux2TransformerConverter()
     elif model_base == "wan.flashvsr":
         return FlashVSRTransformerConverter()
-    elif model_base == "zimage.base":
+    elif model_base == "zimage.base" or model_base == "zimage.control":
         return ZImageTransformerConverter()
-    elif model_base == "ltx2.base":
+    elif model_base == "ltx2.base" or model_base == "ltx2.base2":
         return LTX2TransformerConverter()
     elif model_base == "chroma.base":
         return Chroma1HDTransformerConverter()
@@ -169,6 +170,8 @@ def get_transformer_converter_by_model_name(model_name: str):
 
 
 def get_vae_converter(vae_type: str, **additional_kwargs):
+    if vae_type == "ltx2":
+        return LTX2VAEConverter()
     if vae_type == "ltx":
         return LTXVAEConverter(**additional_kwargs)
     elif vae_type == "magi":
