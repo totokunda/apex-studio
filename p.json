@@ -1,0 +1,283 @@
+{
+    "transformer": {
+        "_class_name": "AVTransformer3DModel",
+        "_diffusers_version": "0.25.1",
+        "activation_fn": "gelu-approximate",
+        "attention_bias": true,
+        "attention_head_dim": 128,
+        "attention_type": "default",
+        "caption_channels": 3840,
+        "cross_attention_dim": 4096,
+        "double_self_attention": false,
+        "dropout": 0,
+        "in_channels": 128,
+        "norm_elementwise_affine": false,
+        "norm_eps": 0.000001,
+        "norm_num_groups": 32,
+        "num_attention_heads": 32,
+        "num_embeds_ada_norm": 1000,
+        "num_layers": 48,
+        "num_vector_embeds": null,
+        "only_cross_attention": false,
+        "cross_attention_norm": true,
+        "out_channels": 128,
+        "upcast_attention": false,
+        "use_linear_projection": false,
+        "qk_norm": "rms_norm",
+        "standardization_norm": "rms_norm",
+        "positional_embedding_type": "rope",
+        "positional_embedding_theta": 10000,
+        "positional_embedding_max_pos": [
+            20,
+            2048,
+            2048
+        ],
+        "timestep_scale_multiplier": 1000,
+        "av_ca_timestep_scale_multiplier": 1000,
+        "causal_temporal_positioning": true,
+        "audio_num_attention_heads": 32,
+        "audio_attention_head_dim": 64,
+        "use_audio_video_cross_attention": true,
+        "share_ff": false,
+        "audio_out_channels": 128,
+        "audio_cross_attention_dim": 2048,
+        "audio_positional_embedding_max_pos": [
+            20
+        ],
+        "av_cross_ada_norm": true,
+        "use_embeddings_connector": true,
+        "connector_attention_head_dim": 128,
+        "connector_num_attention_heads": 30,
+        "connector_num_layers": 2,
+        "connector_positional_embedding_max_pos": [
+            4096
+        ],
+        "connector_num_learnable_registers": 128,
+        "connector_norm_output": true,
+        "use_middle_indices_grid": true,
+        "rope_type": "split",
+        "frequencies_precision": "float64"
+    },
+    "vae": {
+        "_class_name": "CausalVideoAutoencoder",
+        "dims": 3,
+        "in_channels": 3,
+        "out_channels": 3,
+        "latent_channels": 128,
+        "encoder_blocks": [
+            [
+                "res_x",
+                {
+                    "num_layers": 4
+                }
+            ],
+            [
+                "compress_space_res",
+                {
+                    "multiplier": 2
+                }
+            ],
+            [
+                "res_x",
+                {
+                    "num_layers": 6
+                }
+            ],
+            [
+                "compress_time_res",
+                {
+                    "multiplier": 2
+                }
+            ],
+            [
+                "res_x",
+                {
+                    "num_layers": 6
+                }
+            ],
+            [
+                "compress_all_res",
+                {
+                    "multiplier": 2
+                }
+            ],
+            [
+                "res_x",
+                {
+                    "num_layers": 2
+                }
+            ],
+            [
+                "compress_all_res",
+                {
+                    "multiplier": 2
+                }
+            ],
+            [
+                "res_x",
+                {
+                    "num_layers": 2
+                }
+            ]
+        ],
+        "decoder_blocks": [
+            [
+                "res_x",
+                {
+                    "num_layers": 5,
+                    "inject_noise": false
+                }
+            ],
+            [
+                "compress_all",
+                {
+                    "residual": true,
+                    "multiplier": 2
+                }
+            ],
+            [
+                "res_x",
+                {
+                    "num_layers": 5,
+                    "inject_noise": false
+                }
+            ],
+            [
+                "compress_all",
+                {
+                    "residual": true,
+                    "multiplier": 2
+                }
+            ],
+            [
+                "res_x",
+                {
+                    "num_layers": 5,
+                    "inject_noise": false
+                }
+            ],
+            [
+                "compress_all",
+                {
+                    "residual": true,
+                    "multiplier": 2
+                }
+            ],
+            [
+                "res_x",
+                {
+                    "num_layers": 5,
+                    "inject_noise": false
+                }
+            ]
+        ],
+        "scaling_factor": 1,
+        "norm_layer": "pixel_norm",
+        "patch_size": 4,
+        "latent_log_var": "uniform",
+        "use_quant_conv": false,
+        "causal_decoder": false,
+        "timestep_conditioning": false,
+        "normalize_latent_channels": false,
+        "encoder_base_channels": 128,
+        "decoder_base_channels": 128
+    },
+    "scheduler": {
+        "_class_name": "RectifiedFlowScheduler",
+        "_diffusers_version": "0.25.1",
+        "num_train_timesteps": 1000,
+        "shifting": null,
+        "base_resolution": null,
+        "sampler": "LinearQuadratic"
+    },
+    "audio_vae": {
+        "preprocessing": {
+            "audio": {
+                "sampling_rate": 16000,
+                "max_wav_value": 32768,
+                "duration": 5.12,
+                "stereo": true,
+                "causal_padding": 3
+            },
+            "stft": {
+                "filter_length": 1024,
+                "hop_length": 160,
+                "win_length": 1024,
+                "causal": true
+            },
+            "mel": {
+                "n_mel_channels": 64,
+                "mel_fmin": 0,
+                "mel_fmax": 8000
+            }
+        },
+        "model": {
+            "params": {
+                "sampling_rate": 16000,
+                "embed_dim": 8,
+                "ddconfig": {
+                    "double_z": true,
+                    "mel_bins": 64,
+                    "z_channels": 8,
+                    "resolution": 256,
+                    "downsample_time": false,
+                    "in_channels": 2,
+                    "out_ch": 2,
+                    "ch": 128,
+                    "ch_mult": [
+                        1,
+                        2,
+                        4
+                    ],
+                    "num_res_blocks": 2,
+                    "attn_resolutions": [],
+                    "dropout": 0,
+                    "mid_block_add_attention": false,
+                    "norm_type": "pixel",
+                    "causality_axis": "height"
+                }
+            }
+        }
+    },
+    "vocoder": {
+        "resblock_dilation_sizes": [
+            [
+                1,
+                3,
+                5
+            ],
+            [
+                1,
+                3,
+                5
+            ],
+            [
+                1,
+                3,
+                5
+            ]
+        ],
+        "stereo": true,
+        "upsample_rates": [
+            6,
+            5,
+            2,
+            2,
+            2
+        ],
+        "resblock_kernel_sizes": [
+            3,
+            7,
+            11
+        ],
+        "upsample_kernel_sizes": [
+            16,
+            15,
+            8,
+            4,
+            4
+        ],
+        "resblock": "1",
+        "upsample_initial_channel": 1024
+    }
+}

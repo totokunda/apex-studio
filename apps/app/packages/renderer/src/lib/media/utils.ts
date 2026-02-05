@@ -334,7 +334,7 @@ export const getMediaInfo = async (
 
   // If UrlSource creation failed for some reason, or if later reads fail, we'll fallback below
   async function gatherInfo(inp: Input, quickLoad = true) {
-
+    
     const videoTrack = await inp.getPrimaryVideoTrack();
     const audioTrack = await inp.getPrimaryAudioTrack();
     // For quick load, only scan first ~100 packets for fast frame rate estimate
@@ -390,7 +390,6 @@ export const getMediaInfo = async (
       infoBundle = await gatherInfo(input2, quickLoad);
       input = input2; // use the working input as originalInput
     } catch (e2) {
-
       // Fallback: fetch the entire resource as a Blob and use BlobSource to avoid streaming issues
       try {
         if (!filePath) throw new Error("Missing filePath");

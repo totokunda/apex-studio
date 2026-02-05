@@ -1,5 +1,4 @@
 const { existsSync } = require("node:fs");
-const { join } = require("node:path");
 
 // electron-builder loads config via CommonJS `require()`. Using `.cjs` avoids ESM issues.
 const pkg = require("./package.json");
