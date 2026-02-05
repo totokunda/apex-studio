@@ -8,6 +8,53 @@ from gguf.lazy import LazyNumpyTensor
 import numpy as np
 from enum import Enum
 import gguf
+import os
+import sys
+import sysconfig
+import warnings
+from importlib import import_module
+from pathlib import Path
+
+_GGML_QUANTS_IMPORT_WARNED = False
+
+
+def _load_ggml_quants():  # pragma: no cover
+    global _GGML_QUANTS_IMPORT_WARNED
+    try:
+        return import_module(f"{__package__}._ggml_quants")  # type: ignore[no-any-return]
+    except Exception as exc:
+        if not _GGML_QUANTS_IMPORT_WARNED and os.environ.get(
+            "APEX_GGML_QUANTS_VERBOSE", "0"
+        ) in {"1", "true", "True"}:
+            expected_suffix = sysconfig.get_config_var("EXT_SUFFIX")
+            mod_dir = Path(__file__).resolve().parent
+            built = sorted(mod_dir.glob("_ggml_quants*.so"))
+            if built:
+                hint = (
+                    f"Found `{built[0].name}` but this Python expects extension suffix "
+                    f"`{expected_suffix}`. Rebuild with: `{sys.executable} scripts/build_ggml_quants_ext.py`."
+                )
+            else:
+                hint = (
+                    f"Build the extension with: `{sys.executable} scripts/build_ggml_quants_ext.py`."
+                )
+            warnings.warn(
+                f"ggml quants extension unavailable ({exc}). {hint}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            _GGML_QUANTS_IMPORT_WARNED = True
+        return None
+
+
+_ggml_quants = _load_ggml_quants()
+
+
+def _use_ggml_quants() -> bool:
+    if _ggml_quants is None:
+        return False
+    # Allow opt-out for debugging / bisects.
+    return os.environ.get("APEX_DISABLE_GGML_QUANTS", "0") not in {"1", "true", "True"}
 
 
 class QuantConfig:
@@ -89,19 +136,47 @@ def _apply_over_grouped_rows(
     otype: DTypeLike,
     oshape: tuple[int, ...],
 ) -> np.ndarray:
+    """
+    Apply `func` over the last-dimension "rows" of `arr` efficiently.
+
+    `func` is expected to map a 2D array of shape (n_rows, row_len) to another
+    2D array (n_rows, out_row_len) with a fixed per-row output size.
+
+    This replaces the previous `np.array_split` + list-comprehension +
+    `np.concatenate` approach with a chunked in-place fill to avoid:
+    - Python list allocation of intermediate results
+    - extra temporary concatenation buffers
+    - excessive Python overhead for large tensors
+    """
+
+    # Fast empty handling (keeps shape/dtype contract).
+    if arr.size == 0:
+        return np.empty(oshape, dtype=otype)
+
     rows = arr.reshape((-1, arr.shape[-1]))
-    osize = 1
-    for dim in oshape:
-        osize *= dim
-    out = np.empty(shape=osize, dtype=otype)
-    # compute over groups of 16 rows (arbitrary, but seems good for performance)
-    n_groups = (rows.shape[0] // 16) or 1
-    np.concatenate(
-        [func(group).ravel() for group in np.array_split(rows, n_groups)],
-        axis=0,
-        out=out,
-    )
-    return out.reshape(oshape)
+
+    out = np.empty(oshape, dtype=otype)
+    out_rows = out.reshape((-1, out.shape[-1]))
+    assert out_rows.shape[0] == rows.shape[0]
+
+    # Choose a chunk size that keeps the working set reasonable while
+    # minimizing Python loop overhead.
+    #
+    # Target ~4MiB of output per chunk (empirically good on most CPUs).
+    out_row_bytes = out_rows.shape[1] * np.dtype(otype).itemsize
+    target_bytes = 4 * 1024 * 1024
+    if out_row_bytes <= 0:
+        chunk_rows = rows.shape[0]
+    else:
+        chunk_rows = max(1, target_bytes // out_row_bytes)
+        # Clamp to keep `func` vectorized and amortize overhead.
+        chunk_rows = int(min(max(chunk_rows, 64), 16384))
+
+    for i in range(0, rows.shape[0], chunk_rows):
+        j = min(i + chunk_rows, rows.shape[0])
+        out_rows[i:j, :] = func(rows[i:j])
+
+    return out
 
 
 # round away from zero
@@ -237,6 +312,11 @@ class __Quant(ABC):
 
     @classmethod
     def __quantize_array(cls, array: np.ndarray) -> np.ndarray:
+        if _use_ggml_quants():
+            try:
+                return _ggml_quants.quantize(array, int(cls.qtype))
+            except NotImplementedError:
+                pass
         return _apply_over_grouped_rows(
             cls.quantize_rows,
             arr=array,
@@ -246,6 +326,11 @@ class __Quant(ABC):
 
     @classmethod
     def __dequantize_array(cls, array: np.ndarray) -> np.ndarray:
+        if _use_ggml_quants():
+            try:
+                return _ggml_quants.dequantize(array, int(cls.qtype))
+            except NotImplementedError:
+                pass
         cls.init_grid()
         return _apply_over_grouped_rows(
             cls.dequantize_rows,
@@ -269,9 +354,7 @@ class __Quant(ABC):
     @classmethod
     def quantize(cls, tensor: np.ndarray | LazyNumpyTensor) -> np.ndarray:
         if not cls.can_quantize(tensor):
-            raise QuantError(
-                f"Can't quantize tensor with shape {tensor.shape} to {cls.qtype.name}"
-            )
+            return tensor
         if isinstance(tensor, LazyNumpyTensor):
             return cls.__quantize_lazy(tensor)
         else:

@@ -9,6 +9,7 @@ from src.types import InputImage, InputAudio
 from src.utils.cache import empty_cache
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 from src.engine.ltx2.multimodal_guidance import MultiModalGuider, MultiModalGuiderParams
+from src.utils.audio_postprocess import postprocess_audio_waveform
 
 
 class LTX2TI2VEngine(LTX2Shared):
@@ -859,6 +860,9 @@ class LTX2TI2VEngine(LTX2Shared):
             offload=offload,
         )
         
+        print(prompt_embeds, negative_prompt_embeds)
+        print(prompt_embeds.shape, negative_prompt_embeds.shape)
+
         if self.do_classifier_free_guidance:
             # We still build the combined [uncond; cond] embedding stack for connectors, but optionally
             # avoid duplicating the *latents* batch during denoising by running two forward passes.
@@ -1314,6 +1318,7 @@ class LTX2TI2VEngine(LTX2Shared):
                                 cond_idx = slice(0, bsz)
                             latent_model_input = latents.to(prompt_embeds_dtype)
                             audio_latent_model_input = audio_latents.to(prompt_embeds_dtype)
+                            
 
                             with self.transformer.cache_context("mm_guidance"):
                                 noise_pred_video_text, noise_pred_audio_text = self.transformer(
@@ -1753,7 +1758,11 @@ class LTX2TI2VEngine(LTX2Shared):
             self._offload("vocoder", offload_type="cpu")
 
         video = self._convert_to_uint8(video).cpu()
+        # Post-process audio for quality: DC removal, high-pass, and loudness/peak normalization.
+        # Vocoder outputs (B, C, T) at its configured sampling rate (typically 24000).
+        audio_sr = int(getattr(getattr(vocoder, "config", None), "output_sampling_rate", 24000))
         audio = audio.squeeze(0).cpu().float()
+        audio = postprocess_audio_waveform(audio, sample_rate=audio_sr)
 
         safe_emit_progress(
             stage1_progress_callback, 1.0, "Completed text-to-image-to-video pipeline"

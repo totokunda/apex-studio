@@ -19,6 +19,18 @@ if "%OPTIMIZER%"=="" set "OPTIMIZER=adamw"
 if "%RUN_NAME%"=="" set "RUN_NAME=run"
 if "%MAX_STEPS%"=="" set "MAX_STEPS=5000"
 
+rem Optional resume support:
+rem - set RESUME_RUN=1 to resume latest checkpoint under lora/<RUN_NAME>/
+rem - set RESUME_PATH=C:\path\to\lora\run_or_checkpoint to resume from a specific run/checkpoint
+if "%RESUME_RUN%"=="" set "RESUME_RUN=0"
+if not "%RESUME_PATH%"=="" if "%RESUME_RUN%"=="1" (
+  echo ERROR: Set only one of RESUME_RUN=1 or RESUME_PATH=...
+  exit /b 1
+)
+set "RESUME_ARGS="
+if "%RESUME_RUN%"=="1" set "RESUME_ARGS=--resume_run"
+if not "%RESUME_PATH%"=="" set "RESUME_ARGS=--resume ""%RESUME_PATH%"""
+
 "%PYTHON%" "%SCRIPT_DIR%train.py" ^
   --vae_encodings "%TRAINING_INPUTS_DIR%\vae_encodings.safetensors" ^
   --text_encodings "%TRAINING_INPUTS_DIR%\text_encodings.safetensors" ^
@@ -33,7 +45,8 @@ if "%MAX_STEPS%"=="" set "MAX_STEPS=5000"
   --max_steps "%MAX_STEPS%" ^
   --gradient_checkpointing ^
   --run_name "%RUN_NAME%" ^
-  --save_every 250
+  --save_every 250 ^
+  %RESUME_ARGS%
 
 endlocal
 

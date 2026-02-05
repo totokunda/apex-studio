@@ -30,6 +30,13 @@ import torch
 
 from .group_offloading import _is_group_offload_enabled
 
+# Import memory detection utilities for auto budget calculation
+try:
+    from . import _device_free_total
+except ImportError:
+    # Fallback if not available
+    _device_free_total = None
+
 ONE_MB = 1024 * 1024
 
 
@@ -1007,19 +1014,276 @@ class BudgetOffloader:
     # -------- budget parsing / heuristics --------
 
     def _parse_budget(self, b: Optional[Union[int, str]]) -> int:
+        """
+        Parse budget specification:
+        - None or 0: no budget offloading (load full model)
+        - int: MB budget
+        - "0.8%": coefficient * VRAM capacity
+        - "auto": automatic calculation based on available resources (NEW)
+        """
         if b is None:
             return 0
-        if isinstance(b, str) and b.endswith("%"):
-            # mmgp: "0.8%" means 0.8 * VRAM capacity (coefficient, not percent)
-            try:
-                coef = float(b[:-1])
-            except Exception:
-                return 0
-            return int(coef * float(self.device_mem_capacity))
+
+        if isinstance(b, str):
+            # NEW: Handle "auto" mode
+            if b.lower() == "auto":
+                try:
+                    return self._auto_calculate_budget()
+                except Exception as exc:
+                    logger.warning(
+                        f"Auto budget calculation failed: {exc}. "
+                        "Falling back to heuristic-based budget"
+                    )
+                    return self._fallback_budget_heuristic()
+
+            # Existing: percentage format
+            if b.endswith("%"):
+                # mmgp: "0.8%" means 0.8 * VRAM capacity (coefficient, not percent)
+                try:
+                    coef = float(b[:-1])
+                except Exception:
+                    return 0
+                return int(coef * float(self.device_mem_capacity))
+
+        # Existing: numeric MB
         try:
             return int(float(b) * ONE_MB)  # MB
         except Exception:
             return 0
+
+    def _calculate_param_size(self, param: Any) -> int:
+        """
+        Calculate size of a parameter in bytes, handling quantized subtensors.
+
+        Used by auto budget calculation to accurately measure model memory footprint.
+        """
+        if param is None:
+            return 0
+
+        # Check for quantized subtensors (quanto, ggml, etc.)
+        sub_tensors = _get_quantized_subtensors(param)
+        if sub_tensors:
+            return _subtensors_nbytes(sub_tensors)
+
+        # Regular tensor
+        if hasattr(param, 'data') and torch.is_tensor(param.data):
+            return int(torch.numel(param.data) * param.data.element_size())
+
+        return 0
+
+    def _fallback_budget_heuristic(self) -> int:
+        """
+        Heuristic fallback budget when auto-calculation fails.
+
+        Uses simple rules based on total VRAM:
+        - < 8GB: 400MB (VerylowRAM_LowVRAM profile)
+        - 8-16GB: 3000MB (LowRAM_LowVRAM profile)
+        - 16-24GB: 6000MB (moderate headroom)
+        - > 24GB: 0 (load full model, HighRAM_HighVRAM profile)
+        """
+        if not torch.cuda.is_available():
+            return 0
+
+        try:
+            device = torch.device("cuda")
+            _, total_vram = _device_free_total(device)
+            total_gb = total_vram / (1024**3)
+
+            if total_gb < 8:
+                budget_mb = 400
+            elif total_gb < 16:
+                budget_mb = 3000
+            elif total_gb < 24:
+                budget_mb = 6000
+            else:
+                # High VRAM: load full model
+                return 0
+
+            logger.info(
+                f"Fallback budget heuristic: {total_gb:.1f}GB VRAM detected, "
+                f"using {budget_mb}MB budget"
+            )
+            return budget_mb * ONE_MB
+
+        except Exception:
+            # Ultimate fallback: conservative budget
+            logger.warning("Failed to detect VRAM, using conservative 400MB budget")
+            return 400 * ONE_MB
+
+    def _auto_calculate_budget(self) -> int:
+        """
+        Automatically determine optimal budget based on system resources and model structure.
+
+        This is the core auto budget calculation algorithm that:
+        1. Detects available VRAM capacity
+        2. Measures actual model size (parameters + buffers)
+        3. Detects tower structure (repeating numbered blocks)
+        4. Calculates base block size (params not in towers)
+        5. Applies safety margins:
+           - vram_safety_coefficient (default 0.8)
+           - Activation overhead (base × 0.20 + 512MB)
+           - System reserve (2GB)
+        6. Allocates remaining budget to tower preloading
+        7. Returns budget in bytes
+
+        Returns:
+            Budget in bytes for block-based offloading
+        """
+        if not torch.cuda.is_available():
+            logger.info("Auto budget: CUDA not available, disabling budget offloading")
+            return 0
+
+        if _device_free_total is None:
+            logger.warning("Auto budget: _device_free_total not available, using fallback")
+            return self._fallback_budget_heuristic()
+
+        # Step 1: Detect VRAM capacity
+        device = torch.device("cuda")
+        try:
+            free_vram, total_vram = _device_free_total(device)
+        except Exception as exc:
+            logger.warning(f"Auto budget: Failed to detect VRAM: {exc}")
+            return self._fallback_budget_heuristic()
+
+        if total_vram == 0:
+            logger.warning("Auto budget: Cannot detect VRAM capacity, using fallback")
+            return self._fallback_budget_heuristic()
+
+        logger.info("=" * 60)
+        logger.info("AUTO BUDGET CALCULATION")
+        logger.info("=" * 60)
+        logger.info(f"System Info:")
+        logger.info(f"  Total VRAM: {total_vram/1e9:.2f} GB")
+        logger.info(f"  Free VRAM: {free_vram/1e9:.2f} GB")
+        logger.info(f"  Safety coefficient: {self.vram_safety_coefficient}")
+        logger.info("")
+
+        # Step 2: Measure total model size
+        total_model_size = 0
+        for param in self.module.parameters(recurse=True):
+            total_model_size += self._calculate_param_size(param)
+        for buf in self.module.buffers(recurse=True):
+            total_model_size += self._calculate_param_size(buf)
+
+        logger.info(f"Model Info:")
+        logger.info(f"  Total size: {total_model_size/1e9:.2f} GB")
+
+        # Step 3: Detect tower structure
+        towers_names, _ = _detect_main_towers(self.module)
+        logger.info(f"  Number of towers: {len(towers_names)}")
+
+        # Step 4: Calculate base block size (params not in towers)
+        if not towers_names:
+            # No towers: simple case - use full model size
+            logger.info("  No tower structure detected, using full model size")
+            available = total_vram * self.vram_safety_coefficient
+            budget_bytes = min(total_model_size, int(available))
+            logger.info("")
+            logger.info(f"FINAL BUDGET: {budget_bytes/1e9:.2f} GB ({int(budget_bytes/1e6)} MB)")
+            logger.info("=" * 60)
+            return budget_bytes
+
+        # Calculate base block size (params not in any tower)
+        base_block_size = 0
+
+        # Root-level parameters/buffers
+        for name, param in self.module.named_parameters(recurse=False):
+            is_tower = any(name.startswith(t) for t in towers_names)
+            if not is_tower:
+                base_block_size += self._calculate_param_size(param)
+
+        for name, buf in self.module.named_buffers(recurse=False):
+            is_tower = any(name.startswith(t) for t in towers_names)
+            if not is_tower:
+                base_block_size += self._calculate_param_size(buf)
+
+        # Submodule parameters/buffers not in towers
+        for submodule_name, submodule in self.module.named_modules():
+            if submodule_name == "":
+                continue
+            is_tower = any(submodule_name.startswith(t) for t in towers_names)
+            if not is_tower:
+                for param in submodule.named_parameters(recurse=False):
+                    base_block_size += self._calculate_param_size(param[1])
+                for buf in submodule.named_buffers(recurse=False):
+                    base_block_size += self._calculate_param_size(buf[1])
+
+        logger.info(f"  Base block size: {base_block_size/1e9:.2f} GB")
+
+        # Step 5: Calculate available budget after safety margins
+        # Read environment variable overrides for tuning
+        activation_overhead_mult = float(
+            os.getenv("APEX_BUDGET_AUTO_ACTIVATION_MULT", "0.20")
+        )
+        activation_overhead_base_mb = int(
+            os.getenv("APEX_BUDGET_AUTO_ACTIVATION_BASE_MB", "512")
+        )
+        system_overhead_gb = float(
+            os.getenv("APEX_BUDGET_AUTO_SYSTEM_OVERHEAD_GB", "2.0")
+        )
+        final_safety_factor = float(
+            os.getenv("APEX_BUDGET_AUTO_FINAL_SAFETY", "0.95")
+        )
+
+        safety_reserve = total_vram * (1.0 - self.vram_safety_coefficient)
+        activation_overhead = int(base_block_size * activation_overhead_mult + activation_overhead_base_mb * ONE_MB)
+        system_overhead = int(system_overhead_gb * 1024**3)
+
+        available_for_weights = (
+            total_vram
+            - safety_reserve
+            - system_overhead
+            - activation_overhead
+        )
+
+        logger.info("")
+        logger.info(f"Budget Calculation:")
+        logger.info(f"  Safety reserve: {safety_reserve/1e9:.2f} GB")
+        logger.info(f"  Activation overhead: {activation_overhead/1e9:.2f} GB")
+        logger.info(f"  System overhead: {system_overhead/1e9:.2f} GB")
+        logger.info(f"  Available for weights: {available_for_weights/1e9:.2f} GB")
+
+        # Ensure we can at least fit base block
+        if available_for_weights < base_block_size:
+            logger.warning(
+                "  WARNING: Insufficient VRAM for base block, using minimal budget"
+            )
+            budget_bytes = max(int(base_block_size * 0.8), 0)  # Allow 80% for safety
+            logger.info("")
+            logger.info(f"FINAL BUDGET: {budget_bytes/1e9:.2f} GB ({int(budget_bytes/1e6)} MB) [MINIMAL]")
+            logger.info("=" * 60)
+            return budget_bytes
+
+        # Step 6: Calculate tower budget
+        tower_budget = available_for_weights - base_block_size
+
+        # Estimate average tower block size
+        # (we'll refine in _tune_preloading after building blocks)
+        tower_size_estimate = (total_model_size - base_block_size) / len(towers_names)
+
+        # Conservative: ensure we can fit at least 2 blocks (current + next)
+        # for async prefetch to work effectively
+        min_preload_towers = int(os.getenv("APEX_BUDGET_AUTO_MIN_PRELOAD_TOWERS", "2"))
+
+        if tower_budget < (min_preload_towers * tower_size_estimate):
+            num_preload_towers = 0
+            logger.info(f"  Preload towers: {num_preload_towers} (insufficient VRAM)")
+        else:
+            num_preload_towers = int(tower_budget / tower_size_estimate)
+            # Cap at reasonable limit to leave swap room
+            num_preload_towers = min(num_preload_towers, max(len(towers_names) - 2, 0))
+            logger.info(f"  Preload towers: {num_preload_towers}")
+
+        budget_bytes = base_block_size + (num_preload_towers * tower_size_estimate)
+
+        # Step 7: Apply final safety factor (5% reduction for fragmentation)
+        budget_bytes = int(budget_bytes * final_safety_factor)
+
+        logger.info("")
+        logger.info(f"FINAL BUDGET: {budget_bytes/1e9:.2f} GB ({int(budget_bytes/1e6)} MB)")
+        logger.info("=" * 60)
+
+        return budget_bytes
 
     def _ready_to_check_mem(self) -> bool:
         if self.any_compiled_module:
@@ -1539,6 +1803,17 @@ def {fname}(module, *args, **kwargs):
             return
 
         base_size = int(self.blocks_of_modules_sizes.get(model_id, 0))
+
+        # NEW: Runtime validation for auto-calculated budgets
+        # Ensure budget is at least as large as base block
+        if self._budget_bytes > 0 and self._budget_bytes < base_size:
+            logger.warning(
+                f"Auto budget validation: Budget ({self._budget_bytes/1e6:.0f}MB) is less than "
+                f"base block ({base_size/1e6:.0f}MB). Adjusting to base block size."
+            )
+            self._budget_bytes = base_size
+            current_budget = base_size
+
         current_budget -= base_size
         current_budget = max(0, current_budget)
 
@@ -1599,7 +1874,6 @@ def {fname}(module, *args, **kwargs):
         self.preloaded_blocks_per_model[model_id] = preloaded_blocks
      
     # -------- hook lifecycle --------
-
     def install_hooks(self) -> None:
         # Hooks are installed during init in `_build_and_hook`.
         # This method is kept for API compatibility.

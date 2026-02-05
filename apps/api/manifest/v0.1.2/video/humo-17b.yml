@@ -1,0 +1,419 @@
+api_version: apex/v1
+kind: Model
+type: video
+metadata:
+  id: humo-17b
+  model: wan
+  name: HuMo 17B
+  version: 0.1.2
+  description: "HuMo is a unified, human-centric video generation framework designed\
+    \ to produce high-quality, fine-grained, and controllable human videos from multimodal\
+    \ inputs\u2014including text, images, and audio. It supports strong text prompt\
+    \ following, consistent subject preservation, synchronized audio-driven motion."
+  tags:
+  - humo
+  - audio
+  - i2v
+  - 17b
+  author: Bytedance Research
+  license: Apache-2.0
+  demo_path: models/humo-17b.mp4
+  categories:
+  - audio-to-video
+spec:
+  default_duration_secs: 3
+  fps: 25
+  engine: wan
+  model_type: humo
+  engine_type: torch
+  loras:
+  - source: lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors
+    scale: 0.0
+    name: lightx2v_i2v_lora
+    label: Lightx2v I2V LoRA
+    component: transformer
+    verified: true
+  - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_T2V_14B_FusionX_LoRA.safetensors
+    scale: 1.0
+    name: fusionx_t2v_lora
+    label: FusionX T2V LoRA
+    component: transformer
+    verified: true
+  audio_inputs_to_save:
+  - audio
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepScheduler
+    scheduler_options:
+    - name: UniPCMultistepScheduler
+      label: UniPC Multistep Scheduler
+      description: The UniPC Multistep Scheduler is used for WAN 2.2 14B Speech to
+        Video.
+      base: src.scheduler.unipc.UniPCMultistepScheduler
+      config:
+        shift: 5.0
+        num_train_timesteps: 1000
+  - type: vae
+    name: wan/vae
+    label: Wan VAE
+    base: wan
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 507592616
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    block_modules: 
+    - encoder
+    model_path:
+    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 11361874539
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 6731333792
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
+  - type: transformer
+    base: wan.humo
+    label: HuMo Transformer
+    config:
+      text_len: 512
+      patch_size:
+      - 1
+      - 2
+      - 2
+      dim: 5120
+      ffn_dim: 13824
+      freq_dim: 256
+      in_dim: 36
+      model_type: i2v
+      num_heads: 40
+      num_layers: 40
+      window_size:
+      - -1
+      - -1
+      qk_norm: true
+      cross_attn_norm: true
+      eps: 1.0e-06
+      insert_audio: true
+    model_path:
+    - path: bytedance-research/HuMo/HuMo-17B
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 68224002820
+      resource_requirements:
+        min_vram_gb: 55
+        recommended_vram_gb: 74
+    - path: calcuis/humo-gguf/humo-17b-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      file_size: 18940742592
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
+    - path: calcuis/humo-gguf/humo-17b-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      file_size: 14877510592
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
+    - path: calcuis/humo-gguf/humo-17b-q5_0.gguf
+      variant: GGUF_Q5_0
+      precision: q5_0
+      type: gguf
+      file_size: 12826233792
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    - path: calcuis/humo-gguf/humo-17b-q4_0.gguf
+      variant: GGUF_Q4_0
+      precision: q4_0
+      type: gguf
+      file_size: 10729081792
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: calcuis/humo-gguf/humo-17b-q3_k_s.gguf
+      variant: GGUF_Q3_K_S
+      precision: q3_k_s
+      type: gguf
+      file_size: 8323910592
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+  - type: helper
+    base: wan.humo_audio_processor
+    label: HuMo Audio Processor
+    name: wan.humo_audio_processor
+    sample_rate: 16000
+    fps: 25
+    model_path:
+    - path: totoku/whisper-large-v3
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 3091543112
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+  defaults:
+    run:
+      num_inference_steps: 50
+      return_latents: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: media
+      label: Media
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+        - - audio
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale_a
+        - - guidance_scale_t
+        - - seed
+        - - use_audio_length
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+        - - rope_on_cpu
+    inputs:
+    - id: audio
+      label: Audio
+      description: The audio to condition on.
+      type: audio
+      panel: media
+      required: true
+    - id: image
+      label: Image
+      description: The image to condition on.
+      type: image
+      panel: media
+      required: true
+      map_h: height
+      map_w: width
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: SD
+        value: 480
+      - name: HD
+        value: 720
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: wide
+      options:
+      - name: Wide
+        value: wide
+        ratio_w: 26
+        ratio_h: 15
+      - name: Vertical
+        value: vertical
+        ratio_w: 15
+        ratio_h: 26
+      - name: Square
+        value: square
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: classic
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 4
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale_a
+      label: Audio Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: guidance_scale_t
+      label: Text Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: use_audio_length
+      label: Use Audio Length
+      description: Use the length of the audio to determine the number of frames.
+      type: boolean
+      panel: sampling
+      required: true
+      default: false
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false

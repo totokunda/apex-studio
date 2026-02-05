@@ -15,9 +15,13 @@ import os
 import re
 import shutil
 from src.utils.save_audio_video import save_video_ovi, save_video_ltx2
+from src.api.savers.engine_results import save_engine_output
+from src.api.savers.foley import mux_foley_audio_onto_input_video
+from src.api.savers.mp4 import optimize_mp4_for_editor_in_place
+from src.api.savers.preview_url import make_preview_url
+from src.api.savers.postprocessors import save_frames_with_source_audio
 import inspect
 import yaml
-import numpy as np
 import json
 from src.utils.cache import empty_cache
 from src.utils.warm_pool import EngineWarmPool, stable_hash_dict
@@ -405,224 +409,6 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return bool(default)
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _optimize_mp4_for_editor_in_place(
-    video_path: str,
-    *,
-    fps: Optional[int] = None,
-    gop_frames: Optional[int] = None,
-) -> bool:
-    """
-    Best-effort post-pass for MP4s intended for interactive playback in editors.
-
-    Goals:
-    - Make MP4 seekable/streamable via `-movflags +faststart`
-    - Optionally enforce CFR + a shorter GOP for smoother scrubbing
-    - Keep behavior best-effort: on failure, leave the original file intact
-
-    Controlled by env:
-    - APEX_VIDEO_EDITOR_OPTIMIZE: enable/disable (default: true)
-    - APEX_VIDEO_EDITOR_ENGINE_GOP: engine-result GOP in frames (default: 1)
-    - APEX_VIDEO_EDITOR_PREPROCESSOR_GOP: preprocessor-result GOP in frames (default: 4)
-    - APEX_VIDEO_EDITOR_GOP_FRAMES: keyframe interval in frames (default: unset)
-    - APEX_VIDEO_EDITOR_GOP_SECONDS: keyframe interval in seconds (default: 1.0)
-    - APEX_VIDEO_EDITOR_CRF: x264 CRF (default: 18)
-    - APEX_VIDEO_EDITOR_PRESET: x264 preset (default: veryfast)
-    - APEX_VIDEO_EDITOR_NO_BFRAMES: disable B-frames for monotonic timestamps (default: true)
-    """
-    try:
-        import shlex
-
-        from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
-
-        if not _env_flag("APEX_VIDEO_EDITOR_OPTIMIZE", default=True):
-            return False
-
-        if not (isinstance(video_path, str) and os.path.isfile(video_path)):
-            return False
-
-        base = Path(video_path)
-        if base.suffix.lower() != ".mp4":
-            return False
-
-        # Read tunables.
-        # Prefer explicit GOP frames if provided; fall back to env override; then GOP seconds.
-        gop_frames_int: Optional[int] = None
-        if gop_frames is not None:
-            try:
-                gop_frames_int = int(gop_frames)
-            except Exception:
-                gop_frames_int = None
-        if gop_frames_int is None:
-            try:
-                _raw = os.environ.get("APEX_VIDEO_EDITOR_GOP_FRAMES")
-                if _raw is not None and str(_raw).strip() != "":
-                    gop_frames_int = int(str(_raw).strip())
-            except Exception:
-                gop_frames_int = None
-        if gop_frames_int is not None:
-            gop_frames_int = max(1, min(1000, int(gop_frames_int)))
-
-        try:
-            gop_seconds = float(
-                os.environ.get("APEX_VIDEO_EDITOR_GOP_SECONDS", "1.0") or "1.0"
-            )
-        except Exception:
-            gop_seconds = 1.0
-        gop_seconds = max(0.25, min(10.0, gop_seconds))
-
-        try:
-            crf = int(os.environ.get("APEX_VIDEO_EDITOR_CRF", "18") or "18")
-        except Exception:
-            crf = 18
-        crf = max(0, min(51, crf))
-
-        preset = str(
-            os.environ.get("APEX_VIDEO_EDITOR_PRESET", "veryfast") or "veryfast"
-        ).strip()
-        if not preset:
-            preset = "veryfast"
-
-        no_bframes = _env_flag("APEX_VIDEO_EDITOR_NO_BFRAMES", default=True)
-
-        # If we don't know the FPS, keep it as-is and only ensure faststart.
-        fps_int: Optional[int] = None
-        if fps is not None:
-            try:
-                fps_int = int(max(1, round(float(fps))))
-            except Exception:
-                fps_int = None
-
-        temp_out_path = base.with_name(f"{base.stem}_editor{base.suffix}")
-
-        # Hard timeout so this post-pass can never wedge a server/worker indefinitely.
-        try:
-            timeout_s = float(
-                os.environ.get("APEX_VIDEO_EDITOR_FFMPEG_TIMEOUT_SECONDS", "60") or "60"
-            )
-        except Exception:
-            timeout_s = 60.0
-        timeout_s = max(5.0, min(60.0 * 10.0, float(timeout_s)))
-
-        ffmpeg_path = get_ffmpeg_path()
-
-        # GOP tuning for smoother seeking/scrubbing (requires re-encode).
-        gop: Optional[int] = None
-        if gop_frames_int is not None:
-            gop = int(gop_frames_int)
-        elif fps_int is not None:
-            gop = int(max(1, round(float(fps_int) * float(gop_seconds))))
-
-        # Common flags for daemon-safe invocations:
-        # - `-nostdin` + `stdin=DEVNULL` prevents ffmpeg from interacting with process stdin.
-        # - `-hide_banner` keeps logs small; we also force loglevel error.
-        common: List[str] = [
-            ffmpeg_path,
-            "-hide_banner",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(base),
-            # Video only: audio is muxed later in our pipeline.
-            "-an",
-            "-map",
-            "0:v:0",
-        ]
-
-        # If we don't know FPS and no GOP override is requested, prefer a fast stream copy
-        # to just relocate the moov atom (`+faststart`) without re-encoding.
-        candidate_cmds: List[List[str]] = []
-        if fps_int is None and gop is None:
-            candidate_cmds.append(
-                common
-                + [
-                    "-c:v",
-                    "copy",
-                    "-movflags",
-                    "+faststart",
-                    str(temp_out_path),
-                ]
-            )
-
-        # Re-encode path (needed for CFR/GOP/B-frames tuning).
-        cmd: List[str] = (
-            common
-            + [
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-preset",
-                preset,
-                "-crf",
-                str(crf),
-                "-sc_threshold",
-                "0",
-            ]
-        )
-
-        if gop is not None:
-            cmd.extend(
-                [
-                    "-g",
-                    str(gop),
-                    "-keyint_min",
-                    str(gop),
-                ]
-            )
-        # Enforce CFR in the output when FPS is known.
-        if fps_int is not None:
-            cmd.extend(["-fps_mode", "cfr", "-r", str(fps_int)])
-
-        if no_bframes:
-            # Avoid B-frame reordering; often improves editor scrubbing and makes timestamps simpler.
-            cmd.extend(["-x264-params", "bframes=0"])
-
-        cmd.extend(
-            [
-                "-movflags",
-                "+faststart",
-                str(temp_out_path),
-            ]
-        )
-
-        candidate_cmds.append(cmd)
-
-        last_err: Optional[str] = None
-        for attempt, cmd_i in enumerate(candidate_cmds, start=1):
-            try:
-                log_path = base.with_name(f"{base.stem}_editor_ffmpeg_{attempt}.log")
-                logger.info(
-                    "Optimizing MP4 for editor (%s/%s): %s (timeout=%.1fs)",
-                    attempt,
-                    len(candidate_cmds),
-                    shlex.join(cmd_i),
-                    timeout_s,
-                )
-                rc, lp, _ = run_ffmpeg(cmd_i, timeout_s=timeout_s, log_path=log_path)
-                if rc != 0 or not temp_out_path.is_file():
-                    last_err = f"returncode={rc}; log={lp}"
-                    continue
-
-                logger.info("MP4 editor optimization succeeded (attempt %s).", attempt)
-                temp_out_path.replace(base)
-                return True
-            except Exception as e:
-                last_err = str(e)
-                try:
-                    if temp_out_path.exists():
-                        temp_out_path.unlink(missing_ok=True)  # type: ignore[arg-type]
-                except Exception:
-                    pass
-
-        if last_err:
-            logger.warning("MP4 editor optimization failed: %s", last_err)
-        return False
-    except Exception:
-        return False
 
 
 def _free_unused_modules_in_warm_pool_impl(
@@ -2424,12 +2210,15 @@ def _execute_preprocessor(
         send_progress(1.0, "Cache found and returning")
         # Construct preview URL for frontend access
         preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
-        try:
-            relative_path = Path(result_path).relative_to(preprocessor_results_base)
-            preview_url = f"/files/preprocessor_results/{relative_path}"
-        except (ValueError, AttributeError):
-            # Fallback if path conversion fails
-            preview_url = None
+        preview_url = (
+            make_preview_url(
+                result_path=str(result_path),
+                results_base=preprocessor_results_base,
+                route_prefix="/files/preprocessor_results",
+            )
+            if isinstance(result_path, str)
+            else None
+        )
 
         results_dict = {
             "Complete": "Complete",
@@ -2541,7 +2330,7 @@ def _execute_preprocessor(
                     fps_hint,
                     preproc_gop,
                 )
-                _optimize_mp4_for_editor_in_place(
+                optimize_mp4_for_editor_in_place(
                     result_path, fps=fps_hint, gop_frames=preproc_gop
                 )
                 logger.info(
@@ -2552,12 +2341,15 @@ def _execute_preprocessor(
 
         # Construct preview URL for frontend access
         preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
-        try:
-            relative_path = Path(result_path).relative_to(preprocessor_results_base)
-            preview_url = f"/files/preprocessor_results/{relative_path}"
-        except (ValueError, AttributeError):
-            # Fallback if path conversion fails
-            preview_url = None
+        preview_url = (
+            make_preview_url(
+                result_path=str(result_path),
+                results_base=preprocessor_results_base,
+                route_prefix="/files/preprocessor_results",
+            )
+            if isinstance(result_path, str)
+            else None
+        )
 
         results_dict = {
             "Complete": "Complete",
@@ -2944,274 +2736,23 @@ def _run_engine_from_manifest_impl(
         job_dir.mkdir(parents=True, exist_ok=True)
 
         # Unified saver usable for previews and final outputs
-        def _mux_audio_into_video(
-            video_path: str, audio_paths: List[str]
-        ) -> Optional[str]:
-            """
-            Best-effort helper to mux one or more audio files into a video using ffmpeg.
-            Returns the new video path on success, or None on failure.
-            """
-            import os
-            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
-
-            try:
-                valid_audio_paths = [
-                    p for p in audio_paths if isinstance(p, str) and os.path.isfile(p)
-                ]
-                if not valid_audio_paths:
-                    return None
-
-                base = Path(video_path)
-                # We first mux into a temporary file, then overwrite the original
-                # video so that the final saved filename remains unchanged.
-                temp_out_path = base.with_name(f"{base.stem}_with_audio{base.suffix}")
-                log_path = job_dir / f"{base.stem}_mux_audio.log"
-
-                cmd: List[str] = [get_ffmpeg_path(), "-y", "-i", video_path]
-                for ap in valid_audio_paths:
-                    cmd.extend(["-i", ap])
-
-                if len(valid_audio_paths) == 1:
-                    # Single audio track: simple stream copy, similar to test_humo.py
-                    cmd.extend(
-                        [
-                            "-map",
-                            "0:v:0",
-                            "-map",
-                            "1:a:0?",
-                            "-c:v",
-                            "copy",
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            "192k",
-                            "-ar",
-                            "48000",
-                            "-ac",
-                            "2",
-                            "-shortest",
-                            "-movflags",
-                            "+faststart",
-                            str(temp_out_path),
-                        ]
-                    )
-                else:
-                    # Multiple audio inputs: mix them down into a single track with amix.
-                    # Audio inputs start from index 1 (0 is the video).
-                    inputs_count = len(valid_audio_paths)
-                    filter_inputs = "".join(f"[{i+1}:a]" for i in range(inputs_count))
-                    filter_spec = f"{filter_inputs}amix=inputs={inputs_count}:dropout_transition=0[aout]"
-                    cmd.extend(
-                        [
-                            "-filter_complex",
-                            filter_spec,
-                            "-map",
-                            "0:v:0",
-                            "-map",
-                            "[aout]",
-                            "-c:v",
-                            "copy",
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            "192k",
-                            "-ar",
-                            "48000",
-                            "-ac",
-                            "2",
-                            "-shortest",
-                            "-movflags",
-                            "+faststart",
-                            str(temp_out_path),
-                        ]
-                    )
-
-                rc, lp, _ = run_ffmpeg(cmd, log_path=log_path)
-                if rc != 0 or not temp_out_path.is_file():
-                    logger.warning(
-                        f"ffmpeg audio mux failed (code={rc}) (log={lp})"
-                    )
-                    return None
-                try:
-                    # Overwrite the original file so callers keep the same filename.
-                    temp_out_path.replace(base)
-                except Exception as move_err:
-                    logger.warning(
-                        f"ffmpeg audio mux succeeded but failed to move into place: {move_err}"
-                    )
-                    return None
-                return str(base)
-            except Exception as e:
-                logger.warning(f"Failed to mux audio into video: {e}")
-                return None
-
-        def _mux_audio_from_source_video(
-            video_path: str, source_video_path: str
-        ) -> Optional[str]:
-            """
-            Best-effort helper to mux the first audio track from `source_video_path`
-            into `video_path` using ffmpeg.
-            """
-            import os
-            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
-
-            try:
-                if not (
-                    isinstance(video_path, str)
-                    and isinstance(source_video_path, str)
-                    and os.path.isfile(video_path)
-                    and os.path.isfile(source_video_path)
-                ):
-                    return None
-
-                base = Path(video_path)
-                # Mux into a temporary file, then overwrite the original.
-                temp_out_path = base.with_name(f"{base.stem}_with_audio{base.suffix}")
-                log_path = job_dir / f"{base.stem}_mux_audio_from_source.log"
-
-                # Video from generated output (0), audio from source input (1).
-                # Encode audio to AAC for MP4 compatibility; copy video stream.
-                cmd: List[str] = [
-                    get_ffmpeg_path(),
-                    "-y",
-                    "-i",
-                    video_path,
-                    "-i",
-                    source_video_path,
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "1:a:0?",
-                    "-c:v",
-                    "copy",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "192k",
-                    "-ar",
-                    "48000",
-                    "-ac",
-                    "2",
-                    "-shortest",
-                    "-movflags",
-                    "+faststart",
-                    str(temp_out_path),
-                ]
-                rc, lp, _ = run_ffmpeg(cmd, log_path=log_path)
-                if rc != 0 or not temp_out_path.is_file():
-                    return None
-                try:
-                    temp_out_path.replace(base)
-                except Exception as move_err:
-                    logger.warning(
-                        f"ffmpeg audio mux succeeded but failed to move into place: {move_err}"
-                    )
-                    return None
-                return str(base)
-            except Exception as e:
-                logger.warning(f"Failed to mux audio from source video: {e}")
-                return None
-
         def save_output(
             output_obj,
             filename_prefix: str = "result",
             final: bool = False,
             audio_inputs: Optional[List[str]] = None,
         ):
-            result_path: Optional[str] = None
-            media_type: Optional[str] = None
-            try:
-                # String path passthrough
-                if isinstance(output_obj, str):
-                    result_path = output_obj
-                    media_type = "path"
-                # Single image
-                elif isinstance(output_obj, Image.Image):
-                    ext = f"png" if final else "jpg"
-                    result_path = str(job_dir / f"{filename_prefix}.{ext}")
-                    output_obj.save(result_path)
-                    media_type = "image"
-                # Sequence of frames
-                elif isinstance(output_obj, list) and len(output_obj) > 0:
-                    fps = fps_for_video or 16
-                    result_path = str(job_dir / f"{filename_prefix}.mp4")
-
-                    from diffusers.utils import export_to_video
-
-                    export_to_video(
-                        output_obj,
-                        result_path,
-                        fps=int(fps),
-                        quality=8.0 if final else 3.0,
-                    )
-                    media_type = "video"
-
-                    # Post-pass: generate a seek/editor-friendly MP4 before we mux audio.
-                    # Best-effort only (keeps original file if ffmpeg fails).
-                    if final and result_path:
-                        try:
-                            try:
-                                engine_gop = int(
-                                    os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1")
-                                    or "1"
-                                )
-                            except Exception:
-                                engine_gop = 1
-                            _optimize_mp4_for_editor_in_place(
-                                result_path, fps=int(fps), gop_frames=engine_gop
-                            )
-                        except Exception:
-                            pass
-
-                    # If this is the final video and we have audio inputs to save, try to mux them in.
-                    if final and media_type == "video" and result_path and audio_inputs:
-                        try:
-                            muxed = _mux_audio_into_video(result_path, audio_inputs)
-                            if muxed:
-                                result_path = muxed
-                        except Exception as mux_err:
-                            logger.warning(
-                                "Audio muxing failed; returning video-only output. "
-                                f"Error: {mux_err}"
-                            )
-
-                    # Upscalers (SeedVR/FlashVSR): preserve input video audio if present.
-                    if (
-                        final
-                        and media_type == "video"
-                        and result_path
-                        and is_upscaler_engine
-                        and input_video_for_audio_mux
-                    ):
-                        try:
-                            muxed = _mux_audio_from_source_video(
-                                result_path, input_video_for_audio_mux
-                            )
-                            if muxed:
-                                result_path = muxed
-                        except Exception as mux_err:
-                            logger.warning(
-                                "Upscaler input audio muxing failed; returning video-only output. "
-                                f"Error: {mux_err}"
-                            )
-                else:
-                    # Fallback best-effort serialization
-                    try:
-                        arr = np.asarray(output_obj)  # type: ignore[arg-type]
-                        result_path = str(job_dir / f"{filename_prefix}.png")
-                        Image.fromarray(arr).save(result_path)
-                        media_type = "image"
-                    except Exception as e:
-                        logger.error(f"Failed to save output: {e}")
-                        result_path = str(job_dir / f"{filename_prefix}.txt")
-                        with open(result_path, "w") as f:
-                            f.write(str(type(output_obj)))
-                        media_type = "unknown"
-            except Exception as save_err:
-                traceback.print_exc()
-                logger.error(f"Failed to save output: {save_err}")
-                raise
-            return result_path, media_type
+            return save_engine_output(
+                output_obj=output_obj,
+                job_dir=job_dir,
+                filename_prefix=filename_prefix,
+                final=final,
+                fps=int(fps_for_video or 16),
+                audio_inputs=audio_inputs,
+                is_upscaler_engine=is_upscaler_engine,
+                input_video_for_audio_mux=input_video_for_audio_mux,
+                logger=logger,
+            )
 
         total_steps = max(1, len(preprocessor_jobs) + 1)
 
@@ -3320,14 +2861,15 @@ def _run_engine_from_manifest_impl(
                 try:
                     # Construct preview URL for frontend access
                     engine_results_base = Path(DEFAULT_CACHE_PATH) / "engine_results"
-                    try:
-                        relative_path = Path(result_path).relative_to(
-                            engine_results_base
+                    preview_url = (
+                        make_preview_url(
+                            result_path=str(result_path),
+                            results_base=engine_results_base,
+                            route_prefix="/files/engine_results",
                         )
-                        preview_url = f"/files/engine_results/{relative_path}"
-                    except (ValueError, AttributeError):
-                        # Fallback if path conversion fails
-                        preview_url = None
+                        if isinstance(result_path, str)
+                        else None
+                    )
 
                     # Send an update that does not overwrite progress (progress=None)
                     logger.info(
@@ -3378,12 +2920,15 @@ def _run_engine_from_manifest_impl(
             try:
                 # Construct preview URL for frontend access
                 engine_results_base = Path(DEFAULT_CACHE_PATH) / "engine_results"
-                try:
-                    relative_path = Path(result_path).relative_to(engine_results_base)
-                    preview_url = f"/files/engine_results/{relative_path}"
-                except (ValueError, AttributeError):
-                    # Fallback if path conversion fails
-                    preview_url = None
+                preview_url = (
+                    make_preview_url(
+                        result_path=str(result_path),
+                        results_base=engine_results_base,
+                        route_prefix="/files/engine_results",
+                    )
+                    if isinstance(result_path, str)
+                    else None
+                )
 
                 logger.info(
                     f"Sending preview websocket update at step {idx} with result path {result_path} and media type {media_type}"
@@ -3469,6 +3014,25 @@ def _run_engine_from_manifest_impl(
                 output,
                 is_result=True,
             )
+        # HunyuanVideo-Foley returns an audio waveform; return the *original input video*
+        # with the generated audio muxed in (best-effort) using ffmpeg.
+        elif isinstance(model_type, str) and model_type.lower() == "foley":
+            video_val = (prepared_inputs or {}).get("video")
+            input_video_path, _ = _coerce_media_input(video_val)
+            if not input_video_path:
+                raise RuntimeError(
+                    "Foley model requires an input `video` path to mux audio into."
+                )
+
+            output_video_path = str(job_dir / "result.mp4")
+            result_path = mux_foley_audio_onto_input_video(
+                input_video_path=input_video_path,
+                audio_output=output,
+                job_dir=job_dir,
+                output_video_path=output_video_path,
+                logger=logger,
+            )
+            media_type = "video"
         else:
             result_path, media_type = render_func(
                 output[0],
@@ -3643,90 +3207,27 @@ def run_frame_interpolation(
             progress_callback=frame_progress,
         )
 
-        # Save output video (video-only first), then mux original audio if present
-        import subprocess
-        import shutil
-
         job_dir = (
             Path(DEFAULT_CACHE_PATH)
             / "postprocessor_results"
             / _safe_fs_component(job_id, fallback="job")
         )
-        job_dir.mkdir(parents=True, exist_ok=True)
-
-        video_only_path = str(job_dir / "result_video.mp4")
-        final_out_path = str(job_dir / "result.mp4")
-
         fps_to_write = int(max(1, round(target_fps)))
-        from diffusers.utils import export_to_video
-
-        export_to_video(frames, video_only_path, fps=fps_to_write, quality=8.0)
-
-        # Post-pass: generate a seek/editor-friendly MP4 before we mux original audio.
-        try:
-            try:
-                engine_gop = int(
-                    os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1") or "1"
-                )
-            except Exception:
-                engine_gop = 1
-            _optimize_mp4_for_editor_in_place(
-                video_only_path, fps=fps_to_write, gop_frames=engine_gop
-            )
-        except Exception:
-            pass
-
-        # Try to mux audio from input_path into the final output without changing rate/tempo
-        # If no audio is present, fall back to the video-only file
-        try:
-            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
-
-            # Use ffmpeg with stream copy to preserve original audio rate/tempo
-            # -map 0:v:0 takes video from the first input (our generated video)
-            # -map 1:a:0? takes the first audio track from the second input if it exists
-            ffmpeg_cmd = [
-                get_ffmpeg_path(),
-                "-y",
-                "-i",
-                video_only_path,
-                "-i",
-                input_path,
-                "-map",
-                "0:v:0",
-                "-map",
-                "1:a:0?",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "copy",
-                "-shortest",
-                "-movflags",
-                "+faststart",
-                final_out_path,
-            ]
-            log_path = job_dir / "ffmpeg_mux_audio.log"
-            rc, lp, _ = run_ffmpeg(ffmpeg_cmd, log_path=log_path)
-            if rc != 0:
-                # If muxing failed (e.g., no audio stream), just use the video-only output
-                logger.warning(f"ffmpeg mux audio failed (code={rc}) (log={lp})")
-                shutil.move(video_only_path, final_out_path)
-        except Exception as e:
-            logger.error(f"Failed to mux audio: {e}")
-            # On any unexpected error, fall back to video-only output
-            try:
-                shutil.move(video_only_path, final_out_path)
-            except Exception:
-                # If move also fails, keep path consistent
-                final_out_path = video_only_path
+        final_out_path, _video_only_path = save_frames_with_source_audio(
+            frames=frames,
+            input_video_path=input_path,
+            output_dir=job_dir,
+            fps=fps_to_write,
+            logger=logger,
+        )
 
         # Construct preview URL for frontend access
         postprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "postprocessor_results"
-        try:
-            relative_path = Path(final_out_path).relative_to(postprocessor_results_base)
-            preview_url = f"/files/postprocessor_results/{relative_path}"
-        except (ValueError, AttributeError):
-            # Fallback if path conversion fails
-            preview_url = None
+        preview_url = make_preview_url(
+            result_path=str(final_out_path),
+            results_base=postprocessor_results_base,
+            route_prefix="/files/postprocessor_results",
+        )
 
         send_update(
             1.0,

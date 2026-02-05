@@ -209,6 +209,7 @@ class LoaderMixin(DownloadMixin):
             converter = get_text_encoder_converter(model_base)
         else:
             converter = NoOpConverter()
+            
 
         if os.path.isdir(model_path) and not config_path:
             # look for a config.json file
@@ -291,7 +292,7 @@ class LoaderMixin(DownloadMixin):
         # Track whether we've already patched this model for FP-scaled weights
 
         # If we are materializing state_dict tensors directly onto CUDA, proactively
-        # evict cold GPU modules via the global weight manager so we don't OOM mid-load.
+        # offload/evict other GPU-resident components so we don't OOM mid-load.
         load_device_is_cuda = False
         if engine_type == "torch":
             try:
@@ -302,89 +303,77 @@ class LoaderMixin(DownloadMixin):
             except Exception:
                 load_device_is_cuda = False
 
-        wm = None
-        target_free = None
-        vram_mult = None
-        vram_extra = None
+        # Memory-manager-based preflight (only evicts when necessary).
+        _mm = None
+        _vram_mult = None
+        _vram_extra = None
         if engine_type == "torch" and load_device_is_cuda:
             try:
-                if hasattr(torch, "cuda") and torch.cuda.is_available():
-                    from src.memory_management import get_global_weight_manager
+                from src.memory_management import get_memory_manager
 
-                    wm = get_global_weight_manager()
+                _mm = getattr(self, "_component_memory_manager", None) or get_memory_manager()
 
-                    def _env_float(name: str, default: float) -> float:
-                        raw = os.environ.get(name)
-                        if raw is None or str(raw).strip() == "":
-                            return default
-                        try:
-                            return float(str(raw).strip())
-                        except Exception:
-                            return default
-
-                    def _env_int(name: str, default: int) -> int:
-                        raw = os.environ.get(name)
-                        if raw is None or str(raw).strip() == "":
-                            return default
-                        try:
-                            return int(float(str(raw).strip()))
-                        except Exception:
-                            return default
-
-                    target_free = _env_float(
-                        "APEX_LOAD_MODEL_TARGET_FREE_FRACTION", 0.10
-                    )
-                    vram_mult = _env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20)
-                    vram_extra = _env_int(
-                        "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
-                    )
-
+                def _env_float(name: str, default: float) -> float:
+                    raw = os.environ.get(name)
+                    if raw is None or str(raw).strip() == "":
+                        return default
                     try:
-                        wm.refresh_all_locations()
+                        return float(str(raw).strip())
                     except Exception:
-                        pass
+                        return default
 
+                def _env_int(name: str, default: int) -> int:
+                    raw = os.environ.get(name)
+                    if raw is None or str(raw).strip() == "":
+                        return default
                     try:
-                        total_file_bytes = 0
-                        for fp in files_to_load:
-                            try:
-                                total_file_bytes += int(os.path.getsize(str(fp)))
-                            except Exception:
-                                continue
-                        if total_file_bytes > 0:
-                            req = max(
-                                0,
-                                int(total_file_bytes * float(vram_mult))
-                                + int(vram_extra),
-                            )
-                            wm.evict_for_vram(
-                                reason="load_model_pre",
-                                active=None,
-                                target_free_fraction=float(target_free),
-                                request_bytes=req,
-                            )
+                        return int(float(str(raw).strip()))
+                    except Exception:
+                        return default
+
+                _vram_mult = _env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20)
+                _vram_extra = _env_int(
+                    "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
+                )
+
+                # Initial preflight for the whole model (sum of all files).
+                total_file_bytes = 0
+                for fp in files_to_load:
+                    try:
+                        total_file_bytes += int(os.path.getsize(str(fp)))
+                    except Exception:
+                        continue
+                if total_file_bytes > 0 and hasattr(_mm, "preflight_component_load"):
+                    req_total = max(
+                        0, int(total_file_bytes * float(_vram_mult)) + int(_vram_extra)
+                    )
+                    try:
+                        _mm.preflight_component_load(
+                            engine=self, component=component, reserve_bytes=req_total
+                        )
                     except Exception:
                         pass
             except Exception:
-                wm = None
+                _mm = None
 
         patched_for_fpscaled = False
         gguf_kwargs = component.get("gguf_kwargs", {})
         for file_path in tqdm(
             files_to_load, desc="Loading weights", total=len(files_to_load)
         ):
-            if wm is not None and load_device_is_cuda:
+            if (
+                _mm is not None
+                and load_device_is_cuda
+                and _vram_mult is not None
+                and _vram_extra is not None
+                and hasattr(_mm, "preflight_component_load")
+            ):
                 try:
                     fp_size = int(os.path.getsize(str(file_path)))
-                    if fp_size > 0 and vram_mult is not None and vram_extra is not None:
-                        req = max(0, int(fp_size * float(vram_mult)) + int(vram_extra))
-                        wm.evict_for_vram(
-                            reason="load_model_chunk",
-                            active=None,
-                            target_free_fraction=(
-                                float(target_free) if target_free is not None else None
-                            ),
-                            request_bytes=req,
+                    if fp_size > 0:
+                        req = max(0, int(fp_size * float(_vram_mult)) + int(_vram_extra))
+                        _mm.preflight_component_load(
+                            engine=self, component=component, reserve_bytes=req
                         )
                 except Exception:
                     pass
@@ -401,7 +390,7 @@ class LoaderMixin(DownloadMixin):
 
                 logger.info(f"Loading GGUF model from {file_path}")
                 from src.quantize.ggml_layer import (
-                    patch_model_from_state_dict as patch_model_ggml_from_state_dict,
+                    patch_model_from_state_dict as patch_model_ggml_from_state_dict
                 )
                 from src.quantize.load import load_gguf
 
@@ -413,6 +402,7 @@ class LoaderMixin(DownloadMixin):
                     **gguf_kwargs,
                 )
                 converter.convert(state_dict, model_keys)
+ 
                 # Load GGMLTensors without replacing nn.Parameters by copying data
                 patch_model_ggml_from_state_dict(
                     model,
@@ -459,7 +449,6 @@ class LoaderMixin(DownloadMixin):
                 state_dict = torch.load(
                     file_path, map_location=load_device, weights_only=True, mmap=True
                 )
-
             # remap keys if key_map is provided replace part of existing key with new key
             if key_map:
                 new_state_dict = {}
@@ -472,6 +461,7 @@ class LoaderMixin(DownloadMixin):
                 state_dict = new_state_dict
 
             converter.convert(state_dict, model_keys)
+
             if load_dtype and not is_safetensors:
                 for k, v in state_dict.items():
                     state_dict[k] = v.to(load_dtype)
@@ -525,7 +515,6 @@ class LoaderMixin(DownloadMixin):
                 )
                 patched_for_fpscaled = True
             if hasattr(model, "load_state_dict"):
-
                 model.load_state_dict(
                     state_dict, strict=False, assign=True
                 )  # must be false as we are iteratively loading the state dict

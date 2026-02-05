@@ -1,0 +1,1 @@
+python3 scripts/models/publish_transformer_weights.py --manifest-root manifest/v0.1.2 --only-manifest seedvr

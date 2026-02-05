@@ -1,0 +1,343 @@
+api_version: apex/v1
+kind: Model
+type: image
+metadata:
+  id: qwenimage-edit-2509
+  model: qwenimage
+  name: QwenImage Edit 2509
+  version: 0.1.2
+  description: QwenImage Edit 2509 is a 20B parameter model for image editing with
+    multiple input images.
+  tags:
+  - qwenimage
+  - edit
+  - multi-image
+  - '2509'
+  author: Qwen
+  license: Apache-2.0
+  demo_path: models/qwenimage-edit-2509.png
+  categories:
+  - image-edit
+spec:
+  engine: qwenimage
+  model_type: edit_plus
+  engine_type: torch
+  denoise_type: base
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: FlowMatchEulerDiscreteScheduler
+    scheduler_options:
+    - name: FlowMatchEulerDiscreteScheduler
+      label: FlowMatch Euler Discrete Scheduler
+      description: The FlowMatch Euler Discrete Scheduler is a scheduler for the QwenImage
+        Edit model.
+      base: diffusers.FlowMatchEulerDiscreteScheduler
+      config_path: Qwen/Qwen-Image-Edit-2509/scheduler/scheduler_config.json
+  - type: vae
+    label: QwenImage VAE
+    base: qwenimage
+    model_path:
+    - path: Qwen/Qwen-Image/vae
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+      file_size: 253807696
+  - type: text_encoder
+    label: Qwen2.5 VL Text Encoder
+    base: Qwen2_5_VLForConditionalGeneration
+    config_path: Qwen/Qwen-Image/text_encoder/config.json
+    gguf_kwargs:
+      key_map: qwen_vl
+    model_path:
+    - path: Qwen/Qwen-Image/text_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
+      file_size: 16584475660
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+      file_size: 8098524096
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+      file_size: 6254197696
+    tokenizer_class: Qwen2Tokenizer
+    tokenizer_name: Qwen/Qwen-Image
+    tokenizer_kwargs:
+      subfolder: tokenizer
+  - type: extra_model_path
+    label: Qwen2.5 VL Vision Transformer
+    component: text_encoder
+    model_path:
+    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-BF16.gguf
+      variant: GGUF_BF16
+      precision: fp16
+      type: gguf
+      file_size: 1354163040
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+  - type: transformer
+    label: QwenImage Transformer
+    base: qwenimage.base
+    config_path: Qwen/Qwen-Image-Edit-2509/transformer/config.json
+    model_path:
+    - path: Qwen/Qwen-Image-Edit-2509/transformer
+      variant: default
+      precision: fp16
+      type: safetensors
+      resource_requirements:
+        min_vram_gb: 35
+        recommended_vram_gb: 47
+      file_size: 40861227514
+    - path: QuantStack/Qwen-Image-Edit-2509-GGUF/Qwen-Image-Edit-2509-Q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 22
+        recommended_vram_gb: 30
+      file_size: 21761817120
+    - path: QuantStack/Qwen-Image-Edit-2509-GGUF/Qwen-Image-Edit-2509-Q6_K.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+      file_size: 16824990240
+    - path: QuantStack/Qwen-Image-Edit-2509-GGUF/Qwen-Image-Edit-2509-Q4_K_S.gguf
+      variant: GGUF_Q4_K_S
+      precision: q4_k_s
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+      file_size: 12204309024
+    - path: QuantStack/Qwen-Image-Edit-2509-GGUF/Qwen-Image-Edit-2509-Q2_K.gguf
+      variant: GGUF_Q2_K
+      precision: q2_k
+      type: gguf
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+      file_size: 7147452960
+  - type: helper
+    name: image.processor
+    label: Image Processor
+    module: transformers.models.qwen2_vl.processing_qwen2_vl
+    base: Qwen2VLProcessor
+    model_path:
+    - path: Qwen/Qwen-Image-Edit-2509/processor
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 15879236
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+  defaults:
+    run:
+      num_inference_steps: 40
+      return_latents: false
+      guidance_scale: 1.0
+      text_encoder_kwargs:
+        add_special_tokens: false
+        clean_text: false
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: Image
+      label: Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image_list
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - true_cfg_scale
+        - - seed
+    inputs:
+    - id: image_list
+      label: Image List
+      description: Select the images to use for the generation.
+      panel: Image
+      type: image_list
+      required: true
+      min: 1
+    - id: prompt
+      label: Prompt
+      description: The prompt to edit the image.
+      placeholder: A beautiful woman with long brown hair and blue eyes.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what you want to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: ' '
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 768
+      options:
+      - name: HD
+        value: 768
+      - name: Ultra HD
+        value: 1024
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 40
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: true_cfg_scale
+      label: True CFG Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+  loras:
+  - scale: 1.0
+    name: qwen_image_lightning
+    label: Qwen Image Lightning 8 Steps
+    verified: true
+    source: lightx2v/Qwen-Image-Lightning/Qwen-Image-Edit-2509/Qwen-Image-Edit-2509-Lightning-8steps-V1.0-bf16.safetensors

@@ -82,6 +82,8 @@ class PTLFlowDetector(ToMixin, BasePreprocessor):
 
                 class _ProgressTqdm(_tqdm_mod.tqdm):
                     def __init__(self, *args, **kwargs):
+                        # HF Hub passes `name=` to group progress bars; tqdm doesn't accept it.
+                        kwargs.pop("name", None)
                         super().__init__(*args, **kwargs)
                         # Use model and checkpoint as the label if desc isn't provided by hub
                         self._filename = (
