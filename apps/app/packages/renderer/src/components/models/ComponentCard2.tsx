@@ -975,6 +975,7 @@ const DownloadProgressSection: React.FC<{
   );
   if (!files.length) return null;
 
+
   return (
     <div className="w-full mt-3">
       <div className="flex flex-col gap-y-2">
@@ -983,15 +984,16 @@ const DownloadProgressSection: React.FC<{
             <div className="flex items-center justify-between gap-x-2 w-full">
               <div className="flex-1 min-w-0">
                 <div
-                  style={{
-                    maxWidth: `${width}px`,
-                  }}
+                  // `width` can be 0 on first render (ref not mounted yet). If we set
+                  // `maxWidth: 0px`, the filename becomes ultra-compressed until a rerender.
+                  // Only apply maxWidth once we have a real measurement.
+                  style={width > 0 ? { maxWidth: width } : undefined}
                   className="text-[10px] text-brand-light/80 font-mono break-all"
                 >
                   {f.filename}
                 </div>
               </div>
-                            <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
+              <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
                 {(() => {
                   const pct = f.totalBytes
                     ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
