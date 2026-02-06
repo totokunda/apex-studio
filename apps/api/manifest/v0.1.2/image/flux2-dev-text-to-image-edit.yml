@@ -52,7 +52,7 @@ spec:
     base: flux2
     config_path: totoku/apex-models/FLUX.2-dev/vae/config.json
     model_path:
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/vae/vae-bf16.safetensors
+    - path: totoku/apex-models/FLUX.2-dev/vae/vae-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
@@ -64,19 +64,19 @@ spec:
       key_map: mistral
     offloading_module: language_model
     model_path:
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-bf16.safetensors
+    - path: totoku/apex-models/FLUX.2-dev/text_encoder/text_encoder-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/FLUX.2-dev/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-mmproj-BF16-q8_0.gguf
+    - path: totoku/apex-models/FLUX.2-dev/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-mmproj-BF16-q4_k_m.gguf
+    - path: totoku/apex-models/FLUX.2-dev/text_encoder/text_encoder-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
@@ -90,23 +90,23 @@ spec:
     base: flux2.base
     config_path: totoku/apex-models/FLUX.2-dev/transformer/config.json
     model_path:
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-bf16.safetensors
+    - path: totoku/apex-models/FLUX.2-dev/transformer/transformer-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/FLUX.2-dev/transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-q8_0.gguf
+    - path: totoku/apex-models/FLUX.2-dev/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-q6_k.gguf
+    - path: totoku/apex-models/FLUX.2-dev/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/transformer/transformer-q4_k_m.gguf
+    - path: totoku/apex-models/FLUX.2-dev/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf

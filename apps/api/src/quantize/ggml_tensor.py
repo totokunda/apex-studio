@@ -70,8 +70,30 @@ class GGMLTensor(torch.Tensor):
         return getattr(self, "dequant_dtype", None) or super().dtype
 
     def to(self, *args, **kwargs):
+        """
+        Move/cast while preserving GGML metadata.
+
+        Important safety note:
+        - For *quantized* GGML tensors, we must never accidentally cast the packed
+          byte storage (e.g. uint8/int8) to the logical `dequant_dtype`.
+        - Some callers do `tensor.to(device)` (no dtype). In those cases we
+          explicitly preserve the *physical* dtype (storage dtype) to prevent
+          unintended casts.
+        """
+        import torch
+
+        # Detect whether the caller explicitly requested a dtype.
+        dtype_requested = kwargs.get("dtype", None) is not None or any(
+            isinstance(a, torch.dtype) for a in args
+        )
+
+        # If dtype is not requested, force-preserve physical dtype to avoid casting
+        # packed quantized storage based on our overridden logical `.dtype`.
+        if not dtype_requested:
+            kwargs = dict(kwargs)
+            kwargs["dtype"] = self.base_dtype
+
         base = super().to(*args, **kwargs)
-        # Keep it as GGMLTensor to preserve metadata
         return self._wrap_like(base)
 
     def cpu(self):

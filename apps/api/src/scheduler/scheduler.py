@@ -8,7 +8,6 @@ from diffusers.configuration_utils import ConfigMixin
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 import math
 
-
 class SchedulerInterface(SchedulerMixin, ConfigMixin):
     """
     Base class for diffusion noise schedule.
@@ -25,6 +24,7 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
             - timestep: the timestep with shape [B*T]
         Output: the corrupted latent with shape [B*T, C, H, W]
         """
+        
         if timestep.ndim == 2:
             timestep = timestep.flatten(0, 1)
         self.sigmas = self.sigmas.to(noise.device)
@@ -32,6 +32,7 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
         timestep_id = torch.argmin(
             (self.timesteps.unsqueeze(0) - timestep.unsqueeze(1)).abs(), dim=1
         )
+        
         sigma = self.sigmas[timestep_id].reshape(-1, 1, 1, 1)
         sample = (1 - sigma) * original_samples + sigma * noise
         return sample.type_as(noise)
@@ -40,6 +41,7 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
         self, x0: torch.Tensor, xt: torch.Tensor, timestep: torch.Tensor
     ) -> torch.Tensor:
         """
+        
         Convert the diffusion network's x0 prediction to noise predidction.
         x0: the predicted clean data with shape [B, C, H, W]
         xt: the input noisy data with shape [B, C, H, W]
@@ -78,6 +80,7 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
         tensor_to_double = lambda x: (
             x.double() if supports_double(x.device) else x.to(torch.float32)
         )
+        
         noise, xt, alphas_cumprod = map(
             lambda x: tensor_to_double(x.to(noise.device)),
             [noise, xt, self.alphas_cumprod],

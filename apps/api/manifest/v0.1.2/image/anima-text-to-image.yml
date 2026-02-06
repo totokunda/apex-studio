@@ -11,7 +11,7 @@ metadata:
   - anima
   - t2i
   - anime
-  author: Circlestone Labs
+  author: Circlestone Labs 
   license: Apache-2.0
   demo_path: models/anima-text-to-image.jpg
   categories:

@@ -65,195 +65,61 @@ spec:
   - type: vae
     label: QwenImage VAE
     base: qwenimage
+    config_path: totoku/apex-models/Qwen-Image/vae/config.json
     model_path:
-    - path: Qwen/Qwen-Image/vae
+    - path: totoku/apex-models/Qwen-Image/vae/vae-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-      file_size: 253807696
+      
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration
-    config_path: Qwen/Qwen-Image/text_encoder/config.json
+    config_path: totoku/apex-models/Qwen-Image/text_encoder/config.json
     gguf_kwargs:
       key_map: qwen_vl
     model_path:
-    - path: Qwen/Qwen-Image/text_encoder
+    - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      resource_requirements:
-        min_vram_gb: 19
-        recommended_vram_gb: 26
-      file_size: 16584475660
-    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q8_0.gguf
+    - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-      file_size: 8098524096
-    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q6_K.gguf
-      variant: GGUF_Q6_K
-      precision: q6_k
-      type: gguf
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-      file_size: 6254197696
     tokenizer_class: Qwen2Tokenizer
-    tokenizer_name: Qwen/Qwen-Image
+    tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
-      subfolder: tokenizer
-  - type: extra_model_path
-    label: Qwen2.5 VL Vision Transformer
-    component: text_encoder
-    model_path:
-    - path: unsloth/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-BF16.gguf
-      variant: GGUF_BF16
-      precision: fp16
-      type: gguf
-      file_size: 1354163040
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
+      subfolder: Qwen-Image/tokenizer
   - type: transformer
     label: QwenImage Transformer
     base: qwenimage.base
-    config_path: Qwen/Qwen-Image-2512/transformer/config.json
+    config_path: totoku/apex-models/Qwen-Image-2512/transformer/config.json
     model_path:
-    - path: Qwen/Qwen-Image-2512/transformer
+    - path: totoku/apex-models/Qwen-Image-2512/transformer/transformer-bf16.safetensors
       variant: default
-      precision: fp16
-      type: safetensors
-      resource_requirements:
-        min_vram_gb: 35
-        recommended_vram_gb: 47
-      file_size: 40861227138
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-BF16.gguf
-      variant: GGUF_BF16
       precision: bf16
-      type: gguf
-      file_size: 40872114720
-      resource_requirements:
-        min_vram_gb: 35
-        recommended_vram_gb: 47
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-F16.gguf
-      variant: GGUF_F16
-      precision: f16
-      type: gguf
-      file_size: 40872114720
-      resource_requirements:
-        min_vram_gb: 25
-        recommended_vram_gb: 34
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q8_0.gguf
+      type: safetensors
+    - path: totoku/apex-models/Qwen-Image-2512/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Qwen-Image-2512/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 21761817120
-      resource_requirements:
-        min_vram_gb: 22
-        recommended_vram_gb: 30
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q6_K.gguf
+    - path: totoku/apex-models/Qwen-Image-2512/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 16824990240
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 15000074784
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 14298184224
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q5_0.gguf
-      variant: GGUF_Q5_0
-      precision: q5_0
-      type: gguf
-      file_size: 14400813600
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q5_1.gguf
-      variant: GGUF_Q5_1
-      precision: q5_1
-      type: gguf
-      file_size: 15391717920
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q4_K_M.gguf
+    - path: totoku/apex-models/Qwen-Image-2512/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 13127088672
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 12268010016
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q4_0.gguf
-      variant: GGUF_Q4_0
-      precision: q4_0
-      type: gguf
-      file_size: 11852773920
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q4_1.gguf
-      variant: GGUF_Q4_1
-      precision: q4_1
-      type: gguf
-      file_size: 12843678240
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 9744742944
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q3_K_S.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 9042852384
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: unsloth/Qwen-Image-2512-GGUF/qwen-image-2512-Q2_K.gguf
-      variant: GGUF_Q2_K
-      precision: q2_k
-      type: gguf
-      file_size: 7217936928
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
   defaults:
     run:
       num_inference_steps: 4
