@@ -642,7 +642,6 @@ class BaseConverter:
     def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
         self._sort_rename_dict()
 
-
         if self._already_converted(state_dict, model_keys):
             return state_dict
         # Apply pre-special keys map

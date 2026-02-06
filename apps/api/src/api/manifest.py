@@ -193,6 +193,20 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
         content["spec"] = {}
     content["spec"]["attention_types_detail"] = attention_options
 
+    # Expand any external scheduler catalogs into scheduler_options so UI clients
+    # can reference schedulers by name without embedding large lists in each model manifest.
+    try:
+        from src.utils.scheduler_manifest import expand_scheduler_manifests
+
+        content = expand_scheduler_manifests(
+            content, base_path=file_path, manifest_root=MANIFEST_BASE_PATH
+        )
+        # refresh pointers (content may have been rewritten)
+        spec = content.get("spec", {}) if isinstance(content, dict) else {}
+        metadata = content.get("metadata", {}) if isinstance(content, dict) else {}
+    except Exception:
+        pass
+
     # Enrich LoRA entries
     #
     # Important: keep the manifest YAML `spec.loras[*].source` as the user-provided

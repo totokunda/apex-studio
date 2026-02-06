@@ -43,27 +43,24 @@ spec:
   - type: scheduler
     name: transformer_scheduler
     label: Transformer Scheduler
-    default: transformer_scheduler_unipc
-    scheduler_options:
-    - name: transformer_scheduler_unipc
-      label: UniPC Multistep Scheduler
-      description: The UniPC Multistep Scheduler is used for Ovi 10B.
-      base: src.scheduler.unipc.UniPCMultistepScheduler
-      config:
-        shift: 1.0
-        num_train_timesteps: 1000
+    default: UniPCMultistepSchedulerBH2
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 5.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: scheduler
     name: audio_scheduler
     label: Audio Scheduler
     default: audio_scheduler_unipc
-    scheduler_options:
-    - name: audio_scheduler_unipc
-      label: UniPC Multistep Scheduler
-      description: The UniPC Multistep Scheduler is used for Ovi 10B.
-      base: src.scheduler.unipc.UniPCMultistepScheduler
-      config:
-        shift: 1.0
-        num_train_timesteps: 1000
+    default: UniPCMultistepSchedulerBH2
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 5.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     name: transformer_vae
     label: Wan VAE

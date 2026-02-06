@@ -22,13 +22,6 @@ spec:
   engine_type: torch
   default_duration_secs: 5.0
   fps: 24
-  loras:
-  - source: Comfy-Org/HunyuanVideo_1.5_repackaged/split_files/loras/hunyuanvideo1.5_t2v_480p_lightx2v_4step_lora_rank_32_bf16.safetensors
-    scale: 1.0
-    name: lightx2v_lora
-    label: Lightx2v LoRA
-    component: transformer
-    verified: true
   compute_requirements:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
@@ -46,20 +39,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchDiscreteScheduler720p
-    scheduler_options:
-    - name: FlowMatchDiscreteScheduler720p
-      label: FlowMatch Discrete Scheduler 720p
-      description: The FlowMatch Discrete Scheduler is a scheduler for the HunyuanVideo
-        1.5 model for 720p resolution.
-      base: diffusers.FlowMatchEulerDiscreteScheduler
-      config_path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v/scheduler/scheduler_config.json
-    - name: FlowMatchDiscreteScheduler480p
-      label: FlowMatch Discrete Scheduler 480p
-      description: The FlowMatch Discrete Scheduler is a scheduler for the HunyuanVideo
-        1.5 model for 480p resolution.
-      base: diffusers.FlowMatchEulerDiscreteScheduler
-      config_path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v/scheduler/scheduler_config.json
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 7.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: HunyuanImage VAE
     base: hunyuanvideo15

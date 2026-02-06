@@ -1,6 +1,6 @@
 from abc import abstractmethod, ABC
 import torch
-from src.scheduler.scheduler import SchedulerInterface
+from src.scheduler.scheduler import SchedulerInterface, _ensure_step_output_consistency
 from diffusers.configuration_utils import ConfigMixin
 from diffusers.configuration_utils import register_to_config
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
@@ -290,6 +290,7 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin, TimestepShifter):
         """
         return sample
 
+    @_ensure_step_output_consistency
     def step(
         self,
         model_output: torch.FloatTensor,

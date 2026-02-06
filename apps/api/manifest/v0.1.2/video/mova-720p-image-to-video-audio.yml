@@ -40,12 +40,12 @@ spec:
   - type: scheduler
     label: Scheduler
     default: FlowMatchPairScheduler
-    scheduler_options:
-    - name: FlowMatchPairScheduler
-      label: FlowMatch Pair Scheduler
-      description: The FlowMatch Pair Scheduler is used for MOVA Image to Video Audio.
-      base: src.scheduler.flow_match_pair.FlowMatchPairScheduler
-      config_path: OpenMOSS-Team/MOVA-720p/scheduler/scheduler_config.json
+    scheduler_manifest: schedulers/flow_match_pair.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 5.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: WAN VAE
     name: vae

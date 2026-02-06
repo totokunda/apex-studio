@@ -82,8 +82,13 @@ class GGMLTensor(torch.Tensor):
         """
         import torch
 
+        # PyTorch may call `tensor.to(device, dtype, ...)` with `dtype=None` as a
+        # *positional* argument. Passing that through produces an invalid signature.
+        if len(args) >= 2 and args[1] is None:
+            args = (args[0], self.base_dtype, *args[2:])
+
         # Detect whether the caller explicitly requested a dtype.
-        dtype_requested = kwargs.get("dtype", None) is not None or any(
+        dtype_requested = (kwargs.get("dtype", None) is not None) or any(
             isinstance(a, torch.dtype) for a in args
         )
 
@@ -91,7 +96,7 @@ class GGMLTensor(torch.Tensor):
         # packed quantized storage based on our overridden logical `.dtype`.
         if not dtype_requested:
             kwargs = dict(kwargs)
-            kwargs["dtype"] = self.base_dtype
+            kwargs.setdefault("dtype", self.base_dtype)
 
         base = super().to(*args, **kwargs)
         return self._wrap_like(base)

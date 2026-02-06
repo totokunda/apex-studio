@@ -57,16 +57,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: UniPCMultistepScheduler
-    scheduler_options:
-    - name: UniPCMultistepScheduler
-      label: UniPC Multistep Scheduler
-      description: The UniPC Multistep Scheduler is used for WAN 2.2 14B Speech to
-        Video.
-      base: src.scheduler.unipc.UniPCMultistepScheduler
-      config:
-        shift: 5.0
-        num_train_timesteps: 1000
+    default: UniPCMultistepSchedulerBH2
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 5.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: WAN VAE
     name: vae

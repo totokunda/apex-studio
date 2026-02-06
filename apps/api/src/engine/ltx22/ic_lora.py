@@ -4,10 +4,9 @@ import torch
 from src.helpers.ltx2.upsampler import upsample_video
 from src.types import InputImage, InputAudio, InputVideo
 from src.engine.ltx2.multimodal_guidance import MultiModalGuider, MultiModalGuiderParams
-from src.engine.ltx22.shared.diffusion_steps import EulerDiffusionStep
+from src.engine.ltx22.shared.diffusion_steps import SchedulerDiffusionStep, configure_scheduler_sigmas
 from src.engine.ltx22.shared.guiders import MultiModalGuider, MultiModalGuiderParams
 from src.engine.ltx22.shared.noisers import GaussianNoiser
-from src.engine.ltx22.shared.schedulers import LTX2Scheduler
 from src.engine.ltx22.shared.types import LatentState, VideoPixelShape
 from src.engine.ltx22.shared.protocols import DiffusionStepProtocol
 from src.engine.ltx22.shared.helpers import image_conditionings_by_replacing_latent, denoise_audio_video, euler_denoising_loop, multi_modal_guider_denoising_func, simple_denoising_func
@@ -115,7 +114,9 @@ class LTX2ICLoRAEngine(LTX2Shared):
             generator = torch.Generator(device=self.device)
         
         noiser = GaussianNoiser(generator=generator)
-        stepper = EulerDiffusionStep()
+        
+        if not getattr(self, "scheduler", None):
+            self.load_component_by_type("scheduler")
         
         if images is None:
             images = []
@@ -147,6 +148,8 @@ class LTX2ICLoRAEngine(LTX2Shared):
 
 
         stage_1_sigmas = torch.Tensor(DISTILLED_SIGMA_VALUES).to(self.device)
+        configure_scheduler_sigmas(self.scheduler, stage_1_sigmas)
+        stepper = SchedulerDiffusionStep(self.scheduler)
         
         dtype = self.component_dtypes["transformer"]
         pipeline_components = PipelineComponents(
@@ -238,6 +241,8 @@ class LTX2ICLoRAEngine(LTX2Shared):
             
         
         distilled_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
+        configure_scheduler_sigmas(self.scheduler, distilled_sigmas)
+        stepper = SchedulerDiffusionStep(self.scheduler)
         
         def second_stage_denoising_loop(
             sigmas: torch.Tensor, video_state: LatentState, audio_state: LatentState, stepper: DiffusionStepProtocol

@@ -27,15 +27,9 @@ spec:
   - audio
   loras:
   - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors
-    scale: 0.0
+    scale: 1.0
     name: lightx2v_t2v_lora
     label: Lightx2v T2V LoRA
-    component: transformer
-    verified: true
-  - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_T2V_14B_FusionX_LoRA.safetensors
-    scale: 1.0
-    name: fusionx_t2v_lora
-    label: FusionX T2V LoRA
     component: transformer
     verified: true
   compute_requirements:
@@ -54,14 +48,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: UniPCMultistepScheduler
-    scheduler_options:
-    - name: UniPCMultistepScheduler
-      label: UniPC Multistep Scheduler
-      description: The UniPC Multistep Scheduler is used for WAN 2.2 14B Speech to
-        Video.
-      base: diffusers.UniPCMultistepScheduler
-      config_path: tolgacangoz/Wan2.2-S2V-14B-Diffusers/scheduler/scheduler_config.json
+    default: UniPCMultistepSchedulerBH2
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: WAN VAE
     name: vae

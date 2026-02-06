@@ -39,14 +39,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchEulerDiscreteScheduler
-    scheduler_options:
-    - name: FlowMatchEulerDiscreteScheduler
-      label: FlowMatch Euler Discrete Scheduler
-      description: The FlowMatch Euler Discrete Scheduler is a scheduler for the ZImage
-        Turbo model.
-      base: diffusers.FlowMatchEulerDiscreteScheduler
-      config_path: Tongyi-MAI/Z-Image-Turbo/scheduler/scheduler_config.json
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: ZImage Turbo VAE
     base: auto

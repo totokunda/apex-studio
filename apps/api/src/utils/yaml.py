@@ -2,6 +2,8 @@ import yaml
 from pathlib import Path
 import pprint
 
+from src.utils.scheduler_manifest import expand_scheduler_manifests
+
 
 # 1) Create a Loader subclass that we can attach extra state to
 class LoaderWithInclude(yaml.FullLoader):
@@ -125,4 +127,14 @@ def load_yaml(file_path: str | Path):
             break
     LoaderWithInclude.manifest_root = manifest_root or file_path.parent
     # --- PASS 2: real load with !include expansion ---
-    return yaml.load(text, Loader=LoaderWithInclude)
+    loaded = yaml.load(text, Loader=LoaderWithInclude)
+    # Best-effort: allow scheduler manifests to live separately
+    try:
+        loaded = expand_scheduler_manifests(
+            loaded,
+            base_path=file_path,
+            manifest_root=LoaderWithInclude.manifest_root,
+        )
+    except Exception:
+        pass
+    return loaded

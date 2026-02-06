@@ -38,14 +38,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchEulerDiscreteScheduler
-    scheduler_options:
-    - name: FlowMatchEulerDiscreteScheduler
-      label: FlowMatch Euler Discrete Scheduler
-      description: The FlowMatch Euler Discrete Scheduler is a scheduler for the Anima
-        T2I model.
-      base: diffusers.FlowMatchEulerDiscreteScheduler
-      config_path: totoku/apex-models/Anima/scheduler/scheduler_config.json
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: Anima VAE
     base: qwenimage
@@ -65,7 +64,7 @@ spec:
     name: text_encoder
     config_path: totoku/apex-models/Anima/text_encoder/config.json
     model_path:
-    - path: totoku/apex-models/Anima/text_encoder/qwen_3_06b_base.safetensors
+    - path: totoku/apex-models/Anima/text_encoder/text_encoder-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
@@ -88,7 +87,7 @@ spec:
     name: anima.llm_adapter
     config_path: totoku/apex-models/Anima/llm_adapter/config.json
     model_path:
-    - path: totoku/apex-models/Anima/llm_adapter/llm_adapter.safetensors
+    - path: totoku/apex-models/Anima/llm_adapter/diffusion_pytorch_model.safetensors
       variant: default
       precision: fp16
       type: safetensors

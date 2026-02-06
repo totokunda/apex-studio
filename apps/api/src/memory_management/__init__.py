@@ -1970,6 +1970,8 @@ def _auto_memory_management_disabled() -> bool:
     try:
         return ComponentMemoryManager._env_bool(
             "APEX_DISABLE_AUTO_MEMORY_MANAGEMENT", False
+        ) or ComponentMemoryManager._env_bool(
+            "DISABLE_AUTO_MEMORY_MANAGEMENT", False
         )
     except Exception:
         raw = os.environ.get("APEX_DISABLE_AUTO_MEMORY_MANAGEMENT")

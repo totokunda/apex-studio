@@ -170,9 +170,7 @@ class UniPCMultistepScheduler(SchedulerInterface):
         """
 
         if self.config.use_dynamic_shifting and mu is None:
-            raise ValueError(
-                " you have to pass a value for `mu` when `use_dynamic_shifting` is set to be `True`"
-            )
+            self.config.use_dynamic_shifting = False
 
         if sigmas is None:
             sigmas = np.linspace(
@@ -484,23 +482,32 @@ class UniPCMultistepScheduler(SchedulerInterface):
         if self.predict_x0:
             x_t_ = sigma_t / sigma_s0 * x - alpha_t * h_phi_1 * m0
             if D1s is not None:
-                pred_res = torch.einsum(
-                    "k,bkc...->bc...", rhos_p, D1s
-                )  # pyright: ignore
+                # `torch.einsum` requires all operands to share the same dtype.
+                # In our pipeline, latents (`x`) are often `float32` while
+                # stored model outputs (`D1s`) can be `bfloat16`, which raises:
+                #   RuntimeError: expected scalar type Float but found BFloat16
+                common_dtype = torch.promote_types(rhos_p.dtype, D1s.dtype)
+                pred_res = torch.einsum(  # pyright: ignore
+                    "k,bkc...->bc...",
+                    rhos_p.to(dtype=common_dtype),
+                    D1s.to(dtype=common_dtype),
+                )
             else:
                 pred_res = 0
             x_t = x_t_ - alpha_t * B_h * pred_res
         else:
             x_t_ = alpha_t / alpha_s0 * x - sigma_t * h_phi_1 * m0
             if D1s is not None:
-                pred_res = torch.einsum(
-                    "k,bkc...->bc...", rhos_p, D1s
-                )  # pyright: ignore
+                common_dtype = torch.promote_types(rhos_p.dtype, D1s.dtype)
+                pred_res = torch.einsum(  # pyright: ignore
+                    "k,bkc...->bc...",
+                    rhos_p.to(dtype=common_dtype),
+                    D1s.to(dtype=common_dtype),
+                )
             else:
                 pred_res = 0
             x_t = x_t_ - sigma_t * B_h * pred_res
 
-        x_t = x_t.to(x.dtype)
         return x_t
 
     def multistep_uni_c_bh_update(
@@ -628,8 +635,9 @@ class UniPCMultistepScheduler(SchedulerInterface):
 
         if self.predict_x0:
             x_t_ = sigma_t / sigma_s0 * x - alpha_t * h_phi_1 * m0
+            common_dtype = torch.promote_types(rhos_c.dtype, D1s.dtype) if D1s is not None else rhos_c.dtype
             if D1s is not None:
-                corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1], D1s)
+                corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1].to(dtype=common_dtype), D1s.to(dtype=common_dtype))
             else:
                 corr_res = 0
             D1_t = model_t - m0
@@ -637,12 +645,11 @@ class UniPCMultistepScheduler(SchedulerInterface):
         else:
             x_t_ = alpha_t / alpha_s0 * x - sigma_t * h_phi_1 * m0
             if D1s is not None:
-                corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1], D1s)
+                corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1].to(dtype=common_dtype), D1s.to(dtype=common_dtype))
             else:
                 corr_res = 0
             D1_t = model_t - m0
             x_t = x_t_ - sigma_t * B_h * (corr_res + rhos_c[-1] * D1_t)
-        x_t = x_t.to(x.dtype)
         return x_t
 
     def index_for_timestep(self, timestep, schedule_timesteps=None):

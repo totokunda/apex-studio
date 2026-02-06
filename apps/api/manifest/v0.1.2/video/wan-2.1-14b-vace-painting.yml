@@ -49,24 +49,16 @@ spec:
     label: Lightx2v LoRA
     component: transformer
     verified: true
-  - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Phantom_Wan_14B_FusionX_LoRA.safetensors
-    scale: 0.0
-    name: fusionx_lora
-    label: FusionX LoRA
-    component: transformer
-    verified: true
   components:
   - type: scheduler
     label: Scheduler
-    default: UniPCMultistepScheduler
-    scheduler_options:
-    - name: UniPCMultistepScheduler
-      label: UniPC Multistep Scheduler
-      description: The UniPC Multistep Scheduler is used for WAN 2.1 14B T2I.
-      base: diffusers.UniPCMultistepScheduler
-      config:
-        flow_shift: 5.0
-      config_path: https://huggingface.co/Wan-AI/Wan2.1-VACE-14B-diffusers/resolve/main/scheduler/scheduler_config.json
+    default: UniPCMultistepSchedulerBH2
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: WAN VAE
     name: vae
