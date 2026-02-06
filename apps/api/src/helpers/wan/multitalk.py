@@ -169,16 +169,31 @@ class WanMultiTalk(nn.Module, LoaderMixin, OffloadMixin):
         self.model_path = model_path
         self.save_path = save_path
         self.device = device
-
+        config_path = kwargs.get("config_path", None)
+        if config_path is None:
+            config_path = os.path.join(model_path, "config.json")
+            if not os.path.isfile(config_path):
+                config_path = None
+        if config_path is None:
+            config_path = "https://huggingface.co/totoku/apex-models/resolve/main/MeiGen-MultiTalk/audio_encoder/config.json"
+        
         # Initialize Wav2Vec2 components if available
         try:
             # Try to import and initialize the wav2vec model for audio feature extraction
-            self.wav2vec_model = Wav2Vec2ModelMultitalk.from_pretrained(
-                model_path, cache_dir=save_path
-            )
-            self.wav2vec_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(
-                model_path, cache_dir=save_path
-            )
+            self.wav2vec_model = self._load_model({
+                "base": "helpers.wan.multitalk.Wav2Vec2ModelMultitalk",
+                "model_path": model_path,
+                "config_path": config_path,
+            }, module_name="src")
+            
+            self.wav2vec_feature_extractor = Wav2Vec2FeatureExtractor.from_dict({
+                "do_normalize": False,
+                "feature_size": 1,
+                "padding_side": "right",
+                "padding_value": 0.0,
+                "return_attention_mask": False,
+                "sampling_rate": 16000,
+            })
         except Exception as e:
             print(f"Warning: Could not load Wav2Vec2 model from {model_path}: {e}")
             self.wav2vec_model = None

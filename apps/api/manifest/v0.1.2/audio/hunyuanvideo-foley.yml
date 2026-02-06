@@ -34,7 +34,6 @@ spec:
   - type: scheduler
     name: scheduler
     label: HunyuanVideo-Foley Scheduler
-    base: src.scheduler.flow.FoleyFlowMatchDiscreteScheduler
     scheduler_options:
     - name: FoleyFlowMatchDiscreteScheduler
       label: Foley FlowMatch Discrete Scheduler

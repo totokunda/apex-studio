@@ -81,9 +81,15 @@ class HuMoAudioProcessor(BaseHelper):
         self.fps = fps
         self.model_path = model_path
         model_path = self._download(model_path, get_components_path())
+        if config_path is None:
+            config_path = os.path.join(model_path, "config.json")
+            if not os.path.isfile(config_path):
+                config_path = None
+        if config_path is None:
+            config_path = "https://huggingface.co/totoku/apex-models/resolve/main/HuMo/audio_encoder/config.json"
         # check if is file or directory
-        if os.path.isfile(model_path) and config_path is not None:
-            self.whisper = self._load_model(
+        
+        self.whisper = self._load_model(
                 {
                     "base": "WhisperModel",
                     "model_path": model_path,
@@ -91,8 +97,6 @@ class HuMoAudioProcessor(BaseHelper):
                 },
                 module_name="transformers",
             )
-        else:
-            self.whisper = WhisperModel.from_pretrained(model_path).eval()
         self.to_device(self.whisper)
         self.whisper.requires_grad_(False)
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(model_path)

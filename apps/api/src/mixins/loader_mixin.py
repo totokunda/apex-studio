@@ -402,7 +402,7 @@ class LoaderMixin(DownloadMixin):
                     **gguf_kwargs,
                 )
                 converter.convert(state_dict, model_keys)
- 
+
                 # Load GGMLTensors without replacing nn.Parameters by copying data
                 patch_model_ggml_from_state_dict(
                     model,
@@ -904,6 +904,22 @@ class LoaderMixin(DownloadMixin):
             loaded = validate_and_normalize(loaded)
         except Exception as e:
             raise
+
+        # Expand any external scheduler catalogs into scheduler_options
+        try:
+            from src.utils.scheduler_manifest import expand_scheduler_manifests
+
+            # Reuse the same heuristic used in src.utils.yaml: find nearest "manifest" dir
+            manifest_root = None
+            for parent in file_path.parents:
+                if parent.name == "manifest":
+                    manifest_root = parent
+                    break
+            loaded = expand_scheduler_manifests(
+                loaded, base_path=file_path, manifest_root=manifest_root
+            )
+        except Exception:
+            pass
 
         return loaded
 

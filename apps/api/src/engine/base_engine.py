@@ -2717,33 +2717,70 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 if not scheduler_options:
                     new_components_cfg.append(component)
                     continue
-                selected_scheduler_option = self.selected_components.get(
+                selected_scheduler_spec = self.selected_components.get(
                     component_name, self.selected_components.get(component_type, None)
                 )
 
-                if not selected_scheduler_option:
-                    # take the first scheduler option
-                    selected_scheduler_option = scheduler_options[0]
+                # Allow a few convenient forms:
+                # - {"name": "...", "config": {...}} (preferred)
+                # - "SchedulerName" (shorthand)
+                selected_name = None
+                selected_overrides = {}
+                if isinstance(selected_scheduler_spec, str):
+                    selected_name = selected_scheduler_spec
+                elif isinstance(selected_scheduler_spec, dict):
+                    selected_name = selected_scheduler_spec.get("name")
+                    selected_overrides = {
+                        k: v for k, v in selected_scheduler_spec.items() if k != "name"
+                    }
+
+                if not selected_name:
+                    # Prefer manifest default (if present), else take the first option.
+                    default_name = component.get("default")
+                    if isinstance(default_name, str) and default_name.strip():
+                        selected_name = default_name.strip()
+                    else:
+                        selected_name = scheduler_options[0].get("name")
 
                 match_found = False
                 for scheduler_option in scheduler_options:
-                    if selected_scheduler_option["name"] == scheduler_option["name"]:
+                    if selected_name == scheduler_option.get("name"):
                         current_component = component.copy()
                         del current_component["scheduler_options"]
-                        selected_scheduler_option.update(current_component)
-                        selected_scheduler_option.update(scheduler_option)
-                        component = selected_scheduler_option
+                        merged = dict(current_component)
+                        merged.update(scheduler_option)
+                        component = merged
                         match_found = True
                         break
                 if not match_found:
-                    # use the first scheduler option
-                    selected_scheduler_option = scheduler_options[0]
+                    # Use default if possible, else first scheduler option
+                    fallback = None
+                    if isinstance(selected_name, str) and selected_name:
+                        fallback = next(
+                            (o for o in scheduler_options if o.get("name") == selected_name),
+                            None,
+                        )
+                    if fallback is None:
+                        fallback = scheduler_options[0]
                     current_component = component.copy()
                     del current_component["scheduler_options"]
-                    selected_scheduler_option.update(current_component)
-                    selected_scheduler_option.update(scheduler_options[0])
-                    component = selected_scheduler_option
+                    merged = dict(current_component)
+                    merged.update(fallback)
+                    component = merged
                     match_found = True
+
+                # Apply any runtime overrides *after* selecting the option.
+                # For config dicts, merge instead of replacing.
+                if isinstance(selected_overrides, dict) and selected_overrides:
+                    for k, v in selected_overrides.items():
+                        if k == "config" and isinstance(v, dict) and isinstance(
+                            component.get("config"), dict
+                        ):
+                            merged_cfg = dict(component.get("config") or {})
+                            merged_cfg.update(v)
+                            component["config"] = merged_cfg
+                        else:
+                            component[k] = v
 
                 if component_name:
                     component["name"] = component_name
