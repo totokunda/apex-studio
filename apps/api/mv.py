@@ -3,7 +3,7 @@ from huggingface_hub import HfFileSystem
 fs = HfFileSystem()
 
 paths_to_change = {
-    "MOVA-720": "MOVA-720p"
+    "Wan2.1-I2V": "Wan2.1-I2V-480P"
 }
 
 def collect_all_paths(fs, current_path, all_paths):

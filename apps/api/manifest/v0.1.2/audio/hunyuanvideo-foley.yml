@@ -53,87 +53,58 @@ spec:
     name: foley_model
     label: HunyuanVideo-Foley Diffusion Model
     base: hunyuanvideo.foley
-    config:
-      model_name: hunyuanvideo-foley-xxl
-      model_type: 1d
-      model_precision: bf16
-      model_kwargs:
-        depth_triple_blocks: 18
-        depth_single_blocks: 36
-        hidden_size: 1536
-        num_heads: 12
-        mlp_ratio: 4
-        mlp_act_type: "gelu_tanh"
-        qkv_bias: True
-        qk_norm: True
-        qk_norm_type: "rms"
-        attn_mode: "torch"
-        embedder_type: "default"
-        interleaved_audio_visual_rope: True
-        enable_learnable_empty_visual_feat: True
-        sync_modulation: False
-        add_sync_feat_to_audio: True
-        cross_attention: True
-        use_attention_mask: False
-        condition_projection: "linear"
-        sync_feat_dim: 768 # syncformer 768 dim
-        condition_dim: 768  # clap 768 text condition dim (clip-text)
-        clip_dim: 768  # siglip2 visual dim
-        audio_vae_latent_dim: 128 
-        audio_frame_rate: 50
-        patch_size: 1
-        rope_dim_list: null
-        rope_theta: 10000
-        text_length: 77
-        clip_length: 64 
-        sync_length: 192
-        depth_triple_ssl_encoder: null
-        depth_single_ssl_encoder: 8
-        use_repa_with_audiossl: True
+    config_name: totoku/apex-models/HunyuanVideo-Foley/transformer/config.json
     model_path:
-    - path: /home/tosin_coverquick_co/apex-diffusion/components/hunyuanvideo_foley.safetensors
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: fp8
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q4_k_m.gguf
+      variant: gguf_q4_k_m
+      precision: q4_k_m
+      type: gguf
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q6_k.gguf
+      variant: gguf_q6_k
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q8_0.gguf
+      variant: gguf_q8_0
+      precision: q8_0
+      type: gguf
   - type: vae
     name: dac_model
     label: DAC VAE 128d 48kHz
     base: dac
-    model_path: /home/tosin_coverquick_co/apex-diffusion/components/_vae_128d_48k.pth
-    config:
-      encoder_dim: 128
-      encoder_rates: [2, 3, 4, 5, 8]
-      latent_dim: 128
-      decoder_dim: 2048
-      decoder_rates: [8, 5, 4, 3, 2]
-      n_codebooks: 9
-      codebook_size: 1024
-      codebook_dim: 8
-      quantizer_dropout: false
-      sample_rate: 48000
-      continuous: true
+    config_path: totoku/apex-models/HunyuanVideo-Foley/vae/config.json
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
   - type: text_encoder
     name: clap_model
     label: CLAP Text Encoder
     base: ClapTextModelWithProjection
-    config_path: laion/larger_clap_general/config.json
-    config:
-      num_hidden_layers: 12
+    config_path: totoku/apex-models/HunyuanVideo-Foley/text_encoder/config.json
     model_path:
-    - path: laion/larger_clap_general
+    - path: totoku/apex-models/HunyuanVideo-Foley/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
     tokenizer_class: RobertaTokenizer
-    tokenizer_name: laion/larger_clap_general
+    tokenizer_path: totoku/apex-models/HunyuanVideo-Foley/tokenizer
   - type: helper
     name: siglip_model
     label: SigLIP2 Model
     module: transformers
     base: SiglipModel
-    config_path: google/siglip2-base-patch16-512/config.json
+    config_path: totoku/apex-models/HunyuanVideo-Foley/siglip_encoder/config.json
     model_path:
-    - path: google/siglip2-base-patch16-512
+    - path: totoku/apex-models/HunyuanVideo-Foley/siglip_encoder
       variant: default
       precision: fp16
       type: safetensors
@@ -142,7 +113,7 @@ spec:
     label: Synchformer Model
     base: hunyuanvideofoley.synchformer
     model_path:
-    - path: tencent/HunyuanVideo-Foley/synchformer_state_dict.pth
+    - path: totoku/apex-models/HunyuanVideo-Foley/syncformer_encoder
       variant: default
       precision: bf16
       type: pth

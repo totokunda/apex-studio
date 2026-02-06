@@ -42,123 +42,38 @@ spec:
     block_modules:
       - encoder
       - decoder
+    config_path: totoku/apex-models/SeedVR2-3B/vae/config.json
     model_path:
-    - path: ByteDance-Seed/SeedVR2-3B/ema_vae.pth
+    - path: totoku/apex-models/SeedVR2-3B/vae/vae-bf16.safetensors
       variant: default
-      precision: fp16
-      type: pth
-      file_size: 1002691902
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    config:
-      act_fn: silu
-      block_out_channels:
-      - 128
-      - 256
-      - 512
-      - 512
-      down_block_types:
-      - DownEncoderBlock3D
-      - DownEncoderBlock3D
-      - DownEncoderBlock3D
-      - DownEncoderBlock3D
-      in_channels: 3
-      latent_channels: 16
-      scaling_factor: 0.9152
-      layers_per_block: 2
-      norm_num_groups: 32
-      out_channels: 3
-      slicing_sample_min_size: 4
-      temporal_scale_num: 2
-      inflation_mode: pad
-      up_block_types:
-      - UpDecoderBlock3D
-      - UpDecoderBlock3D
-      - UpDecoderBlock3D
-      - UpDecoderBlock3D
-      spatial_downsample_factor: 8
-      temporal_downsample_factor: 4
-      use_quant_conv: false
-      use_post_quant_conv: false
-      freeze_encoder: false
+      precision: bf16
+      type: safetensors
+    
   - type: transformer
     base: seedvr.base_v2
     label: SeedVR2 Transformer
+    config_path: totoku/apex-models/SeedVR2-3B/transformer/config.json
     model_path:
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/seedvr2_ema_3b.safetensors
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 13566090228
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q8_0.gguf
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 3660613984
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q6_K.gguf
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 2853998944
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 2411661664
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q4_K_M.gguf
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 1995344224
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
-    - path: cmeka/SeedVR2-GGUF/seedvr2_ema_3b-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      file_size: 1553006944
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    config:
-      vid_in_channels: 33
-      vid_out_channels: 16
-      vid_dim: 2560
-      vid_out_norm: rms
-      txt_in_dim: 5120
-      txt_in_norm: layer
-      txt_dim: 2560
-      emb_dim: 15360
-      heads: 20
-      head_dim: 128
-      expand_ratio: 4
-      norm: rms
-      norm_eps: 1.0e-06
-      ada: single
-      qk_bias: false
-      qk_norm: rms
-      patch_size:
-      - 1
-      - 2
-      - 2
-      num_layers: 32
-      mm_layers: 10
-      mlp_type: swiglu
-      msa_type: null
-      rope_type: mmrope3d
-      rope_dim: 128
   defaults:
     run:
       num_inference_steps: 1

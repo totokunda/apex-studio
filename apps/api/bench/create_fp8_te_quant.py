@@ -48,8 +48,8 @@ def _should_quantize_linear_weight(key: str, value) -> bool:
 
 
 
-file_path = "/home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-bf16.safetensors"
-save_path = "/home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/text_encoder/text_encoder-fp8_e4m3fn.safetensors"
+file_path = "/home/tosin_coverquick_co/apex-studio/apps/api/out_t/text_encoder-bf16.safetensors"
+save_path = "/home/tosin_coverquick_co/apex-studio/apps/api/out_t/text_encoder-fp8_e4m3fn.safetensors"
 
 state_dict = load_file(file_path)
 

@@ -49,59 +49,22 @@ spec:
     name: wan/vae
     label: Wan VAE
     base: wan
+    config_path: totoku/apex-models/Wan-2.2-I2V/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+    - path: totoku/apex-models/Wan-2.2-I2V/vae/vae-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 507592616
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae/config.json
   - type: transformer
     base: wan.flashvsr
     label: FlashVSR Transformer
+    config_path: totoku/apex-models/FlashVSR-v1.1/transformer/config.json
     model_path:
-    - path: JunhaoZhuang/FlashVSR-v1.1/diffusion_pytorch_model_streaming_dmd.safetensors
+    - path: totoku/apex-models/FlashVSR-v1.1/transformer/transformer-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 5676070392
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    config:
-      has_image_input: false
-      patch_size:
-      - 1
-      - 2
-      - 2
-      in_dim: 16
-      dim: 1536
-      ffn_dim: 8960
-      freq_dim: 256
-      text_dim: 4096
-      out_dim: 16
-      num_heads: 12
-      num_layers: 30
-      eps: 1.0e-06
-      use_causal_lq4x_proj: true
-      use_buffer_lq4x_proj: false
-      lq4x_proj_in_dim: 3
-      lq4x_proj_out_dim: 1536
-      lq4x_proj_layer_num: 1
-  - type: extra_model_path
-    component: transformer
-    model_path:
-    - path: JunhaoZhuang/FlashVSR-v1.1/LQ_proj_in.ckpt
-      variant: default
-      precision: fp16
-      type: safetensors
-      file_size: 575694948
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
+
   defaults:
     run:
       num_inference_steps: 1
