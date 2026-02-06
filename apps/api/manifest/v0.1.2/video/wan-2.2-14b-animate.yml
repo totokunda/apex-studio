@@ -62,177 +62,82 @@ spec:
       base: diffusers.UniPCMultistepScheduler
       config_path: Wan-AI/Wan2.2-Animate-14B-Diffusers/scheduler/scheduler_config.json
   - type: vae
-    name: wan/vae
-    label: Wan VAE
+    label: WAN VAE
+    name: vae
     base: wan
+    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 507592616
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 11361874539
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 6731333792
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
-  - type: transformer
-    base: wan.animate
-    label: Wan Transformer
-    model_path:
-    - path: Wan-AI/Wan2.2-Animate-14B-Diffusers/transformer
-      variant: default
-      precision: fp16
-      type: safetensors
-      file_size: 69099547207
-      resource_requirements:
-        min_vram_gb: 56
-        recommended_vram_gb: 75
-    - path: Kijai/WanVideo_comfy_fp8_scaled/Wan22Animate/Wan2_2-Animate-14B_fp8_scaled_e4m3fn_KJ_v2.safetensors
-      variant: FP8
-      precision: fp8
-      type: safetensors
-      file_size: 17317143060
-      resource_requirements:
-        min_vram_gb: 21
-        recommended_vram_gb: 28
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q8_0.gguf
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 18719217472
-      resource_requirements:
-        min_vram_gb: 19
-        recommended_vram_gb: 26
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q6_K.gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    base: wan.animate
+    label: Wan Transformer
+    config_path: totoku/apex-models/Wan2.2-Animate/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 14605195072
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 13003659072
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 12349118272
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q5_0.gguf
-      variant: GGUF_Q5_0
-      precision: q5_0
-      type: gguf
-      file_size: 12526065472
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q4_K_M.gguf
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 11496331072
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 10592753472
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q4_0.gguf
-      variant: GGUF_Q4_0
-      precision: q4_0
-      type: gguf
-      file_size: 10402699072
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 8630769472
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q3_K_S.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 7969675072
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: QuantStack/Wan2.2-Animate-14B-GGUF/Wan2.2-Animate-14B-Q2_K.gguf
-      variant: GGUF_Q2_K
-      precision: q2_k
-      type: gguf
-      file_size: 6457431872
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    config_path: Wan-AI/Wan2.2-Animate-14B-Diffusers/transformer/config.json
   - type: helper
     name: image_processor
     label: Image Processor
     base: CLIPImageProcessor
     module: transformers
     model_path:
-    - path: Wan-AI/Wan2.2-Animate-14B-Diffusers/image_processor
+    - path: totoku/apex-models/Wan2.1-I2V-480P/image_processor
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 5030848
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
   - type: helper
     name: image_encoder
     label: Image Encoder
     base: CLIPVisionModel
     module: transformers
     model_path:
-    - path: Wan-AI/Wan2.2-Animate-14B-Diffusers/image_encoder
+    - path: totoku/apex-models/Wan2.1-I2V-480P/image_encoder
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 1261596722
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
   defaults:
     run:
       num_inference_steps: 4

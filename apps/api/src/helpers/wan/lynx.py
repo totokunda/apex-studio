@@ -17,16 +17,6 @@ from torch.nn import RMSNorm
 from src.attention import attention_register
 
 try:
-    from flash_attn_interface import flash_attn_varlen_func  # flash attn 3
-except Exception:
-    try:
-        from flash_attn.flash_attn_interface import (
-            flash_attn_varlen_func,
-        )  # flash attn 2
-    except Exception:  # pragma: no cover
-        flash_attn_varlen_func = None
-
-try:
     from insightface.app import FaceAnalysis
 except Exception:  # pragma: no cover
     FaceAnalysis = None
@@ -34,6 +24,10 @@ try:
     from facexlib.recognition import init_recognition_model
 except Exception:  # pragma: no cover
     init_recognition_model = None
+
+
+# Adapter layout variants (for Lynx-Full/adapters/*)
+SUBDIRS = ("bf16", "fp8_e4m3fn", "gguf_q8")
 
 
 # ------------------------------- Math helpers ------------------------------- #
@@ -965,12 +959,69 @@ class WanLynxHelper(BaseHelper):
     def load_adapters(
         self, transformer, adapter_path: str, device: torch.device, dtype: torch.dtype
     ):
+        def _maybe_variant_dir(path: str) -> str:
+            """
+            Support both:
+              - old layout: <adapter_path>/<files>
+              - new layout: <adapter_root>/{bf16,fp8_e4m3fn,gguf_q8}/<files>
+
+            If `path` looks like an adapter root containing subfolders, pick a
+            variant based on `LYNX_ADAPTER_VARIANT` (or a reasonable default).
+            """
+            if not path or not os.path.isdir(path):
+                return path
+            has_subdirs = all(os.path.isdir(os.path.join(path, d)) for d in SUBDIRS)
+            if not has_subdirs:
+                return path
+
+            pref = (os.getenv("LYNX_ADAPTER_VARIANT") or "auto").strip().lower()
+            if pref in SUBDIRS:
+                return os.path.join(path, pref)
+
+            # Auto: prefer bf16 for compatibility, then fp8, then gguf.
+            for d in ("bf16", "fp8_e4m3fn", "gguf_q8"):
+                cand = os.path.join(path, d)
+                if os.path.isdir(cand):
+                    return cand
+            return path
+
+        def _pick_weight_file(dir_path: str, candidates: List[str]) -> str | None:
+            for name in candidates:
+                p = os.path.join(dir_path, name)
+                if os.path.exists(p):
+                    return p
+            return None
+
+        def _is_fp8_or_scaled_state_dict(sd: Dict[str, torch.Tensor]) -> bool:
+            # Detect either explicit scale_weight keys or raw fp8 tensors.
+            if any(k.endswith("scale_weight") for k in sd.keys()):
+                return True
+            fp8_dtypes = tuple(
+                dt
+                for dt in (
+                    getattr(torch, "float8_e4m3fn", None),
+                    getattr(torch, "float8_e5m2", None),
+                    getattr(torch, "float8_e4m3fnuz", None),
+                    getattr(torch, "float8_e5m2fnuz", None),
+                )
+                if dt is not None
+            )
+            if fp8_dtypes and any(
+                (hasattr(v, "dtype") and v.dtype in fp8_dtypes) for v in sd.values()
+            ):
+                return True
+            return False
+
         if not adapter_path:
             raise ValueError(
                 "Lynx adapter path is required (adapter_path or LYNX_ADAPTER_PATH)."
             )
         if not os.path.isdir(adapter_path):
             raise FileNotFoundError(f"Adapter directory not found: {adapter_path}")
+
+        # If the user passed an adapter *root* containing per-precision folders,
+        # pick a variant folder; otherwise keep the path as-is.
+        adapter_path = _maybe_variant_dir(adapter_path)
 
         if self.resampler is None:
             resampler_path = os.path.join(adapter_path, "resampler.safetensors")
@@ -999,36 +1050,146 @@ class WanLynxHelper(BaseHelper):
             self.resampler = resampler
 
         if not self.ip_loaded:
-            ip_path = os.path.join(adapter_path, "ip_layers.safetensors")
-            if os.path.exists(ip_path):
-                ip_sd = load_file(ip_path, device="cpu")
-                cross_attention_dim = ip_sd["0.to_k_ip.weight"].shape[1]
-                n_registers = (
-                    ip_sd["0.registers"].shape[1] if "0.registers" in ip_sd else 0
+            ip_path = _pick_weight_file(
+                adapter_path,
+                [
+                    "ip_layers.safetensors",
+                    "ip_layers-fp8_e4m3fn.safetensors",
+                    "ip_layers-q8_0.gguf",
+                ],
+            )
+            if not ip_path:
+                raise FileNotFoundError(
+                    f"IP adapter weights not found under: {adapter_path}"
                 )
-                register_fn = (
-                    register_ip_adapter_full
-                    if cross_attention_dim == 5120
-                    else register_ip_adapter_light
+
+            # Load state dict (safetensors or gguf).
+            ip_is_gguf = ip_path.lower().endswith(".gguf")
+            if ip_is_gguf:
+                from src.quantize.load import load_gguf
+
+                ip_sd, _ = load_gguf(
+                    ip_path,
+                    type="transformer",
+                    dequant_dtype=dtype,
+                    device=str(device),
                 )
-                transformer, ip_layers = register_fn(
-                    transformer,
-                    cross_attention_dim=cross_attention_dim,
-                    n_registers=n_registers,
-                    layers=2 if cross_attention_dim != 5120 else None,
-                    dtype=dtype,
-                )
-                ip_layers.load_state_dict(ip_sd)
-                self.ip_loaded = True
             else:
-                raise FileNotFoundError(f"IP adapter weights not found at {ip_path}")
+                ip_sd = load_file(ip_path, device="cpu")
+
+            w = ip_sd["0.to_k_ip.weight"]
+            w_shape = _logical_tensor_shape(w)
+            cross_attention_dim = int(w_shape[1])
+            n_registers = int(
+                _logical_tensor_shape(ip_sd["0.registers"])[1]
+                if "0.registers" in ip_sd
+                else 0
+            )
+
+            register_fn = (
+                register_ip_adapter_full
+                if cross_attention_dim == 5120
+                else register_ip_adapter_light
+            )
+            transformer, ip_layers = register_fn(
+                transformer,
+                cross_attention_dim=cross_attention_dim,
+                n_registers=n_registers,
+                layers=2 if cross_attention_dim != 5120 else None,
+                dtype=dtype,
+            )
+
+            # Patch the adapter module if we are loading FP8-scaled or GGUF weights.
+            if ip_is_gguf:
+                from src.quantize.ggml_layer import (
+                    patch_model_from_state_dict as patch_model_ggml_from_state_dict,
+                )
+
+                patch_model_ggml_from_state_dict(
+                    ip_layers,
+                    ip_sd,
+                    default_dequant_dtype=dtype,
+                )
+                ip_layers.load_state_dict(ip_sd, strict=False, assign=True)
+            else:
+                patched_for_fpscaled = False
+                if isinstance(ip_sd, dict) and _is_fp8_or_scaled_state_dict(ip_sd):
+                    from src.quantize.scaled_layer import (
+                        patch_fpscaled_model_from_state_dict,
+                    )
+
+                    patch_fpscaled_model_from_state_dict(
+                        ip_layers, ip_sd, default_compute_dtype=dtype
+                    )
+                    patched_for_fpscaled = True
+
+                ip_layers.load_state_dict(ip_sd, strict=False, assign=True)
+
+                if patched_for_fpscaled:
+                    from src.quantize.scaled_layer import restore_fpscaled_parameters
+
+                    restore_fpscaled_parameters(ip_layers, default_compute_dtype=dtype)
+
+            self.ip_loaded = True
 
         if not self.ref_loaded:
-            ref_path = os.path.join(adapter_path, "ref_layers.safetensors")
-            if os.path.exists(ref_path):
-                ref_sd = load_file(ref_path, device="cpu")
+            ref_path = _pick_weight_file(
+                adapter_path,
+                [
+                    "ref_layers.safetensors",
+                    "ref_layers-fp8_e4m3fn.safetensors",
+                    "ref_layers-q8_0.gguf",
+                ],
+            )
+
+            if ref_path:
+                ref_is_gguf = ref_path.lower().endswith(".gguf")
+                if ref_is_gguf:
+                    from src.quantize.load import load_gguf
+
+                    ref_sd, _ = load_gguf(
+                        ref_path,
+                        type="transformer",
+                        dequant_dtype=dtype,
+                        device=str(device),
+                    )
+                else:
+                    ref_sd = load_file(ref_path, device="cpu")
+
                 transformer, ref_layers = register_ref_adapter(transformer, dtype=dtype)
-                ref_layers.load_state_dict(ref_sd)
+
+                if ref_is_gguf:
+                    from src.quantize.ggml_layer import (
+                        patch_model_from_state_dict as patch_model_ggml_from_state_dict,
+                    )
+
+                    patch_model_ggml_from_state_dict(
+                        ref_layers,
+                        ref_sd,
+                        default_dequant_dtype=dtype,
+                    )
+                    ref_layers.load_state_dict(ref_sd, strict=False, assign=True)
+                else:
+                    patched_for_fpscaled = False
+                    if isinstance(ref_sd, dict) and _is_fp8_or_scaled_state_dict(ref_sd):
+                        from src.quantize.scaled_layer import (
+                            patch_fpscaled_model_from_state_dict,
+                        )
+
+                        patch_fpscaled_model_from_state_dict(
+                            ref_layers, ref_sd, default_compute_dtype=dtype
+                        )
+                        patched_for_fpscaled = True
+
+                    ref_layers.load_state_dict(ref_sd, strict=False, assign=True)
+
+                    if patched_for_fpscaled:
+                        from src.quantize.scaled_layer import restore_fpscaled_parameters
+
+                        restore_fpscaled_parameters(
+                            ref_layers, default_compute_dtype=dtype
+                        )
+
                 self.ref_loaded = True
             else:
                 # Ref is optional for lite models; keep a flag for availability.

@@ -52,7 +52,7 @@ spec:
     base: flux2
     config_path: totoku/apex-models/FLUX.2-dev/vae/config.json
     model_path:
-    - path: /home/tosin_coverquick_co/apex-studio/apps/api/weights/FLUX.2-dev/vae/vae-bf16.safetensors
+    - path: totoku/apex-models/FLUX.2-dev/vae/vae-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
@@ -65,233 +65,49 @@ spec:
     - embed_tokens
     block_modules:
     - model
-    config_path: black-forest-labs/FLUX.2-klein-9B/text_encoder/config.json
+    config_path: totoku/apex-models/FLUX.2-klein-9B/text_encoder/config.json
     model_path:
-    - path: black-forest-labs/FLUX.2-klein-9B/text_encoder
+    - path: totoku/apex-models/FLUX.2-klein-9B/text_encoder/text_encoder-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 16381551490
-      resource_requirements:
-        min_vram_gb: 19
-        recommended_vram_gb: 26
-    tokenizer_class: Qwen2Tokenizer
-    tokenizer_name: black-forest-labs/FLUX.2-klein-9B
-    tokenizer_kwargs:
-      subfolder: tokenizer
-  - type: transformer
-    label: Flux Transformer
-    base: flux2.base
-    config_path: black-forest-labs/FLUX.2-klein-9B/transformer/config.json
-    model_path:
-    - path: black-forest-labs/FLUX.2-klein-base-9b/transformer
-      variant: BASE
-      precision: fp16
+    - path: totoku/apex-models/FLUX.2-klein-9B/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 18157216287
-      resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 24
-    - path: black-forest-labs/FLUX.2-klein-9B/transformer
-      variant: default
-      precision: fp16
-      type: safetensors
-      file_size: 18157216297
-      resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 24
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-BF16.gguf
-      variant: GGUF_BF16
-      precision: bf16
-      type: gguf
-      file_size: 18157197600
-      resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 24
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-F16.gguf
-      variant: GGUF_F16
-      precision: f16
-      type: gguf
-      file_size: 18157197600
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q8_0.gguf
+    - path: totoku/apex-models/FLUX.2-klein-9B/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 9978304800
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q6_K.gguf
+    tokenizer_class: Qwen2Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: FLUX.2-klein-9B/tokenizer
+  - type: transformer
+    label: Flux Transformer
+    base: flux2.base
+    config_path: totoku/apex-models/FLUX.2-klein-9B/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/FLUX.2-klein-9B/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/FLUX.2-klein-9B/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/FLUX.2-klein-9B/transformer/transformer-gguf_q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/FLUX.2-klein-9B/transformer/transformer-gguf_q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 7865424160
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q5_1.gguf
-      variant: GGUF_Q5_1
-      precision: q5_1
-      type: gguf
-      file_size: 7252007200
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 7018699040
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q5_0.gguf
-      variant: GGUF_Q5_0
-      precision: q5_0
-      type: gguf
-      file_size: 6706747680
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 6938482976
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q4_1.gguf
-      variant: GGUF_Q4_1
-      precision: q4_1
-      type: gguf
-      file_size: 6161488160
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q4_K_M.gguf
+    - path: totoku/apex-models/FLUX.2-klein-9B/transformer/transformer-gguf_q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 5909829920
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q4_0.gguf
-      variant: GGUF_Q4_0
-      precision: q4_0
-      type: gguf
-      file_size: 5616228640
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: unsloth/FLUX.2-klein-base-9B-GGUF/flux-2-klein-base-9b-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 5834332448
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-BF16.gguf
-      variant: GGUF_BF16_DISTILLED
-      precision: bf16
-      type: gguf
-      file_size: 18157197600
-      resource_requirements:
-        min_vram_gb: 18
-        recommended_vram_gb: 24
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-F16.gguf
-      variant: GGUF_F16_DISTILLED
-      precision: f16
-      type: gguf
-      file_size: 18157197600
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q8_0.gguf
-      variant: GGUF_Q8_0_DISTILLED
-      precision: q8_0
-      type: gguf
-      file_size: 9978304800
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q6_K.gguf
-      variant: GGUF_Q6_K_DISTILLED
-      precision: q6_k
-      type: gguf
-      file_size: 7865424160
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q5_1.gguf
-      variant: GGUF_Q5_1_DISTILLED
-      precision: q5_1
-      type: gguf
-      file_size: 7252007200
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M_DISTILLED
-      precision: q5_k_m
-      type: gguf
-      file_size: 7018699040
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q5_0.gguf
-      variant: GGUF_Q5_0_DISTILLED
-      precision: q5_0
-      type: gguf
-      file_size: 6706747680
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S_DISTILLED
-      precision: q5_k_s
-      type: gguf
-      file_size: 6938482976
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q4_1.gguf
-      variant: GGUF_Q4_1_DISTILLED
-      precision: q4_1
-      type: gguf
-      file_size: 6161488160
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q4_K_M.gguf
-      variant: GGUF_Q4_K_M_DISTILLED
-      precision: q4_k_m
-      type: gguf
-      file_size: 5909829920
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q4_0.gguf
-      variant: GGUF_Q4_0_DISTILLED
-      precision: q4_0
-      type: gguf
-      file_size: 5616228640
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: unsloth/FLUX.2-klein-9B-GGUF/flux-2-klein-9b-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S_DISTILLED
-      precision: q4_k_s
-      type: gguf
-      file_size: 5834332448
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
   defaults:
     run:
       num_inference_steps: 4

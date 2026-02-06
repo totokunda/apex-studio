@@ -68,113 +68,62 @@ spec:
         shift: 5.0
         num_train_timesteps: 1000
   - type: vae
-    name: wan/vae
-    label: Wan VAE
+    label: WAN VAE
+    name: vae
     base: wan
+    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 507592616
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
-    block_modules: 
-    - encoder
+    offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 11361874539
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 6731333792
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
-  - type: transformer
-    base: wan.humo
-    label: HuMo Transformer
-    config:
-      text_len: 512
-      patch_size:
-      - 1
-      - 2
-      - 2
-      dim: 5120
-      ffn_dim: 13824
-      freq_dim: 256
-      in_dim: 36
-      model_type: i2v
-      num_heads: 40
-      num_layers: 40
-      window_size:
-      - -1
-      - -1
-      qk_norm: true
-      cross_attn_norm: true
-      eps: 1.0e-06
-      insert_audio: true
-    model_path:
-    - path: bytedance-research/HuMo/HuMo-17B
-      variant: default
-      precision: fp16
-      type: safetensors
-      file_size: 68224002820
-      resource_requirements:
-        min_vram_gb: 55
-        recommended_vram_gb: 74
-    - path: calcuis/humo-gguf/humo-17b-q8_0.gguf
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 18940742592
-      resource_requirements:
-        min_vram_gb: 19
-        recommended_vram_gb: 26
-    - path: calcuis/humo-gguf/humo-17b-q6_k.gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    base: wan.humo
+    label: HuMo Transformer
+    config_path: totoku/apex-models/HuMo-17B/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/HuMo-17B/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/HuMo-17B/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/HuMo-17B/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/HuMo-17B/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 14877510592
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: calcuis/humo-gguf/humo-17b-q5_0.gguf
-      variant: GGUF_Q5_0
-      precision: q5_0
+    - path: totoku/apex-models/HuMo-17B/transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
       type: gguf
-      file_size: 12826233792
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: calcuis/humo-gguf/humo-17b-q4_0.gguf
-      variant: GGUF_Q4_0
-      precision: q4_0
-      type: gguf
-      file_size: 10729081792
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: calcuis/humo-gguf/humo-17b-q3_k_s.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 8323910592
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
   - type: helper
     base: wan.humo_audio_processor
     label: HuMo Audio Processor
@@ -182,14 +131,10 @@ spec:
     sample_rate: 16000
     fps: 25
     model_path:
-    - path: totoku/whisper-large-v3
+    - path: totoku/apex-models/HuMo/audio_encoder
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 3091543112
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
   defaults:
     run:
       num_inference_steps: 50

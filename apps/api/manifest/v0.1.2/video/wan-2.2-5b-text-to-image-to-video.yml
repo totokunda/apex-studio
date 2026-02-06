@@ -59,124 +59,62 @@ spec:
       base: diffusers.UniPCMultistepScheduler
       config_path: Wan-AI/Wan2.2-TI2V-5B-Diffusers/scheduler/scheduler_config.json
   - type: vae
-    label: Wan 2.2 5B Turbo VAE
+    name: transformer_vae
+    label: Wan VAE
     base: wan
+    config_path: totoku/apex-models/Wan2.2-TI2V-5B/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-TI2V-5B-Diffusers/vae
+    - path: totoku/apex-models/Wan2.2-TI2V-5B/vae/vae-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 2818779509
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 11361874539
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 6731333792
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
-  - type: transformer
-    base: wan.base
-    label: Wan 2.2 5B Transformer
-    model_path:
-    - path: Wan-AI/Wan2.2-TI2V-5B-Diffusers/transformer
-      variant: default
-      precision: fp16
-      type: safetensors
-      file_size: 19999308424
-      resource_requirements:
-        min_vram_gb: 19
-        recommended_vram_gb: 26
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q8_0.gguf
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 5400179040
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q6_K.gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    base: wan.base
+    label: Wan 2.2 5B Transformer
+    config_path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 4211683680
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 3810603360
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_1
-      type: gguf
-      file_size: 3559928160
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q4_K_M.gguf
+    - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 3433116000
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 3116380512
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 2547790176
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q3_K_S.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 2294755680
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-    - path: QuantStack/Wan2.2-TI2V-5B-GGUF/Wan2.2-TI2V-5B-Q2_K.gguf
-      variant: GGUF_Q2_K
-      precision: q2_k
-      type: gguf
-      file_size: 1853862240
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
-    config_path: Wan-AI/Wan2.2-TI2V-5B-Diffusers/transformer/config.json
   defaults:
     run:
       num_inference_steps: 4

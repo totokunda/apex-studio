@@ -65,165 +65,99 @@ spec:
       extra_one_step: false
       reverse_sigmas: false
   - type: vae
-    name: wan/vae
-    label: Wan VAE
+    label: WAN VAE
+    name: vae
     base: wan
+    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 507592616
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
-    config_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/vae/config.json
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 11361874539
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 6731333792
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
-  - type: transformer
-    base: wan.multitalk
-    model_path:
-    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/transformer
-      variant: default
-      precision: fp16
-      type: safetensors
-      file_size: 57154175562
-      resource_requirements:
-        min_vram_gb: 47
-        recommended_vram_gb: 63
-    - path: Kijai/WanVideo_comfy_fp8_scaled/I2V/Wan2_1-I2V-14B-480p_fp8_e4m3fn_scaled_KJ.safetensors
-      variant: FP8
-      precision: fp8
-      type: safetensors
-      file_size: 16643349018
-      resource_requirements:
-        min_vram_gb: 20
-        recommended_vram_gb: 27
-    - path: city96/Wan2.1-I2V-14B-480P-gguf/wan2.1-i2v-14b-480p-Q8_0.gguf
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 18144640384
-      resource_requirements:
-        min_vram_gb: 19
-        recommended_vram_gb: 26
-    - path: city96/Wan2.1-I2V-14B-480P-gguf/wan2.1-i2v-14b-480p-Q6_K.gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    base: wan.multitalk
+    label: Wan MultiTalk Transformer
+    config_path: totoku/apex-models/Wan2.1-I2V-480P/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 14233779584
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    - path: city96/Wan2.1-I2V-14B-480P-gguf/wan2.1-i2v-14b-480p-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 12743654784
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: city96/Wan2.1-I2V-14B-480P-gguf/wan2.1-i2v-14b-480p-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 12089113984
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: city96/Wan2.1-I2V-14B-480P-gguf/wan2.1-i2v-14b-480p-Q4_K_M.gguf
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 11341184384
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: city96/Wan2.1-I2V-14B-480P-gguf/wan2.1-i2v-14b-480p-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 10437606784
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: city96/Wan2.1-I2V-14B-480P-gguf/wan2.1-i2v-14b-480p-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 8587033984
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: city96/Wan2.1-I2V-14B-480P-gguf/wan2.1-i2v-14b-480p-Q3_K_S.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 7925939584
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/transformer/config.json
-  - type: extra_model_path
-    label: Wan 2.1 14B MultiTalk Transformer
-    name: multitalk_transformer
-    component: transformer
+  - type: helper
+    base: clip
+    label: CLIP Image Encoder
+    name: clip
     model_path:
-    - path: MeiGen-AI/MeiGen-MultiTalk/multitalk.safetensors
+    - path: totoku/apex-models/Wan2.1-I2V-480P/image_encoder
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 9947889040
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
+    preprocessor_path: totoku/apex-models/Wan2.1-I2V-480P/image_processor
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel
+  - type: extra_model_path
+    name: multitalk_transformer_extra_model_path
+    label: MultiTalk Transformer Extra Model Path
+    component: transformer
+    model_path:
+    - path: totoku/apex-models/MeiGen-MultiTalk/adapters/multitalk-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/MeiGen-MultiTalk/adapters/multitalk-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/MeiGen-MultiTalk/adapters/multitalk-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
   - type: helper
     base: wan.multitalk
     label: Chinese Wav2Vec2 Base
-    extra_kwargs:
-      ignore_model_load: true
     model_path:
-    - path: TencentGameMate/chinese-wav2vec2-base
-      file_size: 1520899445
-      resource_requirements:
-        min_vram_gb: 6
-        recommended_vram_gb: 10
-  - type: helper
-    base: clip
-    name: wan/clip
-    label: Wan CLIP
-    model_path:
-    - path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+    - path: totoku/apex-models/MeiGen-MultiTalk/audio_encoder
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 1264218342
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
-    preprocessor_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_processor/preprocessor_config.json
-    processor_class: CLIPImageProcessor
-    model_class: CLIPVisionModel
   defaults:
     run:
       num_inference_steps: 30

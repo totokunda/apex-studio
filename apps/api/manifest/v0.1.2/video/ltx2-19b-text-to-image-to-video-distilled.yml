@@ -39,42 +39,26 @@ spec:
   - efficient_dot_product_attention
   - xformers
   components:
-  - type: scheduler
-    label: Scheduler
-    default: FlowMatchDiscreteScheduler
-    scheduler_options:
-    - name: FlowMatchDiscreteScheduler
-      label: FlowMatch Discrete Scheduler
-      description: The FlowMatch Discrete Scheduler is a scheduler for the LTX2 19B
-        model.
-      base: diffusers.schedulers.FlowMatchEulerDiscreteScheduler
-      config_path: Lightricks/LTX-2/scheduler/scheduler_config.json
   - type: vae
     label: LTX2 Video Vae
     name: video_vae
     base: ltx2
+    config_path: totoku/apex-models/LTX-2/vae/config.json
     model_path:
-    - path: Lightricks/LTX-2/vae
+    - path: totoku/apex-models/LTX-2/vae/vae-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 2444983694
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
   - type: vae
     label: LTX2 Audio Vae
     name: audio_vae
     base: ltx2audio
+    config_path: totoku/apex-models/LTX-2/audio_vae/config.json
     model_path:
-    - path: Lightricks/LTX-2/audio_vae
+    - path: totoku/apex-models/LTX-2/audio_vae/vae-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 106508477
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
   - type: text_encoder
     label: LTX2 Text Encoder
     name: text_encoder
@@ -86,196 +70,86 @@ spec:
     - embed_tokens
     block_modules:
     - model.language_model
+    config_path: totoku/apex-models/LTX-2/text_encoder/config.json
     model_path:
-    - path: blanchon/LTX-2-Distilled-diffusers/text_encoder
+    - path: totoku/apex-models/LTX-2/text_encoder/text_encoder-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 24374904816
-      resource_requirements:
-        min_vram_gb: 25
-        recommended_vram_gb: 34
-    - path: GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/gemma_3_12B_it_fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/LTX-2/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 13210008986
-      resource_requirements:
-        min_vram_gb: 19
-        recommended_vram_gb: 26
-    config_path: Lightricks/LTX-2/text_encoder/config.json
+    - path: totoku/apex-models/LTX-2/text_encoder/text_encoder-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
     tokenizer_class: GemmaTokenizer
-    tokenizer_name: Lightricks/LTX-2
+    tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
-      subfolder: tokenizer
+      subfolder: LTX-2/tokenizer
   - type: transformer
     label: LTX2 Transformer
     name: transformer
     base: ltx2.base
-    config_path: blanchon/LTX-2-Distilled-diffusers/transformer/config.json
+    config_path: totoku/apex-models/LTX-2-Distilled/transformer/config.json
     model_path:
-    - path: blanchon/LTX-2-Distilled-diffusers/transformer
+    - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 37753154720
-      resource_requirements:
-        min_vram_gb: 33
-        recommended_vram_gb: 44
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q8_0.gguf
+    - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 20407583904
-      resource_requirements:
-        min_vram_gb: 21
-        recommended_vram_gb: 28
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q6_K.gguf
+    - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 15921775776
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 14447805600
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 13461816480
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q5_1.gguf
-      variant: GGUF_Q5_1
-      precision: q5_1
-      type: gguf
-      file_size: 14474740896
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q5_0.gguf
-      variant: GGUF_Q5_0
-      precision: q5_0
-      type: gguf
-      file_size: 13637977248
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q4_K_M.gguf
+    - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 12753044640
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 11788289184
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q4_1.gguf
-      variant: GGUF_Q4_1
-      precision: q4_1
-      type: gguf
-      file_size: 12448892064
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q4_0.gguf
-      variant: GGUF_Q4_0
-      precision: q4_0
-      type: gguf
-      file_size: 11612128416
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 9961997472
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
-    - path: vantagewithai/LTX-2-GGUF/distilled/ltx-2-19b-distilled-Q3_K_S.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 9283503264
-      resource_requirements:
-        min_vram_gb: 9
-        recommended_vram_gb: 13
   - type: helper
     label: LTX2 Connectors
     name: connectors
     base: ltx2.connectors
+    config_path: totoku/apex-models/LTX-2/connectors/config.json
     model_path:
-    - path: Lightricks/LTX-2/connectors
+    - path: totoku/apex-models/LTX-2/connectors/diffusion_pytorch_model.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 2862958625
-      resource_requirements:
-        min_vram_gb: 7
-        recommended_vram_gb: 11
   - type: helper
     label: LTX2 Vocoder
     name: vocoder
     base: ltx2.vocoder
+    config_path: totoku/apex-models/LTX-2/vocoder/config.json
     model_path:
-    - path: Lightricks/LTX-2/vocoder
+    - path: totoku/apex-models/LTX-2/vocoder/diffusion_pytorch_model.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 111204668
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
   - type: helper
     label: LTX2 Spatial Upsampler
     name: latent_upsampler
     base: ltx2.upsampler
+    config_path: totoku/apex-models/LTX-2/latent_upsampler/config.json
     model_path:
-    - path: Lightricks/LTX-2/latent_upsampler
+    - path: totoku/apex-models/LTX-2/latent_upsampler/diffusion_pytorch_model.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 995743748
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
   defaults:
     run:
       use_distilled_stage_1: true
       guidance_scale: 1.0
       guidance_rescale: 0.0
       upsample: true
-      use_gradient_estimation: false
-      ge_gamma: 0.0
-      vae_tiling_enabled: true
-      vae_use_framewise_encoding: false
-      vae_use_framewise_decoding: false
-      vae_num_sample_frames_batch_size: 16
-      vae_num_latent_frames_batch_size: 2
-      vae_tile_sample_min_height: 512
-      vae_tile_sample_min_width: 512
-      vae_tile_sample_min_num_frames: 32
-      vae_tile_sample_stride_height: 448
-      vae_tile_sample_stride_width: 448
-      vae_tile_sample_stride_num_frames: 16
   ui:
     panels:
     - name: media
@@ -288,14 +162,6 @@ spec:
         - - image
         - - last_image
         - - audio
-    - name: advanced_media
-      label: Advanced Media
-      collapsible: true
-      default_open: false
-      layout:
-        flow: column
-        rows:
-        - - image_quality_crf
     - name: prompting
       label: Prompting
       collapsible: true
@@ -376,16 +242,6 @@ spec:
       type: audio
       panel: media
       required: false
-    - id: image_quality_crf
-      label: Image Quality CRF
-      description: The quality of the image. This can help with motion in the video.
-      type: number+slider
-      value_type: integer
-      panel: advanced_media
-      default: 33
-      min: 0
-      max: 51
-      step: 1
     - id: prompt
       label: Prompt
       description: Describe the video you want to generate.

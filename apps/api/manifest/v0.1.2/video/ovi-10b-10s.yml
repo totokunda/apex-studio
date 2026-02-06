@@ -68,15 +68,12 @@ spec:
     name: transformer_vae
     label: Wan VAE
     base: wan
+    config_path: totoku/apex-models/Wan2.2-TI2V-5B/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-TI2V-5B-Diffusers/vae
+    - path: totoku/apex-models/Wan2.2-TI2V-5B/vae/vae-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 2818779509
-      resource_requirements:
-        min_vram_gb: 10
-        recommended_vram_gb: 14
   - type: vae
     name: audio_vae
     label: Audio VAE
@@ -84,119 +81,74 @@ spec:
     extra_kwargs:
       require_conversion: true
     model_path:
-    - path: hkchengrex/MMAudio/ext_weights/best_netG.pt
+    - path: totoku/apex-models/Ovi-5s/audio_vae/best_netG.pt
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 449217313
-      resource_requirements:
-        min_vram_gb: 8
-        recommended_vram_gb: 12
   - type: extra_model_path
     name: audio_vae_extra_model_path
     label: Audio VAE Extra Model Path
     component: audio_vae
     model_path:
-    - path: hkchengrex/MMAudio/ext_weights/v1-16.pth
+    - path: totoku/apex-models/Ovi-5s/audio_vae/v1-16.pth
       variant: default
       precision: fp16
       type: safetensors
-      file_size: 686652758
-      resource_requirements:
-        min_vram_gb: 5
-        recommended_vram_gb: 9
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 11361874539
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 6731333792
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
   - type: transformer
     base: wan.ovi
     label: Ovi Transformer
     name: 960x960_10s
+    config_path: totoku/apex-models/Ovi-10s/transformer/config.json
     ignore_offloading_modules:
-      # Keep embedding/head components resident; blocks live in `fusion_blocks`.
-      - video_model.patch_embedding
-      - video_model.head
-      - audio_model.patch_embedding
-      - audio_model.head
-    # Apply block-level group offloading to fused blocks (one call per layer).
+    - video_model.patch_embedding
+    - video_model.head
+    - audio_model.patch_embedding
+    - audio_model.head
     block_modules:
-      - fusion_blocks
+    - fusion_blocks
     model_path:
-    - path: chetwinlow1/Ovi/model_960x960_10s.safetensors
+    - path: totoku/apex-models/Ovi-10s/transformer/transformer-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 23321751056
-      resource_requirements:
-        min_vram_gb: 22
-        recommended_vram_gb: 30
-    - path: totoku/ovi/transformer/ovi-fp8-960x960-10s.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Ovi-10s/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 12374673976
-      resource_requirements:
-        min_vram_gb: 16
-        recommended_vram_gb: 22
-    config:
-      video:
-        patch_size:
-        - 1
-        - 2
-        - 2
-        model_type: t2v
-        dim: 3072
-        ffn_dim: 14336
-        freq_dim: 256
-        num_heads: 24
-        num_layers: 30
-        in_dim: 48
-        out_dim: 48
-        text_len: 512
-        window_size:
-        - -1
-        - -1
-        qk_norm: true
-        cross_attn_norm: true
-        eps: 1.0e-06
-      audio:
-        patch_size:
-        - 1
-        model_type: t2a
-        dim: 3072
-        ffn_dim: 14336
-        freq_dim: 256
-        num_heads: 24
-        num_layers: 30
-        in_dim: 20
-        out_dim: 20
-        text_len: 512
-        window_size:
-        - -1
-        - -1
-        qk_norm: true
-        cross_attn_norm: true
-        eps: 1.0e-06
-        temporal_rope_scaling_factor: 0.19676
+    - path: totoku/apex-models/Ovi-10s/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/Ovi-10s/transformer/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/Ovi-10s/transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
   defaults:
     run:
       num_inference_steps: 50

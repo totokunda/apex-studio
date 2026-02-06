@@ -47,91 +47,120 @@ spec:
       base: src.scheduler.flow_match_pair.FlowMatchPairScheduler
       config_path: OpenMOSS-Team/MOVA-720p/scheduler/scheduler_config.json
   - type: vae
+    label: WAN VAE
     name: vae
-    label: Wan VAE
     base: wan
+    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 507592616
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae/config.json
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 11361874539
-      resource_requirements:
-        min_vram_gb: 17
-        recommended_vram_gb: 23
-    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 6731333792
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
   - type: transformer
     label: MOVA Audio Transformer
     base: wan.mova_audio
     name: audio_transformer
+    config_path: totoku/apex-models/MOVA-360p/audio_transformer/config.json
     model_path:
-    - path: OpenMOSS-Team/MOVA-360p/audio_dit
+    - path: totoku/apex-models/MOVA-360p/audio_transformer/diffusion_pytorch_model.safetensors
       variant: default
       precision: fp16
       type: safetensors
-    config_path: OpenMOSS-Team/MOVA-360p/audio_dit/config.json
   - type: vae
     label: MOVA Audio VAE
     base: movaaudiovae
     name: audio_vae
+    config_path: totoku/apex-models/MOVA-360p/audio_vae/config.json
     model_path:
-    - path: OpenMOSS-Team/MOVA-360p/audio_vae
+    - path: totoku/apex-models/MOVA-360p/audio_vae/diffusion_pytorch_model.safetensors
       variant: default
       precision: fp16
       type: safetensors
-    config_path: OpenMOSS-Team/MOVA-360p/audio_vae/config.json
   - type: helper
     label: Dual Tower Bridge
     base: wan.mova
     name: dual_tower_bridge
+    config_path: totoku/apex-models/MOVA-720p/dual_tower_bridge/config.json
     model_path:
-    - path: OpenMOSS-Team/MOVA-360p/dual_tower_bridge
+    - path: totoku/apex-models/MOVA-720p/dual_tower_bridge/diffusion_pytorch_model.safetensors
       variant: default
       precision: fp16
       type: safetensors
-    config_path: OpenMOSS-Team/MOVA-360p/dual_tower_bridge/config.json
   - type: transformer
     label: High Noise Transformer
     base: wan.mova
     name: high_noise_transformer
+    config_path: totoku/apex-models/MOVA-720p/high_noise_transformer/config.json
     model_path:
-    - path: OpenMOSS-Team/MOVA-720p/video_dit
+    - path: totoku/apex-models/MOVA-720p/high_noise_transformer/transformer-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-    config_path: OpenMOSS-Team/MOVA-720p/video_dit/config.json
+    - path: totoku/apex-models/MOVA-720p/high_noise_transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/MOVA-720p/high_noise_transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/MOVA-720p/high_noise_transformer/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/MOVA-720p/high_noise_transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+    
   - type: transformer
     label: Low Noise Transformer
     base: wan.mova
     name: low_noise_transformer
+    config_path: totoku/apex-models/MOVA-720p/low_noise_transformer/config.json
     model_path:
-    - path: OpenMOSS-Team/MOVA-720p/video_dit_2
+    - path: totoku/apex-models/MOVA-720p/low_noise_transformer/transformer-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-    config_path: OpenMOSS-Team/MOVA-720p/video_dit_2/config.json
+    - path: totoku/apex-models/MOVA-720p/low_noise_transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/MOVA-720p/low_noise_transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/MOVA-720p/low_noise_transformer/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/MOVA-720p/low_noise_transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
 
   defaults:
     run:

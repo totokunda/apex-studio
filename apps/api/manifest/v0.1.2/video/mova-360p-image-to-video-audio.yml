@@ -2,32 +2,26 @@ api_version: apex/v1
 kind: Model
 type: video
 metadata:
-  id: wan-2-1-14b-infinitetalk
+  id: mova-image-to-video-audio
   model: wan
-  name: Wan 2.1 14B Infinite Talk
+  name: MOVA Image to Video Audio
   version: 0.1.2
-  description: Wan 2.1 14B InfiniteTalk is a 14B parameter model for infinite talk
-    generation.
+  description: MOVA is a 14B parameter model for image-to-video-audio generation.
   tags:
-  - wan
-  - infinitetalk
+  - mova
+  - i2v
+  - audio
   - 14b
-  - '2.1'
-  author: Meigen AI
+  author: MOSI
   license: Apache-2.0
-  demo_path: models/infinitetalk.mp4
+  demo_path: models/mova-image-to-video-audio.mp4
   categories:
-  - audio-to-video
+  - image-to-video
 spec:
   engine: wan
-  model_type: multitalk
-  denoise_type: base
+  model_type: mova
   engine_type: torch
-  default_duration_secs: 5.0
-  fps: 25
-  audio_inputs_to_save:
-  - person_1_audio
-  - person_2_audio
+  default_duration_secs: 8.0
   compute_requirements:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
@@ -35,37 +29,23 @@ spec:
     - cpu
     - metal
   attention_types:
+  - efficient_dot_product_attention
   - sdpa
   - flash
   - flash3
   - sage
   - metal_flash
-  - efficient_dot_product_attention
-  - xformers
-  loras:
-  - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
-    scale: 1.0
-    name: lightx2v_lora
-    label: Lightx2v LoRA
-    component: transformer
-    verified: true
+  fps: 24
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchScheduler
+    default: FlowMatchPairScheduler
     scheduler_options:
-    - name: FlowMatchScheduler
-      label: FlowMatch Scheduler
-      description: The FlowMatch Scheduler is used for WAN 2.1 14B MultiTalk Text
-        to Video.
-      base: src.scheduler.FlowMatchScheduler
-    config:
-      shift: 7.0
-      sigma_max: 1.0
-      sigma_min: 0.001
-      inverse_timesteps: false
-      extra_one_step: false
-      reverse_sigmas: false
+    - name: FlowMatchPairScheduler
+      label: FlowMatch Pair Scheduler
+      description: The FlowMatch Pair Scheduler is used for MOVA Image to Video Audio.
+      base: src.scheduler.flow_match_pair.FlowMatchPairScheduler
+      config_path: OpenMOSS-Team/MOVA-720p/scheduler/scheduler_config.json
   - type: vae
     label: WAN VAE
     name: vae
@@ -99,97 +79,108 @@ spec:
     tokenizer_kwargs:
       subfolder: Wan2.1-T2V/tokenizer
   - type: transformer
-    base: wan.multitalk
-    label: Wan MultiTalk Transformer
-    config_path: totoku/apex-models/Wan2.1-I2V-480P/transformer/config.json
+    label: MOVA Audio Transformer
+    base: wan.mova_audio
+    name: audio_transformer
+    config_path: totoku/apex-models/MOVA-360p/audio_transformer/config.json
     model_path:
-    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-bf16.safetensors
+    - path: totoku/apex-models/MOVA-360p/audio_transformer/diffusion_pytorch_model.safetensors
       variant: default
-      precision: bf16
+      precision: fp16
       type: safetensors
-    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-fp8_e4m3fn.safetensors
+  - type: vae
+    label: MOVA Audio VAE
+    base: movaaudiovae
+    name: audio_vae
+    config_path: totoku/apex-models/MOVA-360p/audio_vae/config.json
+    model_path:
+    - path: totoku/apex-models/MOVA-360p/audio_vae/diffusion_pytorch_model.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: helper
+    label: Dual Tower Bridge
+    base: wan.mova
+    name: dual_tower_bridge
+    config_path: totoku/apex-models/MOVA-360p/dual_tower_bridge/config.json
+    model_path:
+    - path: totoku/apex-models/MOVA-360p/dual_tower_bridge/diffusion_pytorch_model.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: transformer
+    label: High Noise Transformer
+    base: wan.mova
+    name: high_noise_transformer
+    config_path: totoku/apex-models/MOVA-360p/high_noise_transformer/config.json
+    model_path:
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-bf16.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q8_0.gguf
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q6_k.gguf
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q4_k_m.gguf
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-  - type: helper
-    base: clip
-    label: CLIP Image Encoder
-    name: clip
+    
+  - type: transformer
+    label: Low Noise Transformer
+    base: wan.mova
+    name: low_noise_transformer
+    config_path: totoku/apex-models/MOVA-360p/low_noise_transformer/config.json
     model_path:
-    - path: totoku/apex-models/Wan2.1-I2V-480P/image_encoder
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-    preprocessor_path: totoku/apex-models/Wan2.1-I2V-480P/image_processor
-    processor_class: CLIPImageProcessor
-    model_class: CLIPVisionModel
-  - type: extra_model_path
-    name: infinitetalk_transformer_extra_model_path
-    label: InfiniteTalk MultiTalk Extra Model Path
-    component: transformer
-    model_path:
-    - path: totoku/apex-models/MeiGen-InfiniteTalk/adapters/infinitetalk-bf16.safetensors
-      variant: default
-      precision: bf16
-      type: safetensors
-    - path: totoku/apex-models/MeiGen-InfiniteTalk/adapters/infinitetalk-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/MeiGen-InfiniteTalk/adapters/infinitetalk-q8_0.gguf
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-  - type: helper
-    base: wan.multitalk
-    label: Chinese Wav2Vec2 Base
-    model_path:
-    - path: totoku/apex-models/MeiGen-MultiTalk/audio_encoder
-      variant: default
-      precision: fp16
-      type: safetensors
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+
   defaults:
     run:
-      num_inference_steps: 30
+      num_inference_steps: 50
       guidance_scale: 5.0
-      boundary_ratio: 0.9
       return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
       text_encoder_kwargs: {}
-      use_attention_mask: true
       attention_kwargs: {}
-      rope_on_cpu: false
-      chunking_profile: none
   ui:
     panels:
-    - name: video_input
-      label: Video Input
+    - name: media
+      label: Media
       collapsible: true
       default_open: true
       layout:
         flow: column
         rows:
-        - - video
-    - name: audio_input
-      label: Audio
-      collapsible: true
-      default_open: true
-      layout:
-        flow: column
-        rows:
-        - - person_1_audio
-        - - person_2_audio
+        - - image
     - name: prompting
       label: Prompting
       collapsible: true
@@ -225,11 +216,9 @@ spec:
         flow: column
         rows:
         - - num_inference_steps
-        - - guidance_scale
-        - - audio_guidance_scale
+        - - high_noise_guidance_scale
+        - - low_noise_guidance_scale
         - - seed
-        - - num_frames
-        - - motion_frames
     - name: chunking_profile
       label: Chunking Profile
       collapsible: true
@@ -237,30 +226,31 @@ spec:
       layout:
         flow: column
         rows:
-        - - rope_on_cpu
         - - chunking_profile
+        - - rope_on_cpu
+    - name: easy_cache
+      label: Easy Cache
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - use_easy_cache
+        - - easy_cache_thresh
+        - - easy_cache_ret_steps
     inputs:
-    - id: video
-      label: Video Input
-      description: The video to use for the generation.
-      type: video
-      panel: video_input
+    - id: image
+      label: Image
+      description: The image to condition on.
+      type: image
+      panel: media
       required: true
-    - id: person_1_audio
-      label: Audio
-      description: The audio to use for the generation.
-      type: audio
-      panel: audio_input
-      required: true
-    - id: person_2_audio
-      label: Audio
-      description: The audio to use for the generation.
-      type: audio
-      panel: audio_input
-      required: false
+      map_h: height
+      map_w: width
+      scale_by: resolution
     - id: prompt
       label: Prompt
-      description: Describe the video you want to generate.
+      description: Describe the image you want to generate.
       placeholder: A beautiful landscape at golden hour.
       type: text
       panel: prompting
@@ -272,46 +262,41 @@ spec:
       type: text
       panel: advanced_prompting
       required: false
-      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
-        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
-        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
-        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
-        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
-        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+      default: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指"
     - id: resolution
       label: Resolution
-      description: Select the resolution of the output video
+      description: Select the resolution of the output image
       panel: size
       type: select
-      default: 480
+      default: 360
       options:
       - name: HD
         value: 720
       - name: SD
-        value: 480
+        value: 360
       - name: Custom
         value: custom
     - id: aspect_ratio
       label: Aspect Ratio
-      description: Select the aspect ratio of the output video
+      description: Select the aspect ratio of the output image
       panel: size
       type: select
-      default: 969
+      default: '16:9'
       options:
       - name: Square
-        value: 61
+        value: '1:1'
         ratio_w: 1
         ratio_h: 1
       - name: Wide
-        value: 969
+        value: '16:9'
         ratio_w: 16
         ratio_h: 9
       - name: Vertical
-        value: 556
+        value: '9:16'
         ratio_w: 9
         ratio_h: 16
       - name: Classic
-        value: 243
+        value: '4:3'
         ratio_w: 4
         ratio_h: 3
       - name: Custom
@@ -322,7 +307,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: sampling
-      default: 8
+      default: 50
       min: 1
       max: 100
       step: 1
@@ -332,7 +317,7 @@ spec:
       type: number
       value_type: integer
       panel: size
-      default: 480
+      default: 360
       min: 256
       max: 8192
       step: 16
@@ -342,7 +327,7 @@ spec:
       type: number
       value_type: integer
       panel: size
-      default: 832
+      default: 640
       min: 256
       max: 8192
       step: 16
@@ -356,59 +341,32 @@ spec:
       value_type: integer
       panel: sampling
       required: false
-    - id: guidance_scale
-      label: Guidance Scale
+    - id: high_noise_guidance_scale
+      label: High Noise Guidance Scale
       type: number+slider
       value_type: float
       panel: sampling
       required: false
-      default: 1.0
+      default: 5.0
       min: 1.0
       max: 15.0
       step: 0.5
-    - id: audio_guidance_scale
-      label: Audio Guidance Scale
+    - id: low_noise_guidance_scale
+      label: Low Noise Guidance Scale
       type: number+slider
       value_type: float
       panel: sampling
       required: false
-      default: 4.0
+      default: 5.0
       min: 1.0
       max: 15.0
       step: 0.5
-    - id: num_frames
-      label: Number of Frames per Segment
-      description: Number of frames to generate per segment
-      type: number+slider
-      value_type: integer
-      panel: sampling
-      default: 81
-      min: 1
-      max: 200
-      step: 1
-    - id: motion_frames
-      label: Number of Motion Frames
-      description: Number of motion frames to look back for the next input image
-      type: number+slider
-      value_type: integer
-      panel: sampling
-      default: 25
-      min: 0
-      max: 100
-      step: 1
-    - id: rope_on_cpu
-      label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
-      type: boolean
-      panel: chunking_profile
-      default: false
-      required: false
     - id: chunking_profile
       label: Chunking Profile
       description: Spliting tensors into smaller chunks to reduce memory usage.
       type: select
       panel: chunking_profile
-      default: none
+      default: light
       options:
       - name: None
         value: none
@@ -418,3 +376,39 @@ spec:
         value: balanced
       - name: Aggressive
         value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false
+    - id: use_easy_cache
+      label: Use Easy Cache
+      description: Use the Easy Cache to speed up the generation, at the cost of some quality.
+      type: boolean
+      panel: easy_cache
+      required: false
+      default: true
+    - id: easy_cache_thresh
+      label: Easy Cache Threshold
+      description: Threshold for the easy cache
+      type: number+slider
+      value_type: float
+      panel: easy_cache
+      required: false
+      default: 0.05
+      min: 0.0
+      max: 1.0
+      step: 0.001
+    - id: easy_cache_ret_steps
+      label: Easy Cache Return Steps
+      description: Number of steps to return for the easy cache
+      type: number+slider
+      value_type: integer
+      panel: easy_cache
+      required: false
+      default: 10
+      min: 1
+      max: 100
+      step: 1

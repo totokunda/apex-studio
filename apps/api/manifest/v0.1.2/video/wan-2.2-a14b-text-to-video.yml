@@ -62,231 +62,88 @@ spec:
       config_path: Wan-AI/Wan2.2-T2V-A14B-Diffusers/scheduler/scheduler_config.json
   - type: vae
     label: WAN VAE
-    name: wan/vae_2.2
+    name: vae
     base: wan
+    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 507592616
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 11361874539
-      resource_requirements:
-        min_vram_gb: 17
-        recommended_vram_gb: 23
-    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 6731333792
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    config_path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/text_encoder/config.json
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
   - type: transformer
     label: High Noise Transformer
     name: high_noise_transformer
     base: wan.base
-    extra_kwargs:
-      load_from_config: true
+    config_path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-T2V-A14B/high_noise_model
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 57154174431
-      resource_requirements:
-        min_vram_gb: 51
-        recommended_vram_gb: 68
-    - path: Kijai/WanVideo_comfy_fp8_scaled/T2V/Wan2_2-T2V-A14B_HIGH_fp8_e4m3fn_scaled_KJ.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 15001361458
-      resource_requirements:
-        min_vram_gb: 22
-        recommended_vram_gb: 30
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 15404970496
-      resource_requirements:
-        min_vram_gb: 21
-        recommended_vram_gb: 28
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q6_K.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 12002013696
-      resource_requirements:
-        min_vram_gb: 16
-        recommended_vram_gb: 22
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 10790416896
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 10135876096
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 9650090496
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 8746512896
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 7174468096
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q3_K_S.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 6513373696
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q2_K.gguf
-      variant: GGUF_Q2_K
-      precision: q2_k
-      type: gguf
-      file_size: 5299319296
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    config_path: Wan-AI/Wan2.2-T2V-A14B-Diffusers/transformer/config.json
   - type: transformer
     label: Low Noise Transformer
     name: low_noise_transformer
     base: wan.base
-    extra_kwargs:
-      load_from_config: true
+    config_path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-T2V-A14B/low_noise_model
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 57154174431
-      resource_requirements:
-        min_vram_gb: 51
-        recommended_vram_gb: 68
-    - path: Kijai/WanVideo_comfy_fp8_scaled/T2V/Wan2_2-T2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors
-      variant: FP8
-      precision: fp8
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
       type: safetensors
-      file_size: 15001361458
-      resource_requirements:
-        min_vram_gb: 22
-        recommended_vram_gb: 30
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 15404970496
-      resource_requirements:
-        min_vram_gb: 21
-        recommended_vram_gb: 28
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q6_K.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 12002013696
-      resource_requirements:
-        min_vram_gb: 16
-        recommended_vram_gb: 22
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 10790416896
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 10135876096
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 9650090496
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 8746512896
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 7174468096
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q3_K_S.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 6513373696
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q2_K.gguf
-      variant: GGUF_Q2_K
-      precision: q2_k
-      type: gguf
-      file_size: 5299319296
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    config_path: Wan-AI/Wan2.2-T2V-A14B-Diffusers/transformer_2/config.json
   defaults:
     run:
       num_inference_steps: 4
