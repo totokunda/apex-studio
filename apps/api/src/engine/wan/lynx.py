@@ -281,7 +281,6 @@ class LynxEngine(WanShared):
                     )
                 else:
                     print("Applying group offloading")
-                    exit()
                     self._apply_group_offloading(
                         model_to_offload, mm_config, module_label=label
                     )

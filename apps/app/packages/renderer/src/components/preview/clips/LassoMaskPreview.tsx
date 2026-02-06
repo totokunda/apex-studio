@@ -206,8 +206,11 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
         }
 
         const currentMasks = (targetClip as any).masks || [];
+        const now = Date.now();
         const updatedMasks = currentMasks.map((m: MaskClipProps) =>
-          m.id === mask.id ? { ...m, keyframes: updatedKeyframes } : m,
+          m.id === mask.id
+            ? { ...m, keyframes: updatedKeyframes, lastModified: now }
+            : m,
         );
 
         clipStoreState.updateClip(mask.clipId, { masks: updatedMasks });

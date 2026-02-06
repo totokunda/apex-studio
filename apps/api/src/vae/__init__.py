@@ -7,6 +7,7 @@ from src.register import ClassRegister
 from loguru import logger
 
 VAE_REGISTRY = ClassRegister()
+_AUTO_REGISTERED = False
 
 
 def _auto_register_vaes():
@@ -57,15 +58,21 @@ def _auto_register_vaes():
                 if issubclass(cls, ModelMixin) and cls is not ModelMixin:
                     VAE_REGISTRY.register(key, cls)
                     break
-            except TypeError:
+            except TypeError: 
                 # Builtins and certain extension types can raise here; just ignore them.
                 continue
 
 
-_auto_register_vaes()
+def _ensure_auto_registered() -> None:
+    global _AUTO_REGISTERED
+    if _AUTO_REGISTERED:
+        return
+    _auto_register_vaes()
+    _AUTO_REGISTERED = True
 
 
 def get_vae(vae_name: str):
+    _ensure_auto_registered()
     key = vae_name.lower()
 
     if key in VAE_REGISTRY:

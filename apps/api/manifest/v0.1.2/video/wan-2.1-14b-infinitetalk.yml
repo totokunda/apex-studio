@@ -1,0 +1,413 @@
+api_version: apex/v1
+kind: Model
+type: video
+metadata:
+  id: wan-2-1-14b-infinitetalk
+  model: wan
+  name: Wan 2.1 14B Infinite Talk
+  version: 0.1.2
+  description: Wan 2.1 14B InfiniteTalk is a 14B parameter model for infinite talk
+    generation.
+  tags:
+  - wan
+  - infinitetalk
+  - 14b
+  - '2.1'
+  author: Meigen AI
+  license: Apache-2.0
+  demo_path: models/infinitetalk.mp4
+  categories:
+  - audio-to-video
+spec:
+  engine: wan
+  model_type: multitalk
+  denoise_type: base
+  engine_type: torch
+  default_duration_secs: 5.0
+  fps: 25
+  audio_inputs_to_save:
+  - person_1_audio
+  - person_2_audio
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  loras:
+  - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
+    scale: 1.0
+    name: lightx2v_lora
+    label: Lightx2v LoRA
+    component: transformer
+    verified: true
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 7.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: vae
+    label: WAN VAE
+    name: vae
+    base: wan
+    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    base: wan.multitalk
+    label: Wan MultiTalk Transformer
+    config_path: totoku/apex-models/Wan2.1-I2V-480P/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+  - type: helper
+    base: clip
+    label: CLIP Image Encoder
+    name: clip
+    model_path:
+    - path: totoku/apex-models/Wan2.1-I2V-480P/image_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+    preprocessor_path: totoku/apex-models/Wan2.1-I2V-480P/image_processor
+    processor_class: CLIPImageProcessor
+    model_class: CLIPVisionModel
+  - type: extra_model_path
+    name: infinitetalk_transformer_extra_model_path
+    label: InfiniteTalk MultiTalk Extra Model Path
+    component: transformer
+    model_path:
+    - path: totoku/apex-models/MeiGen-InfiniteTalk/adapters/infinitetalk-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/MeiGen-InfiniteTalk/adapters/infinitetalk-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/MeiGen-InfiniteTalk/adapters/infinitetalk-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+  - type: helper
+    base: wan.multitalk
+    label: Chinese Wav2Vec2 Base
+    model_path:
+    - path: totoku/apex-models/MeiGen-MultiTalk/audio_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+  defaults:
+    run:
+      num_inference_steps: 30
+      guidance_scale: 5.0
+      boundary_ratio: 0.9
+      return_latents: false
+      text_encoder_kwargs: {}
+      use_attention_mask: true
+      attention_kwargs: {}
+      rope_on_cpu: false
+      chunking_profile: none
+  ui:
+    panels:
+    - name: video_input
+      label: Video Input
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+    - name: audio_input
+      label: Audio
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - person_1_audio
+        - - person_2_audio
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - audio_guidance_scale
+        - - seed
+        - - num_frames
+        - - motion_frames
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - rope_on_cpu
+        - - chunking_profile
+    inputs:
+    - id: video
+      label: Video Input
+      description: The video to use for the generation.
+      type: video
+      panel: video_input
+      required: true
+    - id: person_1_audio
+      label: Audio
+      description: The audio to use for the generation.
+      type: audio
+      panel: audio_input
+      required: true
+    - id: person_2_audio
+      label: Audio
+      description: The audio to use for the generation.
+      type: audio
+      panel: audio_input
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: 969
+      options:
+      - name: Square
+        value: 61
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: 969
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: 556
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: 243
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 8
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: audio_guidance_scale
+      label: Audio Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: num_frames
+      label: Number of Frames per Segment
+      description: Number of frames to generate per segment
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 81
+      min: 1
+      max: 200
+      step: 1
+    - id: motion_frames
+      label: Number of Motion Frames
+      description: Number of motion frames to look back for the next input image
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 25
+      min: 0
+      max: 100
+      step: 1
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: none
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive

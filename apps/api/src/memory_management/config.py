@@ -24,7 +24,8 @@ class MemoryConfig:
     block_modules: Optional[List[str]] = None
 
     # Budget offloading behavior (Apex-native budget manager)
-    budget_mb: Optional[Union[int, str]] = None
+    # NEW: Default to "auto" for automatic budget calculation based on available VRAM
+    budget_mb: Optional[Union[int, str]] = "auto"
     async_transfers: bool = True
     prefetch: bool = True
     pin_cpu_memory: bool = False
@@ -74,4 +75,35 @@ class MemoryConfig:
             group_offload_record_stream=True,
             group_offload_non_blocking=True,
             group_offload_low_cpu_mem_usage=True,
+        )
+
+    @classmethod
+    def auto_budget(cls, **kwargs) -> "MemoryConfig":
+        """
+        Create config with automatic budget calculation.
+
+        Automatic budget mode detects available VRAM, measures model structure,
+        and calculates an optimal budget that maximizes performance while
+        preventing out-of-memory errors.
+
+        Example:
+            # Simple automatic (budget_mb="auto" by default)
+            config = MemoryConfig(offload_mode="budget")
+
+            # With custom safety coefficient
+            config = MemoryConfig.auto_budget(vram_safety_coefficient=0.85)
+
+            # Manual override if needed
+            config = MemoryConfig(offload_mode="budget", budget_mb=3000)
+
+        Args:
+            **kwargs: Additional config parameters to override
+
+        Returns:
+            MemoryConfig with automatic budget calculation enabled
+        """
+        return cls(
+            offload_mode="budget",
+            budget_mb="auto",
+            **kwargs
         )

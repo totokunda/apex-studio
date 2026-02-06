@@ -240,6 +240,9 @@ def load_text_encoder_gguf(
             )
             # Map quantized GGUF buffers to int8 to avoid downstream frameworks casting activations to uint8
             torch_tensor = torch.from_numpy(tensor.data)
+            if tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
+                # GGUFReader exposes BF16 tensors as raw bytes (uint8). Convert to real torch BF16.
+                torch_tensor = torch_tensor.view(torch.bfloat16).view(*shape)
             if dev.type != "cpu" and torch_tensor.device.type == "cpu":
                 if dev.type == "cuda":
                     try:
@@ -317,19 +320,23 @@ def load_transformer_gguf(
         if shape is None:
             # GGUF stores dims reversed
             shape = torch.Size(tuple(int(v) for v in reversed(tensor.shape)))
-
+            
+ 
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore", message="The given NumPy array is not writable"
             )
             base = torch.from_numpy(tensor.data)
 
-            # For F16/F32, present the logical shape now; quantized shapes are handled by dequant
+            # For F16/F32/BF16, present the logical shape now; packed/quantized shapes are handled by dequant
             if tensor.tensor_type in {
                 gguf.GGMLQuantizationType.F32,
                 gguf.GGMLQuantizationType.F16,
             }:
                 base = base.view(*shape)
+            
+            elif tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
+                base = base.view(torch.bfloat16).view(*shape)
 
             # Move the *raw storage* tensor before wrapping as GGMLTensor.
             # Calling `.to(device)` on GGMLTensor is unsafe for quantized tensors because
@@ -344,6 +351,8 @@ def load_transformer_gguf(
                         base = base.to(dev)
                 else:
                     base = base.to(dev)
+                    
+            
 
             ggml_tensor = GGMLTensor(
                 base,
@@ -357,7 +366,6 @@ def load_transformer_gguf(
         state_dict[name] = ggml_tensor
         tensor_type_str = getattr(tensor.tensor_type, "name", repr(tensor.tensor_type))
         qtype_dict[tensor_type_str] = qtype_dict.get(tensor_type_str, 0) + 1
-
     return state_dict, qtype_dict
 
 

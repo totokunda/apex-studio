@@ -42,7 +42,9 @@ class WanT2VEngine(WanShared):
         rope_on_cpu: bool = False,
         **kwargs,
     ):
-
+        if expand_timesteps:
+            fps = 24
+        
         if (
             high_noise_guidance_scale is not None
             and low_noise_guidance_scale is not None
@@ -230,6 +232,11 @@ class WanT2VEngine(WanShared):
             ip_image=ip_image,
             chunking_profile=chunking_profile,
         )
+        
+        if offload:
+            self._offload("transformer")
+            self._offload("high_noise_transformer")
+            self._offload("low_noise_transformer")
 
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")
 

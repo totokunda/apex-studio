@@ -42,7 +42,30 @@ DEFAULT_TORCH_COMPILE_PATH = os.getenv(
     "APEX_TORCH_COMPILE_PATH", str(HOME_DIR / "apex-diffusion" / "torch_compile")
 )
 
+# Hugging Face cache root.
+#
+# Important: respect a user-provided HF_HOME. Historically we always overwrote HF_HOME which
+# caused downloads to land in the wrong cache (often ~/.cache) or a different location than
+# the user configured.
+#
+# Also prefer keeping HF artifacts under apex-diffusion/.cache to avoid mixing with general
+# system caches.
+DEFAULT_HF_HOME = (
+    os.getenv("APEX_HF_HOME")
+    or os.getenv("HF_HOME")
+    or str(HOME_DIR / "apex-diffusion" / ".cache" / "huggingface")
+)
+
 os.environ["TORCHINDUCTOR_CACHE_DIR"] = DEFAULT_TORCH_COMPILE_PATH
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+os.environ["HF_HOME"] = DEFAULT_HF_HOME
+
+# Keep Hub + Transformers caches pinned under HF_HOME unless explicitly overridden.
+_DEFAULT_HF_HUB_CACHE = str(Path(DEFAULT_HF_HOME) / "hub")
+_DEFAULT_TRANSFORMERS_CACHE = str(Path(DEFAULT_HF_HOME) / "transformers")
+os.environ.setdefault("HF_HUB_CACHE", _DEFAULT_HF_HUB_CACHE)
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", _DEFAULT_HF_HUB_CACHE)
+os.environ.setdefault("TRANSFORMERS_CACHE", _DEFAULT_TRANSFORMERS_CACHE)
 
 
 def _load_persisted_config() -> dict:
@@ -107,10 +130,9 @@ os.makedirs(DEFAULT_CACHE_PATH, exist_ok=True)
 os.makedirs(DEFAULT_LORA_SAVE_PATH, exist_ok=True)
 os.makedirs(DEFAULT_OFFLOAD_PATH, exist_ok=True)
 os.makedirs(DEFAULT_TORCH_COMPILE_PATH, exist_ok=True)
+os.makedirs(DEFAULT_HF_HOME, exist_ok=True)
 
-os.environ["HF_HOME"] = os.getenv(
-    "APEX_HF_HOME", str(HOME_DIR / "apex-diffusion" / "huggingface")
-)
+os.environ["HF_HOME"] = DEFAULT_HF_HOME
 
 # Check if running in Ray worker (avoid MPS in forked processes)
 _IN_RAY_WORKER = os.environ.get("RAY_WORKER_NAME") or "ray::" in os.environ.get("_", "")
@@ -348,6 +370,15 @@ def get_postprocessor_path() -> str:
 def get_config_store_path() -> str:
     return CONFIG_STORE_PATH
 
+
+def get_hf_home() -> str:
+    return DEFAULT_HF_HOME
+
+def set_hf_home(path: str) -> None:
+    global DEFAULT_HF_HOME
+    DEFAULT_HF_HOME = path
+    os.environ["HF_HOME"] = DEFAULT_HF_HOME
+    os.makedirs(DEFAULT_HF_HOME, exist_ok=True)
 
 def set_postprocessor_path(path: str | None = None) -> None:
     global DEFAULT_POSTPROCESSOR_SAVE_PATH

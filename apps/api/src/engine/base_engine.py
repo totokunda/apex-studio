@@ -15,12 +15,11 @@ from contextlib import contextmanager
 from tqdm import tqdm
 import accelerate
 import psutil
-
+import traceback
 from src.utils.defaults import (
     get_components_path,
     get_preprocessor_path,
     get_postprocessor_path,
-    get_offload_path,
     DEFAULT_CACHE_PATH,
 )
 from src.utils.module import find_class_recursive
@@ -58,7 +57,6 @@ from src.mixins.cache_mixin import CacheMixin, sanitize_path_for_filename
 from glob import glob
 from safetensors import safe_open
 from src.utils.mlx import convert_dtype_to_torch, convert_dtype_to_mlx
-
 try:
     import mlx.nn as mx_nn  # type: ignore
 except Exception:  # pragma: no cover - MLX is not available on Windows/Linux
@@ -258,6 +256,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     selected_components: Dict[str, Any] | None = None
     auto_apply_loras: bool = True
     auto_memory_management: bool = True
+    disable_text_encoder_cache: bool = False
+    # Debug-only: when enabled, the ComponentMemoryManager attributes CUDA peak
+    # allocator usage to each top-level component forward() and logs a summary
+    # at the end of each engine.run(...).
+    debug_component_vram: bool = False
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -815,6 +818,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     extra_kwargs=component.get("extra_kwargs", {}),
                 )
             except Exception as e:
+                print(e)
+                import traceback
+                traceback.print_exc()
+                exit()
                 pass
 
             helper_class = get_helper(base)
@@ -1189,6 +1196,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         component["load_dtype"] = self.component_load_dtypes.get("text_encoder", None)
         component["dtype"] = self.component_dtypes.get("text_encoder", None)
         text_encoder = TextEncoder(component, no_weights, device=device)
+        text_encoder.enable_cache = not self.disable_text_encoder_cache
 
         # Lazily wrap its internal model once loaded, if memory management is configured
         mm_config = self._resolve_memory_config_for_component(component)
@@ -1902,8 +1910,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         This analyzes the component's size, block structure, and available memory to decide:
         - Whether memory management is needed
-        - Whether to use leaf-level or block-level offloading
-        - Whether to offload to CPU or disk
+        - Whether to use automatic budget offloading (default) or group offloading
+        - Budget is calculated automatically based on available VRAM
 
         Returns:
             MemoryConfig if memory management is needed, None otherwise
@@ -1939,6 +1947,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             "transformer": 8.0,
             "vae": 6.0,
         }
+        
         activation_overhead_gb = float(overhead_by_type_gb.get(component.get("type"), 8.0))
 
         required_gpu_gb = total_size_gb + activation_overhead_gb
@@ -1958,43 +1967,27 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         # Estimate block structure for smarter offloading
         block_size_bytes, num_blocks = self._estimate_block_structure(component)
 
-        # Decide on offloading strategy
-        config = MemoryConfig.for_block_level()
+        # NEW: Use automatic budget offloading by default
+        # This automatically calculates optimal VRAM budgets based on:
+        # - Available VRAM capacity
+        # - Model structure (base blocks + tower blocks)
+        # - Safety margins for activations and fragmentation
+        config = MemoryConfig(
+            offload_mode="budget",
+            budget_mb="auto",  # Automatic budget calculation
+            async_transfers=True,
+            prefetch=True,
+            vram_safety_coefficient=0.8,
+        )
 
-        if (
-            component.get("type") == "transformer"
-            and self.config.get("metadata", {}).get("id") == "zimage-turbo-control"
-        ):
-            config.group_offload_record_stream = False
-            config.group_offload_use_stream = False
-            self.logger.info(
-                f"Component {component.get('name') or ctype}: using no stream offload"
-            )
+        self.logger.info(
+            f"Component {component.get('name') or ctype}: using automatic budget offloading "
+            f"(model size: {total_size_gb:.2f}GB, available VRAM: {gpu_available_gb:.2f}GB)"
+        )
 
-        # Determine if we need disk offload
-        # Calculate how many blocks will be in CPU memory at once (rough estimate: 2-3 blocks)
-        blocks_in_memory = min(3, num_blocks) if num_blocks else 2
-
-        if block_size_bytes and num_blocks and cpu_available_gb:
-            # Estimate memory needed for offloaded blocks
-            estimated_cpu_memory_gb = (block_size_bytes * blocks_in_memory) / 1e9
-
-            # Add safety margin (20%) and check against available CPU RAM
-            if estimated_cpu_memory_gb * 1.2 >= cpu_available_gb * 0.8:
-                # Not enough CPU RAM for safe offloading, use disk
-                config.group_offload_disk_path = get_offload_path()
-                self.logger.info(
-                    f"Component {component.get('name') or ctype}: using disk offload "
-                    f"(estimated {estimated_cpu_memory_gb:.2f}GB needed, "
-                    f"{cpu_available_gb:.2f}GB available)"
-                )
-        elif cpu_available_gb and total_size_gb >= 0.85 * cpu_available_gb:
-            # Fallback: if we don't have block info, use total size
-            config.group_offload_disk_path = get_offload_path()
-            self.logger.info(
-                f"Component {component.get('name') or ctype}: using disk offload "
-                f"(model {total_size_gb:.2f}GB, CPU RAM {cpu_available_gb:.2f}GB available)"
-            )
+        # Note: Budget offloading automatically manages CPU/GPU transfers
+        # and calculates optimal budgets based on available VRAM and model structure.
+        # No disk offload needed as the budget system handles block-level CPU offloading.
 
         return config
 
@@ -2724,33 +2717,70 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 if not scheduler_options:
                     new_components_cfg.append(component)
                     continue
-                selected_scheduler_option = self.selected_components.get(
+                selected_scheduler_spec = self.selected_components.get(
                     component_name, self.selected_components.get(component_type, None)
                 )
 
-                if not selected_scheduler_option:
-                    # take the first scheduler option
-                    selected_scheduler_option = scheduler_options[0]
+                # Allow a few convenient forms:
+                # - {"name": "...", "config": {...}} (preferred)
+                # - "SchedulerName" (shorthand)
+                selected_name = None
+                selected_overrides = {}
+                if isinstance(selected_scheduler_spec, str):
+                    selected_name = selected_scheduler_spec
+                elif isinstance(selected_scheduler_spec, dict):
+                    selected_name = selected_scheduler_spec.get("name")
+                    selected_overrides = {
+                        k: v for k, v in selected_scheduler_spec.items() if k != "name"
+                    }
+
+                if not selected_name:
+                    # Prefer manifest default (if present), else take the first option.
+                    default_name = component.get("default")
+                    if isinstance(default_name, str) and default_name.strip():
+                        selected_name = default_name.strip()
+                    else:
+                        selected_name = scheduler_options[0].get("name")
 
                 match_found = False
                 for scheduler_option in scheduler_options:
-                    if selected_scheduler_option["name"] == scheduler_option["name"]:
+                    if selected_name == scheduler_option.get("name"):
                         current_component = component.copy()
                         del current_component["scheduler_options"]
-                        selected_scheduler_option.update(current_component)
-                        selected_scheduler_option.update(scheduler_option)
-                        component = selected_scheduler_option
+                        merged = dict(current_component)
+                        merged.update(scheduler_option)
+                        component = merged
                         match_found = True
                         break
                 if not match_found:
-                    # use the first scheduler option
-                    selected_scheduler_option = scheduler_options[0]
+                    # Use default if possible, else first scheduler option
+                    fallback = None
+                    if isinstance(selected_name, str) and selected_name:
+                        fallback = next(
+                            (o for o in scheduler_options if o.get("name") == selected_name),
+                            None,
+                        )
+                    if fallback is None:
+                        fallback = scheduler_options[0]
                     current_component = component.copy()
                     del current_component["scheduler_options"]
-                    selected_scheduler_option.update(current_component)
-                    selected_scheduler_option.update(scheduler_options[0])
-                    component = selected_scheduler_option
+                    merged = dict(current_component)
+                    merged.update(fallback)
+                    component = merged
                     match_found = True
+
+                # Apply any runtime overrides *after* selecting the option.
+                # For config dicts, merge instead of replacing.
+                if isinstance(selected_overrides, dict) and selected_overrides:
+                    for k, v in selected_overrides.items():
+                        if k == "config" and isinstance(v, dict) and isinstance(
+                            component.get("config"), dict
+                        ):
+                            merged_cfg = dict(component.get("config") or {})
+                            merged_cfg.update(v)
+                            component["config"] = merged_cfg
+                        else:
+                            component[k] = v
 
                 if component_name:
                     component["name"] = component_name

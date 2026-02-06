@@ -27,7 +27,7 @@ class TextEncoderQuantizer(BaseQuantizer):
     def __init__(
         self,
         output_path: str,
-        model_path: str = None,
+        model_path: str,
         tokenizer_path: str = None,
         model_type: ModelType = ModelType.TEXT,
         quantization: QuantType | str = QuantType.F16,
@@ -45,9 +45,10 @@ class TextEncoderQuantizer(BaseQuantizer):
         self.quantization = quantization
 
         self.model_path = self._download(self.model_path, DEFAULT_COMPONENTS_PATH)
-        self.tokenizer_path = self._download(
-            self.tokenizer_path, DEFAULT_COMPONENTS_PATH
-        )
+        if self.tokenizer_path is not None:
+            self.tokenizer_path = self._download(
+                self.tokenizer_path, DEFAULT_COMPONENTS_PATH
+            )
 
     @torch.inference_mode()
     def quantize(
@@ -63,6 +64,7 @@ class TextEncoderQuantizer(BaseQuantizer):
         use_temp_file: bool = False,
         bigendian: bool = False,
         llama_quantize_path: str = "llama-quantize",
+        hparams: dict = None,
         **kwargs,
     ):
         if isinstance(quantization, str):
@@ -76,7 +78,8 @@ class TextEncoderQuantizer(BaseQuantizer):
 
         requires_llama_cpp_quant = self._requires_llama_cpp_quant(quantization)
 
-        hparams = ModelBase.load_hparams(Path(self.model_path), False)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(Path(self.model_path), False)
         model_architecture = get_model_architecture(hparams, self.model_type)
 
         model_class = ModelBase.from_model_architecture(
@@ -105,6 +108,7 @@ class TextEncoderQuantizer(BaseQuantizer):
             dry_run=dry_run,
             small_first_shard=small_first_shard,
             remote_hf_model_id=hf_repo_id,
+            hparams=hparams,
         )
 
         model_instance.write()
@@ -169,7 +173,7 @@ class TransformerQuantizer(BaseQuantizer):
         small_first_shard: bool = False,
         bigendian: bool = False,
         keys_to_exclude: List[str] = None,
-        num_workers: int = None,
+        num_workers: int = 1,
     ):
 
         if model_path is None:

@@ -5,7 +5,7 @@ from src.mixins.loader_mixin import LoaderMixin
 import ftfy
 import re
 import html
-from src.utils.defaults import DEFAULT_CACHE_PATH, get_components_path
+from src.utils.defaults import get_components_path, get_cache_path
 import os
 from src.mixins.to_mixin import ToMixin
 from src.mixins.cache_mixin import CacheMixin, sanitize_path_for_filename
@@ -25,7 +25,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         self,
         config: Dict[str, Any],
         no_weights: bool = True,
-        enable_cache: bool = True,
+        enable_cache: bool = False,
         cache_file: str = None,
         max_cache_size: int = 100,
         device: torch.device | None = None,
@@ -54,10 +54,11 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             self.config_path = self._download(
                 self.config_path, get_components_path()
             )
+            
 
         if self.enable_cache and self.cache_file is None:
             self.cache_file = os.path.join(
-                DEFAULT_CACHE_PATH,
+                get_cache_path(),
                 f"text_encoder_{sanitize_path_for_filename(self.model_path)}.safetensors",
             )
         if self.tokenizer_path is not None:
@@ -326,6 +327,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         if getattr(self.model, "lm_head", None) is not None:
             self.model.lm_head.to(device=encode_device)
         
+
         result = self.model(
             **inputs,
             output_hidden_states=(

@@ -327,8 +327,11 @@ const MaskPreview: React.FC<MaskPreviewProps> = ({
                   };
                 }
 
+                const now = Date.now();
                 const updatedMasks = currentMasks.map((m: any) =>
-                  m.id === mask.id ? { ...m, keyframes: updatedKeyframes } : m,
+                  m.id === mask.id
+                    ? { ...m, keyframes: updatedKeyframes, lastModified: now }
+                    : m,
                 );
                 updateClip(mask.clipId, { masks: updatedMasks });
               }

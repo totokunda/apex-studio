@@ -292,7 +292,21 @@ class BaseConverter:
                 except re.error as e:
                     raise ValueError(f"Invalid regex rename pattern: {src!r}") from e
             else:
-                new_key = new_key.replace(src, tgt)
+                # Default: literal substring replacement.
+                #
+                # IMPORTANT: When `src` ends with a numeric index token (e.g. "down_blocks.1"),
+                # naive `.replace()` can accidentally match prefixes of larger indices:
+                #   - "down_blocks.10" contains "down_blocks.1"
+                # This silently corrupts keys and commonly leads to partially-loaded models
+                # where many parameters remain on `meta`.
+                #
+                # To avoid this, for any `src` that ends with a digit we only replace it
+                # when the next character is a dotted-path boundary or end-of-string.
+                if src and src[-1].isdigit():
+                    # Treat `src` literally; `tgt` is also literal here.
+                    new_key = re.sub(re.escape(src) + r"(?=\.|$)", tgt, new_key)
+                else:
+                    new_key = new_key.replace(src, tgt)
         return new_key
 
     @staticmethod

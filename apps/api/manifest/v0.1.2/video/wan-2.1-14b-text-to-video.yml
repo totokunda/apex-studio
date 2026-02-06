@@ -1,0 +1,304 @@
+api_version: apex/v1
+kind: Model
+type: video
+metadata:
+  id: wan-2-1-14b-text-to-video
+  model: wan
+  name: Wan 2.1 14B Text to Video
+  version: 0.1.2
+  description: Wan 2.1 14B is a 14B parameter model for text-to-video generation.
+  tags:
+  - wan
+  - t2v
+  - 14b
+  author: Wan-AI
+  license: Apache-2.0
+  demo_path: models/wan-2.1-text-to-video.mp4
+  categories:
+  - text-to-video
+spec:
+  engine: wan
+  model_type: t2v
+  engine_type: torch
+  denoise_type: base
+  default_duration_secs: 5.0
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  loras:
+  - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors
+    scale: 0.0
+    name: lightx2v_lora
+    label: Lightx2v LoRA
+    verified: true
+  - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_T2V_14B_FusionX_LoRA.safetensors
+    scale: 1.0
+    name: fusionx_lora
+    label: FusionX LoRA
+    verified: true
+  attention_types:
+  - efficient_dot_product_attention
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  fps: 16
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepSchedulerBH2
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: vae
+    label: WAN VAE
+    name: vae
+    base: wan
+    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    base: wan.base
+    label: Wan Transformer
+    config_path: totoku/apex-models/Wan2.1-T2V/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+  defaults:
+    run:
+      num_inference_steps: 8
+      guidance_scale: 5.0
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+        - - rope_on_cpu
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: lowres, text, error, cropped, worst quality, low quality, jpeg artifacts,
+        ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands,
+        poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated,
+        bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross
+        proportions, malformed limbs, missing arms, missing legs, extra arms, extra
+        legs, fused fingers, too many fingers, long neck, username, watermark, signature
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 4
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 720
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1280
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false

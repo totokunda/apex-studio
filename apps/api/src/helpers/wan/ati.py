@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from src.helpers.helpers import helpers
 
-
 def unzip_to_array(
     data: bytes, key: Union[str, List[str]] = "array"
 ) -> Union[np.ndarray, Dict[str, np.ndarray]]:
@@ -20,7 +19,6 @@ def unzip_to_array(
             for k in key:
                 get[k] = data[k]
         return get
-
 
 def process_tracks(
     tracks_np: np.ndarray, frame_size: Tuple[int, int], quant_multi: int = 8, **kwargs

@@ -1,19 +1,34 @@
 import os
+from src.utils.defaults import DEFAULT_HEADERS, get_default_headers
 from typing import Iterator, Optional, Callable
 from urllib.parse import urlparse, parse_qs
 from tenacity import retry, stop_after_attempt, wait_exponential
-from src.utils.defaults import DEFAULT_HEADERS, get_default_headers
 from logging import Logger
 from loguru import logger
 import hashlib
 from typing import Dict, Any
-import tempfile
 import traceback
 from typing import Tuple
-
+import shutil
+from huggingface_hub import hf_hub_download, snapshot_download, get_token
 ProgressCb = Callable[[int, Optional[int], Optional[str]], None]
 from tqdm import tqdm
+from tqdm.asyncio import tqdm as async_tqdm
 
+
+class HFHubCompatAsyncTqdm(async_tqdm):
+    """
+    Hugging Face Hub passes extra kwargs to tqdm (notably `name=` for group-based progress control).
+    Vanilla `tqdm`/`tqdm.asyncio.tqdm` doesn't accept them and raises:
+      "Unknown argument(s): {'name': ...}"
+
+    Must be a class (subclassable) because `huggingface_hub` may wrap it as:
+      `class _PatchedTqdm(tqdm_class): ...`
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs.pop("name", None)
+        super().__init__(*args, **kwargs)
 
 def _progress_tqdm(desc: str) -> Tuple[tqdm, ProgressCb]:
     """
@@ -86,6 +101,8 @@ class DownloadMixin:
             progress_callback = None
 
             def __init__(self, *args, **kwargs):
+                # HF Hub passes `name=` to group progress bars; tqdm doesn't accept it.
+                kwargs.pop("name", None)
                 super().__init__(*args, **kwargs)
                 self.progress_callback = progress_callback
 
@@ -165,6 +182,14 @@ class DownloadMixin:
 
             def is_complete_file(path: str) -> bool:
                 try:
+                    # Broken symlinks can "appear" in directory listings, but can't be opened.
+                    # Treat them as incomplete and delete them to avoid persistent confusion.
+                    if os.path.islink(path) and not os.path.exists(path):
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                        return False
                     if not os.path.isfile(path):
                         return False
                     if path.endswith(".part"):
@@ -1014,23 +1039,84 @@ class DownloadMixin:
     ):
         """Downloads a repository from the Hugging Face Hub."""
         try:
-            import huggingface_hub
-            import shutil
-            import requests
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            from threading import Lock
-            from huggingface_hub.utils import build_hf_headers
-            from huggingface_hub import HfApi, hf_hub_url, get_token
+            
 
             if hasattr(self, "logger"):
                 self.logger.info(f"Downloading from Hugging Face Hub: {repo_id}")
+
+            # Explicitly resolve the Hub cache dir at call time.
+            # This avoids relying on huggingface_hub's import-time constants (which may have
+            # captured an old HF_HOME/HF_HUB_CACHE before our defaults module set them).
+            hf_hub_cache_dir = (
+                os.environ.get("HF_HUB_CACHE")
+                or os.environ.get("HUGGINGFACE_HUB_CACHE")
+                or (
+                    os.path.join(
+                        os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")),
+                        "hub",
+                    )
+                )
+            )
+
+            def _hf_local_file_is_complete(path: str) -> bool:
+                try:
+                    if not os.path.isfile(path):
+                        return False
+                    if path.endswith(".part"):
+                        return False
+                    if os.path.exists(f"{path}.part"):
+                        return False
+                    return os.path.getsize(path) > 0
+                except Exception:
+                    return False
+
+            def _link_or_copy_from_cache(src: str, dst: str) -> None:
+                """
+                Materialize a cached HF file at `dst` without duplicating storage when possible.
+
+                Prefer:
+                - hardlink (no duplication, fastest)
+                - symlink (no duplication)
+                - copy (fallback)
+                """
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                try:
+                    if os.path.lexists(dst):
+                        os.remove(dst)
+                except Exception:
+                    pass
+
+                # `huggingface_hub` commonly returns a path inside the cache that is itself a
+                # symlink like: snapshots/<rev>/foo -> ../../blobs/<hash>. If we hardlink/symlink
+                # that *symlink inode* into `dst`, the relative target becomes wrong once moved,
+                # producing a "ghost" file that appears in listings but can't be opened.
+                #
+                # Always dereference to the real file first.
+                real_src = os.path.realpath(src)
+                if not os.path.isfile(real_src):
+                    raise FileNotFoundError(
+                        f"Cached source file does not exist or is not a file: {src} -> {real_src}"
+                    )
+
+                try:
+                    os.link(real_src, dst)
+                    return
+                except Exception:
+                    pass
+                try:
+                    # Use an absolute target so the link remains valid regardless of where `dst`
+                    # lives on disk.
+                    os.symlink(real_src, dst)
+                    return
+                except Exception:
+                    pass
+                shutil.copy2(real_src, dst)
 
             split_path = repo_id.split("/")
 
             looks_like_path_is_dir = False
             if self._has_file_ending(repo_id):
                 try:
-                    # fetch the specific file via signed URL and download through URL downloader
                     self.logger.info(
                         f"Downloading specific file from Hugging Face Hub: {repo_id}"
                     )
@@ -1039,92 +1125,36 @@ class DownloadMixin:
                     subfolder = (
                         f"{'/'.join(split_path[2:-1])}" if len(split_path) > 2 else None
                     )
-                    # deterministic final path based on logical repo path (not signed URL)
                     deterministic_path = os.path.join(
                         save_path,
                         f"{hashlib.sha256(repo_id.encode()).hexdigest()}_{file_name}",
                     )
-                    if os.path.exists(deterministic_path):
+                    if os.path.exists(deterministic_path) and _hf_local_file_is_complete(
+                        deterministic_path
+                    ):
                         self.logger.info(
                             f"File {deterministic_path} already exists, skipping download."
                         )
                         return deterministic_path
-                    # Build resolve URL then follow redirects to signed URL
-                    resolve_url = hf_hub_url(
-                        repo_id=base_repo, filename=file_name, subfolder=subfolder
-                    )
                     token = get_token()
-                    headers = build_hf_headers(token=token)
-                    with requests.Session() as sess:
-                        sess.headers.update(headers)
-                        head = sess.head(
-                            resolve_url,
-                            allow_redirects=True,
-                            timeout=20,
-                            verify=self._requests_verify(),
-                        )
-                        head.raise_for_status()
-                        signed_url = head.url
-                        expected_size_for_file: Optional[int] = None
+                    cached_file = hf_hub_download(
+                        repo_id=base_repo,
+                        filename=file_name,
+                        subfolder=subfolder,
+                        token=token,
+                        cache_dir=hf_hub_cache_dir,
+                        progress_cb=progress_callback,
+                        tqdm_class=HFHubCompatAsyncTqdm,
+                    )
+
+                    _link_or_copy_from_cache(cached_file, deterministic_path)
+
+                    if progress_callback is not None:
                         try:
-                            content_length = head.headers.get("content-length")
-                            if content_length:
-                                expected_size_for_file = int(content_length)
+                            sz = os.path.getsize(deterministic_path)
+                            progress_callback(int(sz), int(sz), file_name)
                         except Exception:
-                            expected_size_for_file = None
-                        # Download directly to deterministic path with resume support
-                        os.makedirs(os.path.dirname(deterministic_path), exist_ok=True)
-
-                        # Retry loop for single file download with verification
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                self._download_from_url(
-                                    url=signed_url,
-                                    save_path=os.path.dirname(deterministic_path),
-                                    progress_callback=progress_callback,
-                                    session=sess,
-                                    filename=file_name,
-                                    dest_path=deterministic_path,
-                                    expected_size=expected_size_for_file,
-                                )
-
-                                # Verify file
-                                if not os.path.exists(deterministic_path):
-                                    raise ValueError(
-                                        f"File {deterministic_path} not found after download"
-                                    )
-
-                                actual_size = os.path.getsize(deterministic_path)
-                                if actual_size == 0:
-                                    raise ValueError(
-                                        f"File {deterministic_path} is empty"
-                                    )
-
-                                # Verify content length if available
-                                content_length = head.headers.get("content-length")
-                                if content_length:
-                                    try:
-                                        expected_size = int(content_length)
-                                        if actual_size != expected_size:
-                                            raise ValueError(
-                                                f"File {deterministic_path} size mismatch: expected {expected_size}, got {actual_size}"
-                                            )
-                                    except (ValueError, TypeError):
-                                        pass
-
-                                break  # Success
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"Download failed for {file_name} (attempt {attempt+1}/{max_retries}): {e}"
-                                )
-                                if os.path.exists(deterministic_path):
-                                    try:
-                                        os.remove(deterministic_path)
-                                    except Exception:
-                                        pass
-                                if attempt == max_retries - 1:
-                                    raise e
+                            pass
                     self.logger.info(
                         f"Successfully downloaded specific file from Hugging Face Hub: {repo_id}"
                     )
@@ -1134,6 +1164,7 @@ class DownloadMixin:
                     self.logger.warning(
                         f"Failed to download specific file from Hugging Face Hub: {repo_id}"
                     )
+                    traceback.print_exc()
 
             subfolder = (
                 [f"{'/'.join(split_path[2:])}/*"] if len(split_path) > 2 else None
@@ -1145,423 +1176,32 @@ class DownloadMixin:
             else:
                 dest_path = os.path.join(save_path)
 
-            def _hf_local_file_is_complete(path: str) -> bool:
-                """Return True if the local path appears to be a fully downloaded file."""
-                try:
-                    if not os.path.isfile(path):
-                        return False
-                    if path.endswith(".part"):
-                        return False
-                    if os.path.exists(f"{path}.part"):
-                        return False
-                    # Treat 0-byte files as incomplete/corrupt for HF artifacts.
-                    return os.path.getsize(path) > 0
-                except Exception:
-                    return False
-
-            # Snapshot-style: list files, resolve signed URLs for each, download in parallel, preserve structure
-            api = HfApi()
-            all_files = api.list_repo_files(repo_id=repo_id)
-
-            # If destination already exists and is non-empty:
-            # - When downloading the whole repo (no subfolder), verify all expected files exist before skipping.
-            # - When downloading a subfolder, we will merge the staged subfolder into dest at finalize.
-            if os.path.exists(dest_path) and os.listdir(dest_path) and not subfolder:
-                try:
-                    missing = []
-                    for rel_path in all_files:
-                        local_path = os.path.join(dest_path, rel_path)
-                        if not _hf_local_file_is_complete(local_path):
-                            missing.append(rel_path)
-
-                    has_part = False
-                    for root, _dirs, files in os.walk(dest_path):
-                        if any(name.endswith(".part") for name in files):
-                            has_part = True
-                            break
-
-                    if not missing and not has_part:
-                        self.logger.info(
-                            f"Directory {dest_path} already exists and matches Hugging Face repo file list; skipping full repo re-download."
-                        )
-                        return dest_path
-
-                    preview = ", ".join(missing[:10])
-                    more = f" (+{len(missing) - 10} more)" if len(missing) > 10 else ""
-                    self.logger.warning(
-                        "Directory %s already exists but appears incomplete for Hugging Face repo %s; "
-                        "missing %d files%s%s. Proceeding to download/merge missing files.",
-                        dest_path,
-                        repo_id,
-                        len(missing),
-                        f": {preview}" if preview else "",
-                        more,
-                    )
-                    if has_part:
-                        self.logger.warning(
-                            "Directory %s contains one or more '.part' files; proceeding to download/merge missing files.",
-                            dest_path,
-                        )
-                except Exception as e:
-                    # If verification fails, do not skip: proceed with normal download path so we can correct/complete.
-                    self.logger.warning(
-                        "Failed to verify existing Hugging Face directory %s for %s (%s); proceeding with download.",
-                        dest_path,
-                        repo_id,
-                        e,
-                    )
-            # Restrict to subfolder if provided
-            subfolder_root = None
-            if subfolder:
-                sub_path = subfolder[0].rstrip("*").rstrip("/")
-                subfolder_root = sub_path
-                # If the provided path matches an exact file in the repo, restrict to that file
-                if sub_path in all_files:
-                    all_files = [sub_path]
-                else:
-                    # Otherwise treat as a folder prefix
-                    prefix = f"{sub_path}/" if sub_path else ""
-                    all_files = [p for p in all_files if p.startswith(prefix)]
-            if not all_files:
-                self.logger.warning(f"No files found in repository: {repo_id}")
-                if subfolder:
-                    return os.path.join(dest_path, *subfolder).rstrip("*")
-                return dest_path
-
-            # If destination already exists, only download files that are missing/incomplete.
-            files_to_resolve = all_files
-            if os.path.exists(dest_path):
-                try:
-                    needed = []
-                    skipped = 0
-                    for rel_path in all_files:
-                        local_path = os.path.join(dest_path, rel_path)
-                        if _hf_local_file_is_complete(local_path):
-                            skipped += 1
-                            continue
-                        needed.append(rel_path)
-                    files_to_resolve = needed
-
-                    if skipped:
-                        self.logger.info(
-                            "Hugging Face repo %s already has %d/%d files present locally; only downloading missing/incomplete files.",
-                            repo_id,
-                            skipped,
-                            len(all_files),
-                        )
-
-                    if not files_to_resolve:
-                        # Nothing to do; everything we expect is already present locally.
-                        return (
-                            dest_path
-                            if not subfolder
-                            else os.path.join(dest_path, *subfolder).rstrip("*")
-                        )
-                except Exception as e:
-                    self.logger.warning(
-                        "Failed to compute missing/incomplete Hugging Face files for %s (%s); proceeding with full file list.",
-                        repo_id,
-                        e,
-                    )
-                    files_to_resolve = all_files
-
-            # Prepare session and headers
             token = get_token()
-            headers = build_hf_headers(token=token)
-            session = requests.Session()
-            session.headers.update(headers)
-            # First, resolve signed URLs and collect sizes to compute total
-            file_entries = []
-            total_size = 0
-            for rel_path in files_to_resolve:
-                # Split into subdir and filename
-                filename = os.path.basename(rel_path)
-                rel_dir = os.path.dirname(rel_path)
-                resolve_url = hf_hub_url(
-                    repo_id=repo_id, filename=filename, subfolder=rel_dir or None
+            # Avoid duplicating storage: populate `dest_path` using symlinks to the HF cache
+            # (or copy only if symlinks are unsupported).
+            try:
+                snapshot_download(
+                    repo_id=repo_id,
+                    allow_patterns=subfolder,
+                    token=token,
+                    cache_dir=hf_hub_cache_dir,
+                    local_dir=dest_path,
+                    local_dir_use_symlinks="auto",
+                    progress_cb=progress_callback,
+                    tqdm_class=HFHubCompatAsyncTqdm,
                 )
-                try:
-                    head = session.head(
-                        resolve_url,
-                        allow_redirects=True,
-                        timeout=20,
-                        verify=self._requests_verify(),
-                    )
-                    head.raise_for_status()
-                    signed_url = head.url
-                    size = None
-                    try:
-                        size = int(head.headers.get("content-length", "0")) or None
-                    except Exception:
-                        size = None
-                    if size:
-                        total_size += size
-                    file_entries.append((rel_path, filename, rel_dir, signed_url, size))
-                except Exception as e:
-                    self.logger.error(
-                        f"Failed to resolve signed URL for {rel_path} in {repo_id}: {e}"
-                    )
-            if not file_entries:
-                self.logger.warning(
-                    f"No downloadable files resolved in repository: {repo_id}"
+            except TypeError:
+                # Backward compat with older huggingface_hub signatures.
+                snapshot_download(
+                    repo_id=repo_id,
+                    allow_patterns=subfolder,
+                    token=token,
+                    cache_dir=hf_hub_cache_dir,
+                    local_dir=dest_path,
+                    progress_cb=progress_callback,
+                    tqdm_class=HFHubCompatAsyncTqdm,
                 )
-                if subfolder:
-                    return os.path.join(dest_path, *subfolder).rstrip("*")
-                return dest_path
 
-            # Per-file progress callback factory.
-            # If caller did not supply a callback, default to a tqdm-based callback.
-            def make_cb(rel_path: str, size_hint: Optional[int]):
-                label = os.path.basename(rel_path)
-
-                # If no callback provided, use a per-file tqdm bar
-                if progress_callback is None:
-                    bar, cb = _progress_tqdm(label)
-
-                    def _cb(
-                        n: int, _total: Optional[int], _label: Optional[str] = None
-                    ):
-                        # Drive tqdm and let it infer/receive totals when available
-                        cb(int(n), _total if _total is not None else size_hint, _label)
-
-                    return bar, _cb
-
-                # Otherwise, wrap the provided callback to ensure consistent signature
-                def _cb(n: int, _total: Optional[int], _label: Optional[str] = None):
-                    try:
-                        progress_callback(
-                            int(n),
-                            _total if _total is not None else size_hint,
-                            _label or label,
-                        )
-                    except Exception:
-                        pass
-
-                return None, _cb
-
-            # Download in parallel to temp (staging dir), then move the entire directory into dest_path atomically
-            with tempfile.TemporaryDirectory() as tmp_root:
-                stage_dir = os.path.join(tmp_root, os.path.basename(dest_path))
-                os.makedirs(stage_dir, exist_ok=True)
-                futures = []
-
-                # Control HF parallelism via env vars.
-                # - When Rust downloader is enabled, default HF concurrency to 1 to reduce rate limiting.
-                # - When not using Rust, keep the existing parallel default (8) but make it configurable.
-                def _bool_env(name: str, default: bool = True) -> bool:
-                    try:
-                        v = os.environ.get(name)
-                        if v is None:
-                            return default
-                        return str(v).strip().lower() not in ("0", "false", "no", "off")
-                    except Exception:
-                        return default
-
-                def _int_env(name: str, default: int) -> int:
-                    try:
-                        v = os.environ.get(name)
-                        if v is None:
-                            return int(default)
-                        return int(str(v).strip())
-                    except Exception:
-                        return int(default)
-
-                rust_enabled = False
-                try:
-                    # Match the Rust fast-path gating in `_download_from_url`.
-                    from apex_download_rs import download_from_url as _rs_download_from_url  # type: ignore
-
-                    rust_enabled = _rs_download_from_url is not None and _bool_env(
-                        "APEX_USE_RUST_DOWNLOAD", True
-                    )
-                except Exception:
-                    rust_enabled = False
-
-                default_workers = 1 if rust_enabled else 8
-                env_var = (
-                    "APEX_HF_RUST_MAX_SIMULTANEOUS_DOWNLOADS"
-                    if rust_enabled
-                    else "APEX_HF_MAX_SIMULTANEOUS_DOWNLOADS"
-                )
-                max_workers = _int_env(env_var, default_workers)
-                # Clamp to a safe range
-                if max_workers < 1:
-                    max_workers = 1
-                max_workers = min(max_workers, len(file_entries))
-
-                if hasattr(self, "logger") and rust_enabled and max_workers > 1:
-                    self.logger.warning(
-                        "Rust downloader is enabled and Hugging Face parallelism is set to %d via %s. "
-                        "Higher parallelism can increase the risk of Hugging Face rate limits.",
-                        max_workers,
-                        env_var,
-                    )
-
-                with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                    for rel_path, filename, rel_dir, signed_url, _size in file_entries:
-                        final_dir = (
-                            os.path.join(stage_dir, rel_dir) if rel_dir else stage_dir
-                        )
-                        final_path = os.path.join(final_dir, filename)
-                        # Skip if already present in staging (e.g., duplicate entries)
-                        if os.path.exists(final_path):
-                            if progress_callback:
-                                try:
-                                    size_inc = (
-                                        _size
-                                        if _size is not None
-                                        else os.path.getsize(final_path)
-                                    )
-                                    if size_inc:
-                                        progress_callback(size_inc, size_inc, filename)
-                                except Exception:
-                                    pass
-                            continue
-                        os.makedirs(final_dir, exist_ok=True)
-
-                        # Each task downloads directly into staged final path with resume support
-                        def task(
-                            rel_path=rel_path,
-                            filename=filename,
-                            signed_url=signed_url,
-                            rel_dir=rel_dir,
-                            final_dir=final_dir,
-                            expected_size=_size,
-                        ):
-                            tmp_dir = (
-                                os.path.join(tmp_root, "files_tmp", rel_dir)
-                                if rel_dir
-                                else os.path.join(tmp_root, "files_tmp")
-                            )
-                            os.makedirs(tmp_dir, exist_ok=True)
-                            dest_file = os.path.join(final_dir, filename)
-
-                            max_retries = 3
-                            bar, cb = make_cb(rel_path, expected_size)
-                            try:
-                                for attempt in range(max_retries):
-                                    try:
-                                        self._download_from_url(
-                                            url=signed_url,
-                                            save_path=tmp_dir,
-                                            progress_callback=cb,
-                                            session=session,
-                                            filename=filename,
-                                            dest_path=dest_file,
-                                            expected_size=expected_size,
-                                        )
-
-                                        # Verification
-                                        if not os.path.exists(dest_file):
-                                            raise ValueError(
-                                                f"File {dest_file} not found after download"
-                                            )
-
-                                        actual_size = os.path.getsize(dest_file)
-                                        if actual_size == 0:
-                                            raise ValueError(
-                                                f"File {dest_file} is empty"
-                                            )
-
-                                        if (
-                                            expected_size is not None
-                                            and actual_size != expected_size
-                                        ):
-                                            raise ValueError(
-                                                f"File {dest_file} size mismatch: expected {expected_size}, got {actual_size}"
-                                            )
-
-                                        return dest_file
-
-                                    except Exception as e:
-                                        if attempt < max_retries - 1:
-                                            if hasattr(self, "logger"):
-                                                self.logger.warning(
-                                                    f"Download failed for {filename} (attempt {attempt+1}/{max_retries}): {e}"
-                                                )
-
-                                        if os.path.exists(dest_file):
-                                            try:
-                                                os.remove(dest_file)
-                                            except Exception:
-                                                pass
-
-                                        if attempt == max_retries - 1:
-                                            raise e
-                            finally:
-                                try:
-                                    if bar is not None:
-                                        bar.close()
-                                except Exception:
-                                    pass
-
-                        futures.append(ex.submit(task))
-                    # ensure completion
-                    for _ in as_completed(futures):
-                        pass
-                # After all downloads have completed successfully, move results into dest_path:
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                try:
-                    if os.path.exists(dest_path):
-                        # Merge staged content into existing destination without introducing empty dirs:
-                        # - move only completed files (non-.part)
-                        # - create parent dirs only when moving a file
-                        # - skip overwriting existing complete files (but overwrite incomplete/partial ones)
-                        files_to_move = []
-                        for root, _dirs, files in os.walk(stage_dir):
-                            for f in files:
-                                if f.endswith(".part"):
-                                    continue
-                                src_f = os.path.join(root, f)
-                                if not os.path.isfile(src_f):
-                                    continue
-                                files_to_move.append(src_f)
-                        for src_f in files_to_move:
-                            rel = os.path.relpath(src_f, stage_dir)
-                            dst_f = os.path.join(dest_path, rel)
-                            if os.path.exists(dst_f) and _hf_local_file_is_complete(
-                                dst_f
-                            ):
-                                continue
-                            os.makedirs(os.path.dirname(dst_f), exist_ok=True)
-                            try:
-                                os.replace(src_f, dst_f)
-                            except Exception:
-                                shutil.move(src_f, dst_f)
-                            # If a stale partial exists next to the finalized file, remove it.
-                            try:
-                                part_candidate = f"{dst_f}.part"
-                                if os.path.exists(part_candidate):
-                                    os.remove(part_candidate)
-                            except Exception:
-                                pass
-                        # Cleanup any empty directories left in staging
-                        for root, dirs, files in os.walk(stage_dir, topdown=False):
-                            for name in files:
-                                # remove stray .part files from staging
-                                if name.endswith(".part"):
-                                    try:
-                                        os.remove(os.path.join(root, name))
-                                    except Exception:
-                                        pass
-                            try:
-                                os.rmdir(root)
-                            except Exception:
-                                pass
-                        self.logger.info(
-                            f"Merged staged Hugging Face files into existing destination: {dest_path}"
-                        )
-                    else:
-                        try:
-                            os.replace(
-                                stage_dir, dest_path
-                            )  # atomic on same filesystem when dest does not exist
-                        except Exception:
-                            shutil.move(stage_dir, dest_path)
-                except Exception as e:
-                    self.logger.error(
-                        f"Failed to finalize Hugging Face download into {dest_path}: {e}"
-                    )
             if hasattr(self, "logger"):
                 self.logger.info(
                     f"Successfully downloaded from Hugging Face Hub: {repo_id}"
@@ -1763,7 +1403,11 @@ class DownloadMixin:
         # Build base headers (may be extended for specific providers like CivitAI)
         base_headers = dict(get_default_headers(url))
         # Prefer identity encoding so byte counts match file writes (and avoid decompression overhead).
-        base_headers.setdefault("Accept-Encoding", "identity")
+        #
+        # IMPORTANT: force override (not setdefault). Some environments/libraries may inject
+        # `Accept-Encoding` defaults that can break byte-range resuming due to on-the-fly
+        # compression/decoding at intermediaries.
+        base_headers["Accept-Encoding"] = "identity"
 
         # Compute deterministic destination
         if dest_path:
@@ -2133,7 +1777,8 @@ class DownloadMixin:
                 if cookie_header:
                     headers_for_rust["Cookie"] = cookie_header
                 # Prefer identity encoding so byte counts match file writes (and avoid decompression overhead).
-                headers_for_rust.setdefault("Accept-Encoding", "identity")
+                # Same reasoning as Python path: ensure byte ranges map to raw file bytes.
+                headers_for_rust["Accept-Encoding"] = "identity"
 
                 # Throttle callbacks to avoid Python-call overhead becoming the bottleneck.
                 callback_interval = float(
@@ -2515,9 +2160,14 @@ class DownloadMixin:
                         continue
                 break
 
+            ignored_range_resume = False
             with response:
                 # If we attempted to resume but server responded with 200, it ignored Range.
-                # If we know total size and resume already matches it, finalize; otherwise restart from scratch.
+                #
+                # Do NOT delete the partial and restart from scratch. Instead, fall back to a
+                # "nearest starting point" strategy: keep the existing `.part` prefix and
+                # skip over the already-downloaded bytes from the response stream before
+                # appending the remainder.
                 if (
                     resume_size > 0
                     and response.status_code == 200
@@ -2550,16 +2200,12 @@ class DownloadMixin:
                         except Exception:
                             pass
                         resume_size = 0
-                    # Server does not support resume; restart download from scratch
-                    self.logger.warning(
-                        "Server did not honor Range header; restarting download from scratch."
-                    )
-                    try:
-                        if os.path.exists(part_path):
-                            os.remove(part_path)
-                    except Exception:
-                        pass
-                    resume_size = 0
+                    else:
+                        ignored_range_resume = True
+                        self.logger.warning(
+                            "Server did not honor Range header; keeping partial file and "
+                            "skipping already-downloaded bytes from the response stream."
+                        )
 
                 response.raise_for_status()
 
@@ -2577,9 +2223,13 @@ class DownloadMixin:
                 if total_size is None:
                     try:
                         cl = int(response.headers.get("content-length", "0"))
-                        computed_total = (
-                            cl + resume_size if cl and resume_size else (cl or None)
-                        )
+                        # For `206 Partial Content`, content-length is the remaining bytes.
+                        # For `200 OK` (including the "ignored Range" fallback), content-length
+                        # is typically the full size; do not add resume_size again.
+                        if cl and resume_size and response.status_code == 206:
+                            computed_total = cl + resume_size
+                        else:
+                            computed_total = cl or None
                         total_size = (
                             int(expected_size)
                             if expected_size is not None
@@ -2625,9 +2275,18 @@ class DownloadMixin:
 
                     # Reading strategy: fixed-size via iter_content, or adaptive via response.raw.read
                     if not adaptive:
+                        skip_remaining = resume_size if ignored_range_resume and resume_size > 0 else 0
                         for chunk in response.iter_content(chunk_size=chunk_size):
                             if not chunk:
                                 continue
+                            if skip_remaining:
+                                # Discard already-present prefix bytes (best-effort: byte-accurate
+                                # because we force Accept-Encoding: identity).
+                                if len(chunk) <= skip_remaining:
+                                    skip_remaining -= len(chunk)
+                                    continue
+                                chunk = chunk[skip_remaining:]
+                                skip_remaining = 0
                             out.write(chunk)
                             chunk_len = len(chunk)
                             bar.update(chunk_len)
@@ -2655,6 +2314,7 @@ class DownloadMixin:
                         )
                         speed_bps: Optional[float] = None
                         # If resuming and total is known, send an initial callback already done above
+                        skip_remaining = resume_size if ignored_range_resume and resume_size > 0 else 0
                         while True:
                             t0 = time.perf_counter()
                             try:
@@ -2666,6 +2326,12 @@ class DownloadMixin:
                                 ):
                                     if not chunk:
                                         continue
+                                    if skip_remaining:
+                                        if len(chunk) <= skip_remaining:
+                                            skip_remaining -= len(chunk)
+                                            continue
+                                        chunk = chunk[skip_remaining:]
+                                        skip_remaining = 0
                                     out.write(chunk)
                                     chunk_len = len(chunk)
                                     bar.update(chunk_len)
@@ -2686,6 +2352,12 @@ class DownloadMixin:
                                 break
                             if not data:
                                 break
+                            if skip_remaining:
+                                if len(data) <= skip_remaining:
+                                    skip_remaining -= len(data)
+                                    continue
+                                data = data[skip_remaining:]
+                                skip_remaining = 0
                             out.write(data)
                             chunk_len = len(data)
                             bar.update(chunk_len)

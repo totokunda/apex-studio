@@ -1,1124 +1,1109 @@
-# Copyright 2025 The Lightricks team and The HuggingFace Team.
-# All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-from typing import Optional, Tuple, Union
+from dataclasses import replace
+from typing import Any, Callable, Iterator, List, Optional, Tuple
 
 import torch
-import torch.nn as nn
+from einops import rearrange
+from torch import nn
 
-from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.loaders import FromOriginalModelMixin
-from diffusers.utils.accelerate_utils import apply_forward_hook
-from diffusers.models.activations import get_activation
-from diffusers.models.modeling_outputs import AutoencoderKLOutput
-from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings
-from diffusers.models.autoencoders.vae import (
-    AutoencoderMixin,
-    DecoderOutput,
-    DiagonalGaussianDistribution,
+from src.vae.ltx2.normalization import PixelNorm
+from src.transformer.ltx2.base.model import PixArtAlphaCombinedTimestepSizeEmbeddings
+from src.vae.ltx2.convolution import make_conv_nd
+from src.vae.ltx2.enums import LogVarianceType, NormLayerType, PaddingModeType
+from src.vae.ltx2.ops import patchify, unpatchify
+from src.vae.ltx2.resnet import ResnetBlock3D, UNetMidBlock3D
+from src.vae.ltx2.sampling import DepthToSpaceUpsample, SpaceToDepthDownsample
+from src.vae.ltx2.tiling import (
+    DEFAULT_MAPPING_OPERATION,
+    DEFAULT_SPLIT_OPERATION,
+    DimensionIntervals,
+    MappingOperation,
+    SplitOperation,
+    Tile,
+    TilingConfig,
+    compute_trapezoidal_mask_1d,
+    create_tiles,
 )
 from tqdm import tqdm
 
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.models.modeling_utils import ModelMixin
 
-class PerChannelRMSNorm(nn.Module):
+from src.engine.ltx22.shared.types import SpatioTemporalScaleFactors, VideoLatentShape
+
+
+def _ltx2_downsample_type_to_encoder_block_name(downsample_type: str) -> str:
     """
-    Per-pixel (per-location) RMS normalization layer.
+    Map diffusers-style LTX2 VAE `downsample_type` entries to this module's encoder block names.
 
-    For each element along the chosen dimension, this layer normalizes the tensor by the root-mean-square of its values
-    across that dimension:
-
-        y = x / sqrt(mean(x^2, dim=dim, keepdim=True) + eps)
+    Observed values:
+    - "spatial" -> downsample H,W
+    - "temporal" -> downsample F
+    - "spatiotemporal" -> downsample F,H,W
     """
-
-    def __init__(self, channel_dim: int = 1, eps: float = 1e-8) -> None:
-        """
-        Args:
-            dim: Dimension along which to compute the RMS (typically channels).
-            eps: Small constant added for numerical stability.
-        """
-        super().__init__()
-        self.channel_dim = channel_dim
-        self.eps = eps
-
-    def forward(self, x: torch.Tensor, channel_dim: Optional[int] = None) -> torch.Tensor:
-        """
-        Apply RMS normalization along the configured dimension.
-        """
-        channel_dim = channel_dim or self.channel_dim
-        # Compute mean of squared values along `dim`, keep dimensions for broadcasting.
-        mean_sq = torch.mean(x**2, dim=self.channel_dim, keepdim=True)
-        # Normalize by the root-mean-square (RMS).
-        rms = torch.sqrt(mean_sq + self.eps)
-        return x / rms
+    mapping = {
+        "spatial": "compress_space_res",
+        "temporal": "compress_time_res",
+        "spatiotemporal": "compress_all_res",
+    }
+    if downsample_type not in mapping:
+        raise ValueError(f"Unsupported downsample_type={downsample_type!r}. Expected one of {sorted(mapping)}.")
+    return mapping[downsample_type]
 
 
-# Like LTXCausalConv3d, but whether causal inference is performed can be specified at runtime
-class LTX2VideoCausalConv3d(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: Union[int, Tuple[int, int, int]] = 3,
-        stride: Union[int, Tuple[int, int, int]] = 1,
-        dilation: Union[int, Tuple[int, int, int]] = 1,
-        groups: int = 1,
-        spatial_padding_mode: str = "zeros",
-    ):
-        super().__init__()
+def _ltx2_build_encoder_blocks(
+    *,
+    layers_per_block: List[int],
+    downsample_type: List[str],
+    spatio_temporal_scaling: Optional[List[bool]] = None,
+    multiplier: int = 2,
+) -> List[list[Any]]:
+    """
+    Convert diffusers-style encoder description into our `VideoEncoder.encoder_blocks` format.
 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size, kernel_size)
-
-        dilation = dilation if isinstance(dilation, tuple) else (dilation, 1, 1)
-        stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
-        height_pad = self.kernel_size[1] // 2
-        width_pad = self.kernel_size[2] // 2
-        padding = (0, height_pad, width_pad)
-
-        self.conv = nn.Conv3d(
-            in_channels,
-            out_channels,
-            self.kernel_size,
-            stride=stride,
-            dilation=dilation,
-            groups=groups,
-            padding=padding,
-            padding_mode=spatial_padding_mode,
+    Pattern:
+      res_x(layers_per_block[0]),
+      downsample(downsample_type[0]),
+      res_x(layers_per_block[1]),
+      ...
+      res_x(layers_per_block[-1])
+    """
+    if len(layers_per_block) != len(downsample_type) + 1:
+        raise ValueError(
+            "Expected len(layers_per_block) == len(downsample_type) + 1, "
+            f"got {len(layers_per_block)} vs {len(downsample_type)}."
+        )
+    if spatio_temporal_scaling is not None and len(spatio_temporal_scaling) != len(downsample_type):
+        raise ValueError(
+            "If provided, expected len(spatio_temporal_scaling) == len(downsample_type), "
+            f"got {len(spatio_temporal_scaling)} vs {len(downsample_type)}."
         )
 
-    def forward(self, hidden_states: torch.Tensor, causal: bool = True) -> torch.Tensor:
-        time_kernel_size = self.kernel_size[0]
+    blocks: List[list[Any]] = []
+    for i, num_layers in enumerate(layers_per_block):
+        blocks.append(["res_x", {"num_layers": int(num_layers)}])
+        if i >= len(downsample_type):
+            continue
 
-        if causal:
-            pad_left = hidden_states[:, :, :1, :, :].repeat((1, 1, time_kernel_size - 1, 1, 1))
-            hidden_states = torch.concatenate([pad_left, hidden_states], dim=2)
-        else:
-            pad_left = hidden_states[:, :, :1, :, :].repeat((1, 1, (time_kernel_size - 1) // 2, 1, 1))
-            pad_right = hidden_states[:, :, -1:, :, :].repeat((1, 1, (time_kernel_size - 1) // 2, 1, 1))
-            hidden_states = torch.concatenate([pad_left, hidden_states, pad_right], dim=2)
+        should_scale = True if spatio_temporal_scaling is None else bool(spatio_temporal_scaling[i])
+        if not should_scale:
+            continue
 
-        hidden_states = self.conv(hidden_states)
-        return hidden_states
+        blocks.append(
+            [
+                _ltx2_downsample_type_to_encoder_block_name(downsample_type[i]),
+                {"multiplier": int(multiplier)},
+            ]
+        )
+
+    return blocks
 
 
-# Like LTXVideoResnetBlock3d, but uses new causal Conv3d, normal Conv3d for the conv_shortcut, and the spatial padding
-# mode is configurable
-class LTX2VideoResnetBlock3d(nn.Module):
-    r"""
-    A 3D ResNet block used in the LTX 2.0 audiovisual model.
-
-    Args:
-        in_channels (`int`):
-            Number of input channels.
-        out_channels (`int`, *optional*):
-            Number of output channels. If None, defaults to `in_channels`.
-        dropout (`float`, defaults to `0.0`):
-            Dropout rate.
-        eps (`float`, defaults to `1e-6`):
-            Epsilon value for normalization layers.
-        elementwise_affine (`bool`, defaults to `False`):
-            Whether to enable elementwise affinity in the normalization layers.
-        non_linearity (`str`, defaults to `"swish"`):
-            Activation function to use.
-        conv_shortcut (bool, defaults to `False`):
-            Whether or not to use a convolution shortcut.
+def _ltx2_build_decoder_blocks(
+    *,
+    decoder_layers_per_block: List[int],
+    decoder_inject_noise: List[bool],
+    upsample_factor: List[int],
+    upsample_residual: List[bool],
+    decoder_spatio_temporal_scaling: Optional[List[bool]] = None,
+) -> List[list[Any]]:
     """
+    Convert diffusers-style decoder description into our `VideoDecoder.decoder_blocks` format.
 
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: Optional[int] = None,
-        dropout: float = 0.0,
-        eps: float = 1e-6,
-        elementwise_affine: bool = False,
-        non_linearity: str = "swish",
-        inject_noise: bool = False,
-        timestep_conditioning: bool = False,
-        spatial_padding_mode: str = "zeros",
-    ) -> None:
-        super().__init__()
+    Pattern:
+      res_x(...),
+      compress_all(...),
+      res_x(...),
+      ...
+    """
+    if len(decoder_layers_per_block) != len(decoder_inject_noise):
+        raise ValueError(
+            "Expected len(decoder_layers_per_block) == len(decoder_inject_noise), "
+            f"got {len(decoder_layers_per_block)} vs {len(decoder_inject_noise)}."
+        )
+    if len(upsample_factor) != len(upsample_residual):
+        raise ValueError(
+            "Expected len(upsample_factor) == len(upsample_residual), "
+            f"got {len(upsample_factor)} vs {len(upsample_residual)}."
+        )
+    if len(upsample_factor) != len(decoder_layers_per_block) - 1:
+        raise ValueError(
+            "Expected len(upsample_factor) == len(decoder_layers_per_block) - 1, "
+            f"got {len(upsample_factor)} vs {len(decoder_layers_per_block)}."
+        )
+    if decoder_spatio_temporal_scaling is not None and len(decoder_spatio_temporal_scaling) != len(upsample_factor):
+        raise ValueError(
+            "If provided, expected len(decoder_spatio_temporal_scaling) == len(upsample_factor), "
+            f"got {len(decoder_spatio_temporal_scaling)} vs {len(upsample_factor)}."
+        )
 
-        out_channels = out_channels or in_channels
+    blocks: List[list[Any]] = []
+    for i, num_layers in enumerate(decoder_layers_per_block):
+        blocks.append(
+            [
+                "res_x",
+                {"num_layers": int(num_layers), "inject_noise": bool(decoder_inject_noise[i])},
+            ]
+        )
+        if i >= len(upsample_factor):
+            continue
 
-        self.nonlinearity = get_activation(non_linearity)
+        should_scale = True if decoder_spatio_temporal_scaling is None else bool(decoder_spatio_temporal_scaling[i])
+        if not should_scale:
+            continue
 
-        self.norm1 = PerChannelRMSNorm()
-        self.conv1 = LTX2VideoCausalConv3d(
+        blocks.append(
+            [
+                "compress_all",
+                {
+                    "residual": bool(upsample_residual[i]),
+                    "multiplier": int(upsample_factor[i]),
+                },
+            ]
+        )
+
+    return blocks
+
+
+def convert_diffusers_ltx2_vae_config_to_causal_video_autoencoder_config(diffusers_config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Convert a diffusers-style LTX2 VAE config (AutoencoderKLLTX2Video) into a dict that looks like the
+    CausalVideoAutoencoder config consumed by `VideoEncoderConfigurator`/`VideoDecoderConfigurator`.
+    """
+    in_channels = int(diffusers_config.get("in_channels", 3))
+    out_channels = int(diffusers_config.get("out_channels", 3))
+    latent_channels = int(diffusers_config.get("latent_channels", 128))
+    patch_size = int(diffusers_config.get("patch_size", 4))
+
+    encoder_blocks = _ltx2_build_encoder_blocks(
+        layers_per_block=list(diffusers_config.get("layers_per_block", [])),
+        downsample_type=list(diffusers_config.get("downsample_type", [])),
+        spatio_temporal_scaling=diffusers_config.get("spatio_temporal_scaling"),
+    )
+    decoder_blocks = _ltx2_build_decoder_blocks(
+        decoder_layers_per_block=list(diffusers_config.get("decoder_layers_per_block", [])),
+        decoder_inject_noise=list(diffusers_config.get("decoder_inject_noise", [])),
+        upsample_factor=list(diffusers_config.get("upsample_factor", [])),
+        upsample_residual=list(diffusers_config.get("upsample_residual", [])),
+        decoder_spatio_temporal_scaling=diffusers_config.get("decoder_spatio_temporal_scaling"),
+    )
+
+    block_out_channels = diffusers_config.get("block_out_channels") or []
+    decoder_block_out_channels = diffusers_config.get("decoder_block_out_channels") or []
+    encoder_base_channels = int(block_out_channels[0] // 2) if block_out_channels else int(latent_channels)
+    decoder_base_channels = (
+        int(decoder_block_out_channels[0] // 2) if decoder_block_out_channels else int(encoder_base_channels)
+    )
+
+    raw_scaling_factor = diffusers_config.get("scaling_factor", 1.0)
+    try:
+        scaling_factor_f = float(raw_scaling_factor)
+        scaling_factor: float | int = int(scaling_factor_f) if scaling_factor_f.is_integer() else scaling_factor_f
+    except (TypeError, ValueError):
+        scaling_factor = raw_scaling_factor
+
+    return {
+        "_class_name": "CausalVideoAutoencoder",
+        "dims": 3,
+        "in_channels": in_channels,
+        "out_channels": out_channels,
+        "latent_channels": latent_channels,
+        "encoder_blocks": encoder_blocks,
+        "decoder_blocks": decoder_blocks,
+        "scaling_factor": scaling_factor,
+        "norm_layer": "pixel_norm",
+        "patch_size": patch_size,
+        "latent_log_var": "uniform",
+        "use_quant_conv": False,
+        "causal_decoder": bool(diffusers_config.get("decoder_causal", False)),
+        "timestep_conditioning": bool(diffusers_config.get("timestep_conditioning", False)),
+        "normalize_latent_channels": False,
+        "encoder_base_channels": encoder_base_channels,
+        "decoder_base_channels": decoder_base_channels,
+    }
+
+
+def _as_padding_mode(mode: PaddingModeType | str) -> PaddingModeType:
+    if isinstance(mode, PaddingModeType):
+        return mode
+    return PaddingModeType(mode)
+
+def _make_encoder_block(
+    block_name: str,
+    block_config: dict[str, Any],
+    in_channels: int,
+    convolution_dimensions: int,
+    norm_layer: NormLayerType,
+    norm_num_groups: int,
+    spatial_padding_mode: PaddingModeType,
+) -> Tuple[nn.Module, int]:
+    out_channels = in_channels
+
+    if block_name == "res_x":
+        block = UNetMidBlock3D(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            num_layers=block_config["num_layers"],
+            resnet_eps=1e-6,
+            resnet_groups=norm_num_groups,
+            norm_layer=norm_layer,
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    elif block_name == "res_x_y":
+        out_channels = in_channels * block_config.get("multiplier", 2)
+        block = ResnetBlock3D(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            eps=1e-6,
+            groups=norm_num_groups,
+            norm_layer=norm_layer,
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    elif block_name == "compress_time":
+        block = make_conv_nd(
+            dims=convolution_dimensions,
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=3,
+            stride=(2, 1, 1),
+            causal=True,
             spatial_padding_mode=spatial_padding_mode,
         )
-
-        self.norm2 = PerChannelRMSNorm()
-        self.dropout = nn.Dropout(dropout)
-        self.conv2 = LTX2VideoCausalConv3d(
-            in_channels=out_channels,
-            out_channels=out_channels,
-            kernel_size=3,
-            spatial_padding_mode=spatial_padding_mode,
-        )
-
-        self.norm3 = None
-        self.conv_shortcut = None
-        if in_channels != out_channels:
-            self.norm3 = nn.LayerNorm(in_channels, eps=eps, elementwise_affine=True, bias=True)
-            # LTX 2.0 uses a normal nn.Conv3d here rather than LTXVideoCausalConv3d
-            self.conv_shortcut = nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1)
-
-        self.per_channel_scale1 = None
-        self.per_channel_scale2 = None
-        if inject_noise:
-            self.per_channel_scale1 = nn.Parameter(torch.zeros(in_channels, 1, 1))
-            self.per_channel_scale2 = nn.Parameter(torch.zeros(in_channels, 1, 1))
-
-        self.scale_shift_table = None
-        if timestep_conditioning:
-            self.scale_shift_table = nn.Parameter(torch.randn(4, in_channels) / in_channels**0.5)
-
-    def forward(
-        self,
-        inputs: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
-        generator: Optional[torch.Generator] = None,
-        causal: bool = True,
-    ) -> torch.Tensor:
-        hidden_states = inputs
-
-        hidden_states = self.norm1(hidden_states)
-
-        if self.scale_shift_table is not None:
-            temb = temb.unflatten(1, (4, -1)) + self.scale_shift_table[None, ..., None, None, None]
-            shift_1, scale_1, shift_2, scale_2 = temb.unbind(dim=1)
-            hidden_states = hidden_states * (1 + scale_1) + shift_1
-
-        hidden_states = self.nonlinearity(hidden_states)
-        hidden_states = self.conv1(hidden_states, causal=causal)
-
-        if self.per_channel_scale1 is not None:
-            spatial_shape = hidden_states.shape[-2:]
-            spatial_noise = torch.randn(
-                spatial_shape, generator=generator, device=hidden_states.device, dtype=hidden_states.dtype
-            )[None]
-            hidden_states = hidden_states + (spatial_noise * self.per_channel_scale1)[None, :, None, ...]
-
-        hidden_states = self.norm2(hidden_states)
-
-        if self.scale_shift_table is not None:
-            hidden_states = hidden_states * (1 + scale_2) + shift_2
-
-        hidden_states = self.nonlinearity(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.conv2(hidden_states, causal=causal)
-
-        if self.per_channel_scale2 is not None:
-            spatial_shape = hidden_states.shape[-2:]
-            spatial_noise = torch.randn(
-                spatial_shape, generator=generator, device=hidden_states.device, dtype=hidden_states.dtype
-            )[None]
-            hidden_states = hidden_states + (spatial_noise * self.per_channel_scale2)[None, :, None, ...]
-
-        if self.norm3 is not None:
-            inputs = self.norm3(inputs.movedim(1, -1)).movedim(-1, 1)
-
-        if self.conv_shortcut is not None:
-            inputs = self.conv_shortcut(inputs)
-
-        hidden_states = hidden_states + inputs
-        return hidden_states
-
-
-# Like LTX 1.0 LTXVideoDownsampler3d, but uses new causal Conv3d
-class LTXVideoDownsampler3d(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        stride: Union[int, Tuple[int, int, int]] = 1,
-        spatial_padding_mode: str = "zeros",
-    ) -> None:
-        super().__init__()
-
-        self.stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
-        self.group_size = (in_channels * stride[0] * stride[1] * stride[2]) // out_channels
-
-        out_channels = out_channels // (self.stride[0] * self.stride[1] * self.stride[2])
-
-        self.conv = LTX2VideoCausalConv3d(
+    elif block_name == "compress_space":
+        block = make_conv_nd(
+            dims=convolution_dimensions,
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=3,
-            stride=1,
+            stride=(1, 2, 2),
+            causal=True,
             spatial_padding_mode=spatial_padding_mode,
         )
-
-    def forward(self, hidden_states: torch.Tensor, causal: bool = True) -> torch.Tensor:
-        hidden_states = torch.cat([hidden_states[:, :, : self.stride[0] - 1], hidden_states], dim=2)
-
-        residual = (
-            hidden_states.unflatten(4, (-1, self.stride[2]))
-            .unflatten(3, (-1, self.stride[1]))
-            .unflatten(2, (-1, self.stride[0]))
-        )
-        residual = residual.permute(0, 1, 3, 5, 7, 2, 4, 6).flatten(1, 4)
-        residual = residual.unflatten(1, (-1, self.group_size))
-        residual = residual.mean(dim=2)
-
-        hidden_states = self.conv(hidden_states, causal=causal)
-        hidden_states = (
-            hidden_states.unflatten(4, (-1, self.stride[2]))
-            .unflatten(3, (-1, self.stride[1]))
-            .unflatten(2, (-1, self.stride[0]))
-        )
-        hidden_states = hidden_states.permute(0, 1, 3, 5, 7, 2, 4, 6).flatten(1, 4)
-        hidden_states = hidden_states + residual
-
-        return hidden_states
-
-
-# Like LTX 1.0 LTXVideoUpsampler3d, but uses new causal Conv3d
-class LTXVideoUpsampler3d(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        stride: Union[int, Tuple[int, int, int]] = 1,
-        residual: bool = False,
-        upscale_factor: int = 1,
-        spatial_padding_mode: str = "zeros",
-    ) -> None:
-        super().__init__()
-
-        self.stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
-        self.residual = residual
-        self.upscale_factor = upscale_factor
-
-        out_channels = (in_channels * stride[0] * stride[1] * stride[2]) // upscale_factor
-
-        self.conv = LTX2VideoCausalConv3d(
+    elif block_name == "compress_all":
+        block = make_conv_nd(
+            dims=convolution_dimensions,
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=3,
-            stride=1,
+            stride=(2, 2, 2),
+            causal=True,
             spatial_padding_mode=spatial_padding_mode,
         )
-
-    def forward(self, hidden_states: torch.Tensor, causal: bool = True) -> torch.Tensor:
-        batch_size, num_channels, num_frames, height, width = hidden_states.shape
-
-        if self.residual:
-            residual = hidden_states.reshape(
-                batch_size, -1, self.stride[0], self.stride[1], self.stride[2], num_frames, height, width
-            )
-            residual = residual.permute(0, 1, 5, 2, 6, 3, 7, 4).flatten(6, 7).flatten(4, 5).flatten(2, 3)
-            repeats = (self.stride[0] * self.stride[1] * self.stride[2]) // self.upscale_factor
-            residual = residual.repeat(1, repeats, 1, 1, 1)
-            residual = residual[:, :, self.stride[0] - 1 :]
-
-        hidden_states = self.conv(hidden_states, causal=causal)
-        hidden_states = hidden_states.reshape(
-            batch_size, -1, self.stride[0], self.stride[1], self.stride[2], num_frames, height, width
+    elif block_name == "compress_all_x_y":
+        out_channels = in_channels * block_config.get("multiplier", 2)
+        block = make_conv_nd(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=3,
+            stride=(2, 2, 2),
+            causal=True,
+            spatial_padding_mode=spatial_padding_mode,
         )
-        hidden_states = hidden_states.permute(0, 1, 5, 2, 6, 3, 7, 4).flatten(6, 7).flatten(4, 5).flatten(2, 3)
-        hidden_states = hidden_states[:, :, self.stride[0] - 1 :]
+    elif block_name == "compress_all_res":
+        out_channels = in_channels * block_config.get("multiplier", 2)
+        block = SpaceToDepthDownsample(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            stride=(2, 2, 2),
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    elif block_name == "compress_space_res":
+        out_channels = in_channels * block_config.get("multiplier", 2)
+        block = SpaceToDepthDownsample(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            stride=(1, 2, 2),
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    elif block_name == "compress_time_res":
+        out_channels = in_channels * block_config.get("multiplier", 2)
+        block = SpaceToDepthDownsample(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            stride=(2, 1, 1),
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    else:
+        raise ValueError(f"unknown block: {block_name}")
 
-        if self.residual:
-            hidden_states = hidden_states + residual
-
-        return hidden_states
+    return block, out_channels
 
 
-# Like LTX 1.0 LTXVideo095DownBlock3D, but with the updated LTX2VideoResnetBlock3d
-class LTX2VideoDownBlock3D(nn.Module):
-    r"""
-    Down block used in the LTXVideo model.
-
-    Args:
-        in_channels (`int`):
-            Number of input channels.
-        out_channels (`int`, *optional*):
-            Number of output channels. If None, defaults to `in_channels`.
-        num_layers (`int`, defaults to `1`):
-            Number of resnet layers.
-        dropout (`float`, defaults to `0.0`):
-            Dropout rate.
-        resnet_eps (`float`, defaults to `1e-6`):
-            Epsilon value for normalization layers.
-        resnet_act_fn (`str`, defaults to `"swish"`):
-            Activation function to use.
-        spatio_temporal_scale (`bool`, defaults to `True`):
-            Whether or not to use a downsampling layer. If not used, output dimension would be same as input dimension.
-            Whether or not to downsample across temporal dimension.
-        is_causal (`bool`, defaults to `True`):
-            Whether this layer behaves causally (future frames depend only on past frames) or not.
+class VideoEncoder(nn.Module):
+    _DEFAULT_NORM_NUM_GROUPS = 32
     """
-
-    _supports_gradient_checkpointing = True
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: Optional[int] = None,
-        num_layers: int = 1,
-        dropout: float = 0.0,
-        resnet_eps: float = 1e-6,
-        resnet_act_fn: str = "swish",
-        spatio_temporal_scale: bool = True,
-        downsample_type: str = "conv",
-        spatial_padding_mode: str = "zeros",
-    ):
-        super().__init__()
-
-        out_channels = out_channels or in_channels
-
-        resnets = []
-        for _ in range(num_layers):
-            resnets.append(
-                LTX2VideoResnetBlock3d(
-                    in_channels=in_channels,
-                    out_channels=in_channels,
-                    dropout=dropout,
-                    eps=resnet_eps,
-                    non_linearity=resnet_act_fn,
-                    spatial_padding_mode=spatial_padding_mode,
-                )
-            )
-        self.resnets = nn.ModuleList(resnets)
-
-        self.downsamplers = None
-        if spatio_temporal_scale:
-            self.downsamplers = nn.ModuleList()
-
-            if downsample_type == "conv":
-                self.downsamplers.append(
-                    LTX2VideoCausalConv3d(
-                        in_channels=in_channels,
-                        out_channels=in_channels,
-                        kernel_size=3,
-                        stride=(2, 2, 2),
-                        spatial_padding_mode=spatial_padding_mode,
-                    )
-                )
-            elif downsample_type == "spatial":
-                self.downsamplers.append(
-                    LTXVideoDownsampler3d(
-                        in_channels=in_channels,
-                        out_channels=out_channels,
-                        stride=(1, 2, 2),
-                        spatial_padding_mode=spatial_padding_mode,
-                    )
-                )
-            elif downsample_type == "temporal":
-                self.downsamplers.append(
-                    LTXVideoDownsampler3d(
-                        in_channels=in_channels,
-                        out_channels=out_channels,
-                        stride=(2, 1, 1),
-                        spatial_padding_mode=spatial_padding_mode,
-                    )
-                )
-            elif downsample_type == "spatiotemporal":
-                self.downsamplers.append(
-                    LTXVideoDownsampler3d(
-                        in_channels=in_channels,
-                        out_channels=out_channels,
-                        stride=(2, 2, 2),
-                        spatial_padding_mode=spatial_padding_mode,
-                    )
-                )
-
-        self.gradient_checkpointing = False
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
-        generator: Optional[torch.Generator] = None,
-        causal: bool = True,
-    ) -> torch.Tensor:
-        r"""Forward method of the `LTXDownBlock3D` class."""
-
-        for i, resnet in enumerate(self.resnets):
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
-                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb, generator, causal)
-            else:
-                hidden_states = resnet(hidden_states, temb, generator, causal=causal)
-
-        if self.downsamplers is not None:
-            for downsampler in self.downsamplers:
-                hidden_states = downsampler(hidden_states, causal=causal)
-
-        return hidden_states
-
-
-# Adapted from diffusers.models.autoencoders.autoencoder_kl_cogvideox.CogVideoMidBlock3d
-# Like LTX 1.0 LTXVideoMidBlock3d, but with the updated LTX2VideoResnetBlock3d
-class LTX2VideoMidBlock3d(nn.Module):
-    r"""
-    A middle block used in the LTXVideo model.
-
+    Variational Autoencoder Encoder. Encodes video frames into a latent representation.
+    The encoder compresses the input video through a series of downsampling operations controlled by
+    patch_size and encoder_blocks. The output is a normalized latent tensor with shape (B, 128, F', H', W').
+    Compression Behavior:
+        The total compression is determined by:
+        1. Initial spatial compression via patchify: H -> H/4, W -> W/4 (patch_size=4)
+        2. Sequential compression through encoder_blocks based on their stride patterns
+        Compression blocks apply 2x compression in specified dimensions:
+            - "compress_time" / "compress_time_res": temporal only
+            - "compress_space" / "compress_space_res": spatial only (H and W)
+            - "compress_all" / "compress_all_res": all dimensions (F, H, W)
+            - "res_x" / "res_x_y": no compression
+        Standard LTX Video configuration:
+            - patch_size=4
+            - encoder_blocks: 1x compress_space_res, 1x compress_time_res, 2x compress_all_res
+            - Final dimensions: F' = 1 + (F-1)/8, H' = H/32, W' = W/32
+            - Example: (B, 3, 33, 512, 512) -> (B, 128, 5, 16, 16)
+            - Note: Input must have 1 + 8*k frames (e.g., 1, 9, 17, 25, 33...)
     Args:
-        in_channels (`int`):
-            Number of input channels.
-        num_layers (`int`, defaults to `1`):
-            Number of resnet layers.
-        dropout (`float`, defaults to `0.0`):
-            Dropout rate.
-        resnet_eps (`float`, defaults to `1e-6`):
-            Epsilon value for normalization layers.
-        resnet_act_fn (`str`, defaults to `"swish"`):
-            Activation function to use.
-        is_causal (`bool`, defaults to `True`):
-            Whether this layer behaves causally (future frames depend only on past frames) or not.
-    """
-
-    _supports_gradient_checkpointing = True
-
-    def __init__(
-        self,
-        in_channels: int,
-        num_layers: int = 1,
-        dropout: float = 0.0,
-        resnet_eps: float = 1e-6,
-        resnet_act_fn: str = "swish",
-        inject_noise: bool = False,
-        timestep_conditioning: bool = False,
-        spatial_padding_mode: str = "zeros",
-    ) -> None:
-        super().__init__()
-
-        self.time_embedder = None
-        if timestep_conditioning:
-            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(in_channels * 4, 0)
-
-        resnets = []
-        for _ in range(num_layers):
-            resnets.append(
-                LTX2VideoResnetBlock3d(
-                    in_channels=in_channels,
-                    out_channels=in_channels,
-                    dropout=dropout,
-                    eps=resnet_eps,
-                    non_linearity=resnet_act_fn,
-                    inject_noise=inject_noise,
-                    timestep_conditioning=timestep_conditioning,
-                    spatial_padding_mode=spatial_padding_mode,
-                )
-            )
-        self.resnets = nn.ModuleList(resnets)
-
-        self.gradient_checkpointing = False
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
-        generator: Optional[torch.Generator] = None,
-        causal: bool = True,
-    ) -> torch.Tensor:
-        r"""Forward method of the `LTXMidBlock3D` class."""
-
-        if self.time_embedder is not None:
-            temb = self.time_embedder(
-                timestep=temb.flatten(),
-                resolution=None,
-                aspect_ratio=None,
-                batch_size=hidden_states.size(0),
-                hidden_dtype=hidden_states.dtype,
-            )
-            temb = temb.view(hidden_states.size(0), -1, 1, 1, 1)
-
-        for i, resnet in enumerate(self.resnets):
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
-                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb, generator, causal)
-            else:
-                hidden_states = resnet(hidden_states, temb, generator, causal=causal)
-
-        return hidden_states
-
-
-# Like LTXVideoUpBlock3d but with no conv_in and the updated LTX2VideoResnetBlock3d
-class LTX2VideoUpBlock3d(nn.Module):
-    r"""
-    Up block used in the LTXVideo model.
-
-    Args:
-        in_channels (`int`):
-            Number of input channels.
-        out_channels (`int`, *optional*):
-            Number of output channels. If None, defaults to `in_channels`.
-        num_layers (`int`, defaults to `1`):
-            Number of resnet layers.
-        dropout (`float`, defaults to `0.0`):
-            Dropout rate.
-        resnet_eps (`float`, defaults to `1e-6`):
-            Epsilon value for normalization layers.
-        resnet_act_fn (`str`, defaults to `"swish"`):
-            Activation function to use.
-        spatio_temporal_scale (`bool`, defaults to `True`):
-            Whether or not to use a downsampling layer. If not used, output dimension would be same as input dimension.
-            Whether or not to downsample across temporal dimension.
-        is_causal (`bool`, defaults to `True`):
-            Whether this layer behaves causally (future frames depend only on past frames) or not.
-    """
-
-    _supports_gradient_checkpointing = True
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: Optional[int] = None,
-        num_layers: int = 1,
-        dropout: float = 0.0,
-        resnet_eps: float = 1e-6,
-        resnet_act_fn: str = "swish",
-        spatio_temporal_scale: bool = True,
-        inject_noise: bool = False,
-        timestep_conditioning: bool = False,
-        upsample_residual: bool = False,
-        upscale_factor: int = 1,
-        spatial_padding_mode: str = "zeros",
-    ):
-        super().__init__()
-
-        out_channels = out_channels or in_channels
-
-        self.time_embedder = None
-        if timestep_conditioning:
-            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(in_channels * 4, 0)
-
-        self.conv_in = None
-        if in_channels != out_channels:
-            self.conv_in = LTX2VideoResnetBlock3d(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                dropout=dropout,
-                eps=resnet_eps,
-                non_linearity=resnet_act_fn,
-                inject_noise=inject_noise,
-                timestep_conditioning=timestep_conditioning,
-                spatial_padding_mode=spatial_padding_mode,
-            )
-
-        self.upsamplers = None
-        if spatio_temporal_scale:
-            self.upsamplers = nn.ModuleList(
-                [
-                    LTXVideoUpsampler3d(
-                        out_channels * upscale_factor,
-                        stride=(2, 2, 2),
-                        residual=upsample_residual,
-                        upscale_factor=upscale_factor,
-                        spatial_padding_mode=spatial_padding_mode,
-                    )
-                ]
-            )
-
-        resnets = []
-        for _ in range(num_layers):
-            resnets.append(
-                LTX2VideoResnetBlock3d(
-                    in_channels=out_channels,
-                    out_channels=out_channels,
-                    dropout=dropout,
-                    eps=resnet_eps,
-                    non_linearity=resnet_act_fn,
-                    inject_noise=inject_noise,
-                    timestep_conditioning=timestep_conditioning,
-                    spatial_padding_mode=spatial_padding_mode,
-                )
-            )
-        self.resnets = nn.ModuleList(resnets)
-
-        self.gradient_checkpointing = False
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
-        generator: Optional[torch.Generator] = None,
-        causal: bool = True,
-    ) -> torch.Tensor:
-        if self.conv_in is not None:
-            hidden_states = self.conv_in(hidden_states, temb, generator, causal=causal)
-
-        if self.time_embedder is not None:
-            temb = self.time_embedder(
-                timestep=temb.flatten(),
-                resolution=None,
-                aspect_ratio=None,
-                batch_size=hidden_states.size(0),
-                hidden_dtype=hidden_states.dtype,
-            )
-            temb = temb.view(hidden_states.size(0), -1, 1, 1, 1)
-
-        if self.upsamplers is not None:
-            for upsampler in self.upsamplers:
-                hidden_states = upsampler(hidden_states, causal=causal)
-
-        for i, resnet in enumerate(self.resnets):
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
-                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb, generator, causal)
-            else:
-                hidden_states = resnet(hidden_states, temb, generator, causal=causal)
-
-        return hidden_states
-
-
-# Like LTX 1.0 LTXVideoEncoder3d but with different default args - the spatiotemporal downsampling pattern is
-# different, as is the layers_per_block (the 2.0 VAE is bigger)
-class LTX2VideoEncoder3d(nn.Module):
-    r"""
-    The `LTXVideoEncoder3d` layer of a variational autoencoder that encodes input video samples to its latent
-    representation.
-
-    Args:
-        in_channels (`int`, defaults to 3):
-            Number of input channels.
-        out_channels (`int`, defaults to 128):
-            Number of latent channels.
-        block_out_channels (`Tuple[int, ...]`, defaults to `(256, 512, 1024, 2048)`):
-            The number of output channels for each block.
-        spatio_temporal_scaling (`Tuple[bool, ...], defaults to `(True, True, True, True)`:
-            Whether a block should contain spatio-temporal downscaling layers or not.
-        layers_per_block (`Tuple[int, ...]`, defaults to `(4, 6, 6, 2, 2)`):
-            The number of layers per block.
-        downsample_type (`Tuple[str, ...]`, defaults to `("spatial", "temporal", "spatiotemporal", "spatiotemporal")`):
-            The spatiotemporal downsampling pattern per block. Per-layer values can be
-                - `"spatial"` (downsample spatial dims by 2x)
-                - `"temporal"` (downsample temporal dim by 2x)
-                - `"spatiotemporal"` (downsample both spatial and temporal dims by 2x)
-        patch_size (`int`, defaults to `4`):
-            The size of spatial patches.
-        patch_size_t (`int`, defaults to `1`):
-            The size of temporal patches.
-        resnet_norm_eps (`float`, defaults to `1e-6`):
-            Epsilon value for ResNet normalization layers.
-        is_causal (`bool`, defaults to `True`):
-            Whether this layer behaves causally (future frames depend only on past frames) or not.
+        convolution_dimensions: The number of dimensions to use in convolutions (2D or 3D).
+        in_channels: The number of input channels. For RGB images, this is 3.
+        out_channels: The number of output channels (latent channels). For latent channels, this is 128.
+        encoder_blocks: The list of blocks to construct the encoder. Each block is a tuple of (block_name, params)
+                        where params is either an int (num_layers) or a dict with configuration.
+        patch_size: The patch size for initial spatial compression. Should be a power of 2.
+        norm_layer: The normalization layer to use. Can be either `group_norm` or `pixel_norm`.
+        latent_log_var: The log variance mode. Can be either `per_channel`, `uniform`, `constant` or `none`.
     """
 
     def __init__(
         self,
+        convolution_dimensions: int = 3,
         in_channels: int = 3,
         out_channels: int = 128,
-        block_out_channels: Tuple[int, ...] = (256, 512, 1024, 2048),
-        down_block_types: Tuple[str, ...] = (
-            "LTX2VideoDownBlock3D",
-            "LTX2VideoDownBlock3D",
-            "LTX2VideoDownBlock3D",
-            "LTX2VideoDownBlock3D",
-        ),
-        spatio_temporal_scaling: Tuple[bool, ...] = (True, True, True, True),
-        layers_per_block: Tuple[int, ...] = (4, 6, 6, 2, 2),
-        downsample_type: Tuple[str, ...] = ("spatial", "temporal", "spatiotemporal", "spatiotemporal"),
+        encoder_blocks: List[Tuple[str, int]] | List[Tuple[str, dict[str, Any]]] = [],  # noqa: B006
         patch_size: int = 4,
-        patch_size_t: int = 1,
-        resnet_norm_eps: float = 1e-6,
-        is_causal: bool = True,
-        spatial_padding_mode: str = "zeros",
+        norm_layer: NormLayerType = NormLayerType.PIXEL_NORM,
+        latent_log_var: LogVarianceType = LogVarianceType.UNIFORM,
+        encoder_spatial_padding_mode: PaddingModeType = PaddingModeType.ZEROS,
     ):
         super().__init__()
 
         self.patch_size = patch_size
-        self.patch_size_t = patch_size_t
-        self.in_channels = in_channels * patch_size**2
-        self.is_causal = is_causal
+        self.norm_layer = norm_layer
+        self.latent_channels = out_channels
+        self.latent_log_var = latent_log_var
+        self._norm_num_groups = self._DEFAULT_NORM_NUM_GROUPS
 
-        output_channel = out_channels
+        in_channels = in_channels * patch_size**2
+        feature_channels = out_channels
 
-        self.conv_in = LTX2VideoCausalConv3d(
-            in_channels=self.in_channels,
-            out_channels=output_channel,
+        self.conv_in = make_conv_nd(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            out_channels=feature_channels,
             kernel_size=3,
             stride=1,
-            spatial_padding_mode=spatial_padding_mode,
+            padding=1,
+            causal=True,
+            spatial_padding_mode=encoder_spatial_padding_mode,
         )
 
-        # down blocks
-        num_block_out_channels = len(block_out_channels)
         self.down_blocks = nn.ModuleList([])
-        for i in range(num_block_out_channels):
-            input_channel = output_channel
-            output_channel = block_out_channels[i]
 
-            if down_block_types[i] == "LTX2VideoDownBlock3D":
-                down_block = LTX2VideoDownBlock3D(
-                    in_channels=input_channel,
-                    out_channels=output_channel,
-                    num_layers=layers_per_block[i],
-                    resnet_eps=resnet_norm_eps,
-                    spatio_temporal_scale=spatio_temporal_scaling[i],
-                    downsample_type=downsample_type[i],
-                    spatial_padding_mode=spatial_padding_mode,
-                )
-            else:
-                raise ValueError(f"Unknown down block type: {down_block_types[i]}")
+        for block_name, block_params in encoder_blocks:
+            # Convert int to dict format for uniform handling
+            block_config = {"num_layers": block_params} if isinstance(block_params, int) else block_params
 
-            self.down_blocks.append(down_block)
+            block, feature_channels = _make_encoder_block(
+                block_name=block_name,
+                block_config=block_config,
+                in_channels=feature_channels,
+                convolution_dimensions=convolution_dimensions,
+                norm_layer=norm_layer,
+                norm_num_groups=self._norm_num_groups,
+                spatial_padding_mode=encoder_spatial_padding_mode,
+            )
 
-        # mid block
-        self.mid_block = LTX2VideoMidBlock3d(
-            in_channels=output_channel,
-            num_layers=layers_per_block[-1],
-            resnet_eps=resnet_norm_eps,
-            spatial_padding_mode=spatial_padding_mode,
-        )
+            self.down_blocks.append(block)
 
         # out
-        self.norm_out = PerChannelRMSNorm()
+        if norm_layer == NormLayerType.GROUP_NORM:
+            self.conv_norm_out = nn.GroupNorm(num_channels=feature_channels, num_groups=self._norm_num_groups, eps=1e-6)
+        elif norm_layer == NormLayerType.PIXEL_NORM:
+            self.conv_norm_out = PixelNorm()
+
         self.conv_act = nn.SiLU()
-        self.conv_out = LTX2VideoCausalConv3d(
-            in_channels=output_channel,
-            out_channels=out_channels + 1,
+
+        conv_out_channels = out_channels
+        if latent_log_var == LogVarianceType.PER_CHANNEL:
+            conv_out_channels *= 2
+        elif latent_log_var in {LogVarianceType.UNIFORM, LogVarianceType.CONSTANT}:
+            conv_out_channels += 1
+        elif latent_log_var != LogVarianceType.NONE:
+            raise ValueError(f"Invalid latent_log_var: {latent_log_var}")
+
+        self.conv_out = make_conv_nd(
+            dims=convolution_dimensions,
+            in_channels=feature_channels,
+            out_channels=conv_out_channels,
             kernel_size=3,
-            stride=1,
+            padding=1,
+            causal=True,
+            spatial_padding_mode=encoder_spatial_padding_mode,
+        )
+
+    def forward(self, sample: torch.Tensor) -> torch.Tensor:
+        r"""
+        Encode video frames into normalized latent representation.
+        Args:
+            sample: Input video (B, C, F, H, W). F must be 1 + 8*k (e.g., 1, 9, 17, 25, 33...).
+        Returns:
+            Normalized latent means (B, 128, F', H', W') where F' = 1+(F-1)/8, H' = H/32, W' = W/32.
+            Example: (B, 3, 33, 512, 512) -> (B, 128, 5, 16, 16).
+        """
+        # Validate frame count
+        frames_count = sample.shape[2]
+        if ((frames_count - 1) % 8) != 0:
+            raise ValueError(
+                "Invalid number of frames: Encode input must have 1 + 8 * x frames "
+                "(e.g., 1, 9, 17, ...). Please check your input."
+            )
+
+        # Initial spatial compression: trade spatial resolution for channel depth
+        # This reduces H,W by patch_size and increases channels, making convolutions more efficient
+        # Example: (B, 3, F, 512, 512) -> (B, 48, F, 128, 128) with patch_size=4
+        sample = patchify(sample, patch_size_hw=self.patch_size, patch_size_t=1)
+        sample = self.conv_in(sample)
+
+        for down_block in self.down_blocks:
+            sample = down_block(sample)
+
+        sample = self.conv_norm_out(sample)
+        sample = self.conv_act(sample)
+        sample = self.conv_out(sample)
+
+        if self.latent_log_var == LogVarianceType.UNIFORM:
+            # Uniform Variance: model outputs N means and 1 shared log-variance channel.
+            # We need to expand the single logvar to match the number of means channels
+            # to create a format compatible with PER_CHANNEL (means + logvar, each with N channels).
+            # Sample shape: (B, N+1, ...) where N = latent_channels (e.g., 128 means + 1 logvar = 129)
+            # Target shape: (B, 2*N, ...) where first N are means, last N are logvar
+
+            if sample.shape[1] < 2:
+                raise ValueError(
+                    f"Invalid channel count for UNIFORM mode: expected at least 2 channels "
+                    f"(N means + 1 logvar), got {sample.shape[1]}"
+                )
+
+            # Extract means (first N channels) and logvar (last 1 channel)
+            means = sample[:, :-1, ...]  # (B, N, ...)
+            logvar = sample[:, -1:, ...]  # (B, 1, ...)
+
+            # Repeat logvar N times to match means channels
+            # Use expand/repeat pattern that works for both 4D and 5D tensors
+            num_channels = means.shape[1]
+            repeat_shape = [1, num_channels] + [1] * (sample.ndim - 2)
+            repeated_logvar = logvar.repeat(*repeat_shape)  # (B, N, ...)
+
+            # Concatenate to create (B, 2*N, ...) format: [means, repeated_logvar]
+            sample = torch.cat([means, repeated_logvar], dim=1)
+        elif self.latent_log_var == LogVarianceType.CONSTANT:
+            sample = sample[:, :-1, ...]
+            approx_ln_0 = -30  # this is the minimal clamp value in DiagonalGaussianDistribution objects
+            sample = torch.cat(
+                [sample, torch.ones_like(sample, device=sample.device) * approx_ln_0],
+                dim=1,
+            )
+
+        # Split into means and logvar, then normalize means
+        means, _ = torch.chunk(sample, 2, dim=1)
+        return self.normalize_latents(means)
+
+
+def _make_decoder_block(
+    block_name: str,
+    block_config: dict[str, Any],
+    in_channels: int,
+    convolution_dimensions: int,
+    norm_layer: NormLayerType,
+    timestep_conditioning: bool,
+    norm_num_groups: int,
+    spatial_padding_mode: PaddingModeType,
+) -> Tuple[nn.Module, int]:
+    out_channels = in_channels
+    if block_name == "res_x":
+        block = UNetMidBlock3D(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            num_layers=block_config["num_layers"],
+            resnet_eps=1e-6,
+            resnet_groups=norm_num_groups,
+            norm_layer=norm_layer,
+            inject_noise=block_config.get("inject_noise", False),
+            timestep_conditioning=timestep_conditioning,
             spatial_padding_mode=spatial_padding_mode,
         )
-
-        self.gradient_checkpointing = False
-
-    def forward(self, hidden_states: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
-        r"""The forward method of the `LTXVideoEncoder3d` class."""
-
-        p = self.patch_size
-        p_t = self.patch_size_t
-
-        batch_size, num_channels, num_frames, height, width = hidden_states.shape
-        post_patch_num_frames = num_frames // p_t
-        post_patch_height = height // p
-        post_patch_width = width // p
-        causal = causal or self.is_causal
-
-        hidden_states = hidden_states.reshape(
-            batch_size, num_channels, post_patch_num_frames, p_t, post_patch_height, p, post_patch_width, p
+    elif block_name == "attn_res_x":
+        block = UNetMidBlock3D(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            num_layers=block_config["num_layers"],
+            resnet_groups=norm_num_groups,
+            norm_layer=norm_layer,
+            inject_noise=block_config.get("inject_noise", False),
+            timestep_conditioning=timestep_conditioning,
+            attention_head_dim=block_config["attention_head_dim"],
+            spatial_padding_mode=spatial_padding_mode,
         )
-        # Thanks for driving me insane with the weird patching order :(
-        hidden_states = hidden_states.permute(0, 1, 3, 7, 5, 2, 4, 6).flatten(1, 4)
-        hidden_states = self.conv_in(hidden_states, causal=causal)
+    elif block_name == "res_x_y":
+        out_channels = in_channels // block_config.get("multiplier", 2)
+        block = ResnetBlock3D(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            eps=1e-6,
+            groups=norm_num_groups,
+            norm_layer=norm_layer,
+            inject_noise=block_config.get("inject_noise", False),
+            timestep_conditioning=False,
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    elif block_name == "compress_time":
+        block = DepthToSpaceUpsample(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            stride=(2, 1, 1),
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    elif block_name == "compress_space":
+        block = DepthToSpaceUpsample(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            stride=(1, 2, 2),
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    elif block_name == "compress_all":
+        out_channels = in_channels // block_config.get("multiplier", 1)
+        block = DepthToSpaceUpsample(
+            dims=convolution_dimensions,
+            in_channels=in_channels,
+            stride=(2, 2, 2),
+            residual=block_config.get("residual", False),
+            out_channels_reduction_factor=block_config.get("multiplier", 1),
+            spatial_padding_mode=spatial_padding_mode,
+        )
+    else:
+        raise ValueError(f"unknown layer: {block_name}")
 
-        if torch.is_grad_enabled() and self.gradient_checkpointing:
-            for down_block in self.down_blocks:
-                hidden_states = self._gradient_checkpointing_func(down_block, hidden_states, None, None, causal)
-
-            hidden_states = self._gradient_checkpointing_func(self.mid_block, hidden_states, None, None, causal)
-        else:
-            for down_block in self.down_blocks:
-                hidden_states = down_block(hidden_states, causal=causal)
-
-            hidden_states = self.mid_block(hidden_states, causal=causal)
-
-        hidden_states = self.norm_out(hidden_states)
-        hidden_states = self.conv_act(hidden_states)
-        hidden_states = self.conv_out(hidden_states, causal=causal)
-
-        last_channel = hidden_states[:, -1:]
-        last_channel = last_channel.repeat(1, hidden_states.size(1) - 2, 1, 1, 1)
-        hidden_states = torch.cat([hidden_states, last_channel], dim=1)
-
-        return hidden_states
+    return block, out_channels
 
 
-# Like LTX 1.0 LTXVideoDecoder3d, but has only 3 symmetric up blocks which are causal and residual with upsample_factor 2
-class LTX2VideoDecoder3d(nn.Module):
-    r"""
-    The `LTXVideoDecoder3d` layer of a variational autoencoder that decodes its latent representation into an output
-    sample.
-
+class VideoDecoder(nn.Module):
+    _DEFAULT_NORM_NUM_GROUPS = 32
+    """
+    Variational Autoencoder Decoder. Decodes latent representation into video frames.
+    The decoder upsamples latents through a series of upsampling operations (inverse of encoder).
+    Output dimensions: F = 8x(F'-1) + 1, H = 32xH', W = 32xW' for standard LTX Video configuration.
+    Upsampling blocks expand dimensions by 2x in specified dimensions:
+        - "compress_time": temporal only
+        - "compress_space": spatial only (H and W)
+        - "compress_all": all dimensions (F, H, W)
+        - "res_x" / "res_x_y" / "attn_res_x": no upsampling
+    Causal Mode:
+        causal=False (standard): Symmetric padding, allows future frame dependencies.
+        causal=True: Causal padding, each frame depends only on past/current frames.
+        First frame removed after temporal upsampling in both modes. Output shape unchanged.
+        Example: (B, 128, 5, 16, 16) -> (B, 3, 33, 512, 512) for both modes.
     Args:
-        in_channels (`int`, defaults to 128):
-            Number of latent channels.
-        out_channels (`int`, defaults to 3):
-            Number of output channels.
-        block_out_channels (`Tuple[int, ...]`, defaults to `(128, 256, 512, 512)`):
-            The number of output channels for each block.
-        spatio_temporal_scaling (`Tuple[bool, ...], defaults to `(True, True, True, False)`:
-            Whether a block should contain spatio-temporal upscaling layers or not.
-        layers_per_block (`Tuple[int, ...]`, defaults to `(4, 3, 3, 3, 4)`):
-            The number of layers per block.
-        patch_size (`int`, defaults to `4`):
-            The size of spatial patches.
-        patch_size_t (`int`, defaults to `1`):
-            The size of temporal patches.
-        resnet_norm_eps (`float`, defaults to `1e-6`):
-            Epsilon value for ResNet normalization layers.
-        is_causal (`bool`, defaults to `False`):
-            Whether this layer behaves causally (future frames depend only on past frames) or not.
-        timestep_conditioning (`bool`, defaults to `False`):
-            Whether to condition the model on timesteps.
+        convolution_dimensions: The number of dimensions to use in convolutions (2D or 3D).
+        in_channels: The number of input channels (latent channels). Default is 128.
+        out_channels: The number of output channels. For RGB images, this is 3.
+        decoder_blocks: The list of blocks to construct the decoder. Each block is a tuple of (block_name, params)
+                        where params is either an int (num_layers) or a dict with configuration.
+        patch_size: Final spatial expansion factor. For standard LTX Video, use 4 for 4x spatial expansion:
+                    H -> Hx4, W -> Wx4. Should be a power of 2.
+        norm_layer: The normalization layer to use. Can be either `group_norm` or `pixel_norm`.
+        causal: Whether to use causal convolutions. For standard LTX Video, use False for symmetric padding.
+                When True, uses causal padding (past/current frames only).
+        timestep_conditioning: Whether to condition the decoder on timestep for denoising.
     """
 
     def __init__(
         self,
+        convolution_dimensions: int = 3,
         in_channels: int = 128,
         out_channels: int = 3,
-        block_out_channels: Tuple[int, ...] = (256, 512, 1024),
-        spatio_temporal_scaling: Tuple[bool, ...] = (True, True, True),
-        layers_per_block: Tuple[int, ...] = (5, 5, 5, 5),
+        decoder_blocks: List[Tuple[str, int | dict]] = [],  # noqa: B006
         patch_size: int = 4,
-        patch_size_t: int = 1,
-        resnet_norm_eps: float = 1e-6,
-        is_causal: bool = False,
-        inject_noise: Tuple[bool, ...] = (False, False, False),
+        norm_layer: NormLayerType = NormLayerType.PIXEL_NORM,
+        causal: bool = False,
         timestep_conditioning: bool = False,
-        upsample_residual: Tuple[bool, ...] = (True, True, True),
-        upsample_factor: Tuple[bool, ...] = (2, 2, 2),
-        spatial_padding_mode: str = "reflect",
-    ) -> None:
+        decoder_spatial_padding_mode: PaddingModeType = PaddingModeType.REFLECT,
+    ):
         super().__init__()
 
+        # Spatiotemporal downscaling between decoded video space and VAE latents.
+        # According to the LTXV paper, the standard configuration downsamples
+        # video inputs by a factor of 8 in the temporal dimension and 32 in
+        # each spatial dimension (height and width). This parameter determines how
+        # many video frames and pixels correspond to a single latent cell.
+        self.video_downscale_factors = SpatioTemporalScaleFactors(
+            time=8,
+            width=32,
+            height=32,
+        )
+
         self.patch_size = patch_size
-        self.patch_size_t = patch_size_t
-        self.out_channels = out_channels * patch_size**2
-        self.is_causal = is_causal
+        out_channels = out_channels * patch_size**2
+        self.causal = causal
+        self.timestep_conditioning = timestep_conditioning
+        self._norm_num_groups = self._DEFAULT_NORM_NUM_GROUPS
 
-        block_out_channels = tuple(reversed(block_out_channels))
-        spatio_temporal_scaling = tuple(reversed(spatio_temporal_scaling))
-        layers_per_block = tuple(reversed(layers_per_block))
-        inject_noise = tuple(reversed(inject_noise))
-        upsample_residual = tuple(reversed(upsample_residual))
-        upsample_factor = tuple(reversed(upsample_factor))
-        output_channel = block_out_channels[0]
+        # Noise and timestep parameters for decoder conditioning
+        self.decode_noise_scale = 0.025
+        self.decode_timestep = 0.05
 
-        self.conv_in = LTX2VideoCausalConv3d(
+        # Compute initial feature_channels by going through blocks in reverse
+        # This determines the channel width at the start of the decoder
+        feature_channels = in_channels
+        for block_name, block_params in list(reversed(decoder_blocks)):
+            block_config = block_params if isinstance(block_params, dict) else {}
+            if block_name == "res_x_y":
+                feature_channels = feature_channels * block_config.get("multiplier", 2)
+            if block_name == "compress_all":
+                feature_channels = feature_channels * block_config.get("multiplier", 1)
+
+        self.conv_in = make_conv_nd(
+            dims=convolution_dimensions,
             in_channels=in_channels,
-            out_channels=output_channel,
+            out_channels=feature_channels,
             kernel_size=3,
             stride=1,
-            spatial_padding_mode=spatial_padding_mode,
+            padding=1,
+            causal=True,
+            spatial_padding_mode=decoder_spatial_padding_mode,
         )
 
-        self.mid_block = LTX2VideoMidBlock3d(
-            in_channels=output_channel,
-            num_layers=layers_per_block[0],
-            resnet_eps=resnet_norm_eps,
-            inject_noise=inject_noise[0],
-            timestep_conditioning=timestep_conditioning,
-            spatial_padding_mode=spatial_padding_mode,
-        )
-
-        # up blocks
-        num_block_out_channels = len(block_out_channels)
         self.up_blocks = nn.ModuleList([])
-        for i in range(num_block_out_channels):
-            input_channel = output_channel // upsample_factor[i]
-            output_channel = block_out_channels[i] // upsample_factor[i]
 
-            up_block = LTX2VideoUpBlock3d(
-                in_channels=input_channel,
-                out_channels=output_channel,
-                num_layers=layers_per_block[i + 1],
-                resnet_eps=resnet_norm_eps,
-                spatio_temporal_scale=spatio_temporal_scaling[i],
-                inject_noise=inject_noise[i + 1],
+        for block_name, block_params in list(reversed(decoder_blocks)):
+            # Convert int to dict format for uniform handling
+            block_config = {"num_layers": block_params} if isinstance(block_params, int) else block_params
+
+            block, feature_channels = _make_decoder_block(
+                block_name=block_name,
+                block_config=block_config,
+                in_channels=feature_channels,
+                convolution_dimensions=convolution_dimensions,
+                norm_layer=norm_layer,
                 timestep_conditioning=timestep_conditioning,
-                upsample_residual=upsample_residual[i],
-                upscale_factor=upsample_factor[i],
-                spatial_padding_mode=spatial_padding_mode,
+                norm_num_groups=self._norm_num_groups,
+                spatial_padding_mode=decoder_spatial_padding_mode,
             )
 
-            self.up_blocks.append(up_block)
+            self.up_blocks.append(block)
 
-        # out
-        self.norm_out = PerChannelRMSNorm()
+        if norm_layer == NormLayerType.GROUP_NORM:
+            self.conv_norm_out = nn.GroupNorm(num_channels=feature_channels, num_groups=self._norm_num_groups, eps=1e-6)
+        elif norm_layer == NormLayerType.PIXEL_NORM:
+            self.conv_norm_out = PixelNorm()
+
         self.conv_act = nn.SiLU()
-        self.conv_out = LTX2VideoCausalConv3d(
-            in_channels=output_channel,
-            out_channels=self.out_channels,
+        self.conv_out = make_conv_nd(
+            dims=convolution_dimensions,
+            in_channels=feature_channels,
+            out_channels=out_channels,
             kernel_size=3,
-            stride=1,
-            spatial_padding_mode=spatial_padding_mode,
+            padding=1,
+            causal=True,
+            spatial_padding_mode=decoder_spatial_padding_mode,
         )
 
-        # timestep embedding
-        self.time_embedder = None
-        self.scale_shift_table = None
-        self.timestep_scale_multiplier = None
         if timestep_conditioning:
-            self.timestep_scale_multiplier = nn.Parameter(torch.tensor(1000.0, dtype=torch.float32))
-            self.time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(output_channel * 2, 0)
-            self.scale_shift_table = nn.Parameter(torch.randn(2, output_channel) / output_channel**0.5)
-
-        self.gradient_checkpointing = False
+            self.timestep_scale_multiplier = nn.Parameter(torch.tensor(1000.0))
+            self.last_time_embedder = PixArtAlphaCombinedTimestepSizeEmbeddings(
+                embedding_dim=feature_channels * 2, size_emb_dim=0
+            )
+            self.last_scale_shift_table = nn.Parameter(torch.empty(2, feature_channels))
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
-        causal: Optional[bool] = None,
+        sample: torch.Tensor,
+        timestep: torch.Tensor | None = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
-        causal = causal or self.is_causal
+        r"""
+        Decode latent representation into video frames.
+        Args:
+            sample: Latent tensor (B, 128, F', H', W').
+            timestep: Timestep for conditioning (if timestep_conditioning=True). Uses default 0.05 if None.
+            generator: Random generator for deterministic noise injection (if inject_noise=True in blocks).
+        Returns:
+            Decoded video (B, 3, F, H, W) where F = 8x(F'-1) + 1, H = 32xH', W = 32xW'.
+            Example: (B, 128, 5, 16, 16) -> (B, 3, 33, 512, 512).
+            Note: First frame is removed after temporal upsampling regardless of causal mode.
+            When causal=False, allows future frame dependencies in convolutions but maintains same output shape.
+        """
+        batch_size = sample.shape[0]
 
-        hidden_states = self.conv_in(hidden_states, causal=causal)
-
-        if self.timestep_scale_multiplier is not None:
-            temb = temb * self.timestep_scale_multiplier
-
-        if torch.is_grad_enabled() and self.gradient_checkpointing:
-            hidden_states = self._gradient_checkpointing_func(self.mid_block, hidden_states, temb, None, causal)
-
-            for up_block in self.up_blocks:
-                hidden_states = self._gradient_checkpointing_func(up_block, hidden_states, temb, None, causal)
-        else:
-            hidden_states = self.mid_block(hidden_states, temb, causal=causal)
-
-            for up_block in self.up_blocks:
-                hidden_states = up_block(hidden_states, temb, causal=causal)
-
-        hidden_states = self.norm_out(hidden_states)
-
-        if self.time_embedder is not None:
-            temb = self.time_embedder(
-                timestep=temb.flatten(),
-                resolution=None,
-                aspect_ratio=None,
-                batch_size=hidden_states.size(0),
-                hidden_dtype=hidden_states.dtype,
+        # Add noise if timestep conditioning is enabled
+        if self.timestep_conditioning:
+            noise = (
+                torch.randn(
+                    sample.size(),
+                    generator=generator,
+                    dtype=sample.dtype,
+                    device=sample.device,
+                )
+                * self.decode_noise_scale
             )
-            temb = temb.view(hidden_states.size(0), -1, 1, 1, 1).unflatten(1, (2, -1))
-            temb = temb + self.scale_shift_table[None, ..., None, None, None]
-            shift, scale = temb.unbind(dim=1)
-            hidden_states = hidden_states * (1 + scale) + shift
 
-        hidden_states = self.conv_act(hidden_states)
-        hidden_states = self.conv_out(hidden_states, causal=causal)
+            sample = noise + (1.0 - self.decode_noise_scale) * sample
 
-        p = self.patch_size
-        p_t = self.patch_size_t
+        # Denormalize latents
+        sample = self.denormalize_latents(sample)
 
-        batch_size, num_channels, num_frames, height, width = hidden_states.shape
-        hidden_states = hidden_states.reshape(batch_size, -1, p_t, p, p, num_frames, height, width)
-        hidden_states = hidden_states.permute(0, 1, 5, 2, 6, 4, 7, 3).flatten(6, 7).flatten(4, 5).flatten(2, 3)
+        # Use default decode_timestep if timestep not provided
+        if timestep is None and self.timestep_conditioning:
+            timestep = torch.full((batch_size,), self.decode_timestep, device=sample.device, dtype=sample.dtype)
 
-        return hidden_states
+        sample = self.conv_in(sample, causal=self.causal)
 
+        scaled_timestep = None
+        if self.timestep_conditioning:
+            if timestep is None:
+                raise ValueError("'timestep' parameter must be provided when 'timestep_conditioning' is True")
+            scaled_timestep = timestep * self.timestep_scale_multiplier.to(sample)
 
-class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOriginalModelMixin):
-    r"""
-    A VAE model with KL loss for encoding images into latents and decoding latent representations into images. Used in
-    [LTX-2](https://huggingface.co/Lightricks/LTX-2).
+        for up_block in self.up_blocks:
+            if isinstance(up_block, UNetMidBlock3D):
+                block_kwargs = {
+                    "causal": self.causal,
+                    "timestep": scaled_timestep if self.timestep_conditioning else None,
+                    "generator": generator,
+                }
+                sample = up_block(sample, **block_kwargs)
+            elif isinstance(up_block, ResnetBlock3D):
+                sample = up_block(sample, causal=self.causal, generator=generator)
+            else:
+                sample = up_block(sample, causal=self.causal)
 
-    This model inherits from [`ModelMixin`]. Check the superclass documentation for it's generic methods implemented
-    for all models (such as downloading or saving).
+        sample = self.conv_norm_out(sample)
 
-    Args:
-        in_channels (`int`, defaults to `3`):
-            Number of input channels.
-        out_channels (`int`, defaults to `3`):
-            Number of output channels.
-        latent_channels (`int`, defaults to `128`):
-            Number of latent channels.
-        block_out_channels (`Tuple[int, ...]`, defaults to `(128, 256, 512, 512)`):
-            The number of output channels for each block.
-        spatio_temporal_scaling (`Tuple[bool, ...], defaults to `(True, True, True, False)`:
-            Whether a block should contain spatio-temporal downscaling or not.
-        layers_per_block (`Tuple[int, ...]`, defaults to `(4, 3, 3, 3, 4)`):
-            The number of layers per block.
-        patch_size (`int`, defaults to `4`):
-            The size of spatial patches.
-        patch_size_t (`int`, defaults to `1`):
-            The size of temporal patches.
-        resnet_norm_eps (`float`, defaults to `1e-6`):
-            Epsilon value for ResNet normalization layers.
-        scaling_factor (`float`, *optional*, defaults to `1.0`):
-            The component-wise standard deviation of the trained latent space computed using the first batch of the
-            training set. This is used to scale the latent space to have unit variance when training the diffusion
-            model. The latents are scaled with the formula `z = z * scaling_factor` before being passed to the
-            diffusion model. When decoding, the latents are scaled back to the original scale with the formula: `z = 1
-            / scaling_factor * z`. For more details, refer to sections 4.3.2 and D.1 of the [High-Resolution Image
-            Synthesis with Latent Diffusion Models](https://huggingface.co/papers/2112.10752) paper.
-        encoder_causal (`bool`, defaults to `True`):
-            Whether the encoder should behave causally (future frames depend only on past frames) or not.
-        decoder_causal (`bool`, defaults to `False`):
-            Whether the decoder should behave causally (future frames depend only on past frames) or not.
-    """
+        if self.timestep_conditioning:
+            embedded_timestep = self.last_time_embedder(
+                timestep=scaled_timestep.flatten(),
+                hidden_dtype=sample.dtype,
+            )
+            embedded_timestep = embedded_timestep.view(batch_size, embedded_timestep.shape[-1], 1, 1, 1)
+            ada_values = self.last_scale_shift_table[None, ..., None, None, None].to(
+                device=sample.device, dtype=sample.dtype
+            ) + embedded_timestep.reshape(
+                batch_size,
+                2,
+                -1,
+                embedded_timestep.shape[-3],
+                embedded_timestep.shape[-2],
+                embedded_timestep.shape[-1],
+            )
+            shift, scale = ada_values.unbind(dim=1)
+            sample = sample * (1 + scale) + shift
 
-    _supports_gradient_checkpointing = True
+        sample = self.conv_act(sample)
+        sample = self.conv_out(sample, causal=self.causal)
 
-    @register_to_config
-    def __init__(
+        # Final spatial expansion: reverse the initial patchify from encoder
+        # Moves pixels from channels back to spatial dimensions
+        # Example: (B, 48, F, 128, 128) -> (B, 3, F, 512, 512) with patch_size=4
+        sample = unpatchify(sample, patch_size_hw=self.patch_size, patch_size_t=1)
+
+        return sample
+
+    def _prepare_tiles(
         self,
-        in_channels: int = 3,
-        out_channels: int = 3,
-        latent_channels: int = 128,
-        block_out_channels: Tuple[int, ...] = (256, 512, 1024, 2048),
-        down_block_types: Tuple[str, ...] = (
-            "LTX2VideoDownBlock3D",
-            "LTX2VideoDownBlock3D",
-            "LTX2VideoDownBlock3D",
-            "LTX2VideoDownBlock3D",
-        ),
-        decoder_block_out_channels: Tuple[int, ...] = (256, 512, 1024),
-        layers_per_block: Tuple[int, ...] = (4, 6, 6, 2, 2),
-        decoder_layers_per_block: Tuple[int, ...] = (5, 5, 5, 5),
-        spatio_temporal_scaling: Tuple[bool, ...] = (True, True, True, True),
-        decoder_spatio_temporal_scaling: Tuple[bool, ...] = (True, True, True),
-        decoder_inject_noise: Tuple[bool, ...] = (False, False, False, False),
-        downsample_type: Tuple[str, ...] = ("spatial", "temporal", "spatiotemporal", "spatiotemporal"),
-        upsample_residual: Tuple[bool, ...] = (True, True, True),
-        upsample_factor: Tuple[int, ...] = (2, 2, 2),
-        timestep_conditioning: bool = False,
-        patch_size: int = 4,
-        patch_size_t: int = 1,
-        resnet_norm_eps: float = 1e-6,
-        scaling_factor: float = 1.0,
-        encoder_causal: bool = True,
-        decoder_causal: bool = True,
-        encoder_spatial_padding_mode: str = "zeros",
-        decoder_spatial_padding_mode: str = "reflect",
-        spatial_compression_ratio: int = None,
-        temporal_compression_ratio: int = None,
-    ) -> None:
+        latent: torch.Tensor,
+        tiling_config: TilingConfig | None = None,
+    ) -> List[Tile]:
+        splitters = [DEFAULT_SPLIT_OPERATION] * len(latent.shape)
+        mappers = [DEFAULT_MAPPING_OPERATION] * len(latent.shape)
+        if tiling_config is not None and tiling_config.spatial_config is not None:
+            cfg = tiling_config.spatial_config
+            long_side = max(latent.shape[3], latent.shape[4])
+
+            def enable_on_axis(axis_idx: int, factor: int) -> None:
+                size = cfg.tile_size_in_pixels // factor
+                overlap = cfg.tile_overlap_in_pixels // factor
+                axis_length = latent.shape[axis_idx]
+                lower_threshold = max(2, overlap + 1)
+                tile_size = max(lower_threshold, round(size * axis_length / long_side))
+                splitters[axis_idx] = split_in_spatial(tile_size, overlap)
+                mappers[axis_idx] = to_mapping_operation(map_spatial_slice, factor)
+
+            enable_on_axis(3, self.video_downscale_factors.height)
+            enable_on_axis(4, self.video_downscale_factors.width)
+
+        if tiling_config is not None and tiling_config.temporal_config is not None:
+            cfg = tiling_config.temporal_config
+            tile_size = cfg.tile_size_in_frames // self.video_downscale_factors.time
+            overlap = cfg.tile_overlap_in_frames // self.video_downscale_factors.time
+            splitters[2] = split_in_temporal(tile_size, overlap)
+            mappers[2] = to_mapping_operation(map_temporal_slice, self.video_downscale_factors.time)
+
+        return create_tiles(latent.shape, splitters, mappers)
+
+    def tiled_decode(
+        self,
+        latent: torch.Tensor,
+        tiling_config: TilingConfig | None = None,
+        timestep: torch.Tensor | None = None,
+        generator: torch.Generator | None = None,
+    ) -> Iterator[torch.Tensor]:
+        """
+        Decode a latent tensor into video frames using tiled processing.
+        Splits the latent tensor into tiles, decodes each tile individually,
+        and yields video chunks as they become available.
+        Args:
+            latent: Input latent tensor (B, C, F', H', W').
+            tiling_config: Tiling configuration for the latent tensor.
+            timestep: Optional timestep for decoder conditioning.
+            generator: Optional random generator for deterministic decoding.
+        Yields:
+            Video chunks (B, C, T, H, W) by temporal slices;
+        """
+
+        # Calculate full video shape from latent shape to get spatial dimensions
+        full_video_shape = VideoLatentShape.from_torch_shape(latent.shape).upscale(self.video_downscale_factors)
+        tiles = self._prepare_tiles(latent, tiling_config)
+
+        temporal_groups = self._group_tiles_by_temporal_slice(tiles)
+
+        # State for temporal overlap handling
+        previous_chunk = None
+        previous_weights = None
+        previous_temporal_slice = None
+
+        for temporal_group_tiles in temporal_groups:
+            curr_temporal_slice = temporal_group_tiles[0].out_coords[2]
+
+            # Calculate the shape of the temporal buffer for this group of tiles.
+            # The temporal length depends on whether this is the first tile (starts at 0) or not.
+            # - First tile: (frames - 1) * scale + 1
+            # - Subsequent tiles: frames * scale
+            # This logic is handled by TemporalAxisMapping and reflected in out_coords.
+            temporal_tile_buffer_shape = full_video_shape._replace(
+                frames=curr_temporal_slice.stop - curr_temporal_slice.start,
+            )
+
+            buffer = torch.zeros(
+                temporal_tile_buffer_shape.to_torch_shape(),
+                device=latent.device,
+                dtype=latent.dtype,
+            )
+
+            curr_weights = self._accumulate_temporal_group_into_buffer(
+                group_tiles=temporal_group_tiles,
+                buffer=buffer,
+                latent=latent,
+                timestep=timestep,
+                generator=generator,
+            )
+
+            # Blend with previous temporal chunk if it exists
+            if previous_chunk is not None:
+                # Check if current temporal slice overlaps with previous temporal slice
+                if previous_temporal_slice.stop > curr_temporal_slice.start:
+                    overlap_len = previous_temporal_slice.stop - curr_temporal_slice.start
+                    temporal_overlap_slice = slice(curr_temporal_slice.start - previous_temporal_slice.start, None)
+
+                    # The overlap is already masked before it reaches this step. Each tile is accumulated into buffer
+                    # with its trapezoidal mask, and curr_weights accumulates the same mask. In the overlap blend we add
+                    # the masked values (buffer[...]) and the corresponding weights (curr_weights[...]) into the
+                    # previous buffers, then later normalize by weights.
+                    previous_chunk[:, :, temporal_overlap_slice, :, :] += buffer[:, :, slice(0, overlap_len), :, :]
+                    previous_weights[:, :, temporal_overlap_slice, :, :] += curr_weights[
+                        :, :, slice(0, overlap_len), :, :
+                    ]
+
+                    buffer[:, :, slice(0, overlap_len), :, :] = previous_chunk[:, :, temporal_overlap_slice, :, :]
+                    curr_weights[:, :, slice(0, overlap_len), :, :] = previous_weights[
+                        :, :, temporal_overlap_slice, :, :
+                    ]
+
+                # Yield the non-overlapping part of the previous chunk
+                previous_weights = previous_weights.clamp(min=1e-8)
+                yield_len = curr_temporal_slice.start - previous_temporal_slice.start
+                yield (previous_chunk / previous_weights)[:, :, :yield_len, :, :]
+
+            # Update state for next iteration
+            previous_chunk = buffer
+            previous_weights = curr_weights
+            previous_temporal_slice = curr_temporal_slice
+
+        # Yield any remaining chunk
+        if previous_chunk is not None:
+            previous_weights = previous_weights.clamp(min=1e-8)
+            yield previous_chunk / previous_weights
+
+    def _group_tiles_by_temporal_slice(self, tiles: List[Tile]) -> List[List[Tile]]:
+        """Group tiles by their temporal output slice."""
+        if not tiles:
+            return []
+
+        groups = []
+        current_slice = tiles[0].out_coords[2]
+        current_group = []
+
+        for tile in tiles:
+            tile_slice = tile.out_coords[2]
+            if tile_slice == current_slice:
+                current_group.append(tile)
+            else:
+                groups.append(current_group)
+                current_slice = tile_slice
+                current_group = [tile]
+
+        # Add the final group
+        if current_group:
+            groups.append(current_group)
+
+        return groups
+
+    def _accumulate_temporal_group_into_buffer(
+        self,
+        group_tiles: List[Tile],
+        buffer: torch.Tensor,
+        latent: torch.Tensor,
+        timestep: torch.Tensor | None,
+        generator: torch.Generator | None,
+    ) -> torch.Tensor:
+        """
+        Decode and accumulate all tiles of a temporal group into a local buffer.
+        The buffer is local to the group and always starts at time 0; temporal coordinates
+        are rebased by subtracting temporal_slice.start.
+        """
+        temporal_slice = group_tiles[0].out_coords[2]
+
+        weights = torch.zeros_like(buffer)
+
+        for tile in group_tiles:
+            decoded_tile = self.forward(latent[tile.in_coords], timestep, generator)
+            mask = tile.blend_mask.to(device=buffer.device, dtype=buffer.dtype)
+            temporal_offset = tile.out_coords[2].start - temporal_slice.start
+            # Use the tile's output coordinate length, not the decoded tile's length,
+            # as the decoder may produce a different number of frames than expected
+            expected_temporal_len = tile.out_coords[2].stop - tile.out_coords[2].start
+            decoded_temporal_len = decoded_tile.shape[2]
+
+            # Ensure we don't exceed the buffer or decoded tile bounds
+            actual_temporal_len = min(expected_temporal_len, decoded_temporal_len, buffer.shape[2] - temporal_offset)
+
+            chunk_coords = (
+                slice(None),  # batch
+                slice(None),  # channels
+                slice(temporal_offset, temporal_offset + actual_temporal_len),
+                tile.out_coords[3],  # height
+                tile.out_coords[4],  # width
+            )
+
+            # Slice decoded_tile and mask to match the actual length we're writing
+            decoded_slice = decoded_tile[:, :, :actual_temporal_len, :, :]
+            mask_slice = mask[:, :, :actual_temporal_len, :, :] if mask.shape[2] > 1 else mask
+
+            buffer[chunk_coords] += decoded_slice * mask_slice
+            weights[chunk_coords] += mask_slice
+
+        return weights
+
+
+
+class AutoencoderKLLTX2Video(ModelMixin, ConfigMixin):
+    @register_to_config
+    def __init__(self, 
+                 block_out_channels: List[int] = [128, 256, 512, 512],
+                 decoder_block_out_channels: List[int] = [128, 256, 512, 512],
+                 decoder_causal: bool = False,
+                 decoder_inject_noise: List[bool] = [False, False, False, False],  # noqa: B006
+                 decoder_layers_per_block: List[int] = [2, 2, 2, 2],
+                 decoder_spatial_padding_mode: PaddingModeType | str = PaddingModeType.REFLECT,
+                 decoder_spatio_temporal_scaling: List[bool] = [True, True, True, False],
+                 down_block_types: List[str] = ["DownEncoderBlock3D", "DownEncoderBlock3D", "DownEncoderBlock3D", "DownEncoderBlock3D"],
+                 downsample_type: List[str] = ["spatial", "temporal", "spatial", "temporal"],
+                 encoder_causal: bool = False, 
+                 encoder_spatial_padding_mode: PaddingModeType | str = PaddingModeType.REFLECT,
+                 in_channels: int = 3,
+                 latent_channels: int = 128,
+                 layers_per_block: List[int] = [2, 2, 2, 2],
+                 out_channels: int = 3,
+                 patch_size: int = 4,
+                 patch_size_t: int = 1,
+                 resnet_norm_eps: float = 1e-06,
+                 scaling_factor: float = 1.0,
+                 spatial_compression_ratio: int = 32,
+                 spatio_temporal_scaling: List[bool] = [True, True, True, True],
+                 temporal_compression_ratio: int = 8,
+                 timestep_conditioning: bool = False,
+                 upsample_factor: List[int] = [2, 2, 2],
+                 upsample_residual: List[bool] = [True, True, True],
+                 ):
+    
         super().__init__()
 
-        self.encoder = LTX2VideoEncoder3d(
-            in_channels=in_channels,
-            out_channels=latent_channels,
-            block_out_channels=block_out_channels,
-            down_block_types=down_block_types,
-            spatio_temporal_scaling=spatio_temporal_scaling,
-            layers_per_block=layers_per_block,
-            downsample_type=downsample_type,
-            patch_size=patch_size,
-            patch_size_t=patch_size_t,
-            resnet_norm_eps=resnet_norm_eps,
-            is_causal=encoder_causal,
-            spatial_padding_mode=encoder_spatial_padding_mode,
+        # Diffusers configs provide padding modes as strings; normalize to enums.
+        encoder_spatial_padding_mode = _as_padding_mode(encoder_spatial_padding_mode)
+        decoder_spatial_padding_mode = _as_padding_mode(decoder_spatial_padding_mode)
+
+        # Back-compat: some configs may provide a single bool instead of a per-block list.
+        if isinstance(decoder_inject_noise, bool):
+            decoder_inject_noise = [decoder_inject_noise] * len(decoder_layers_per_block)
+        
+        converted_cfg = convert_diffusers_ltx2_vae_config_to_causal_video_autoencoder_config(
+            {
+                "block_out_channels": block_out_channels,
+                "decoder_block_out_channels": decoder_block_out_channels,
+                "decoder_causal": decoder_causal,
+                "decoder_inject_noise": decoder_inject_noise,
+                "decoder_layers_per_block": decoder_layers_per_block,
+                "decoder_spatio_temporal_scaling": decoder_spatio_temporal_scaling,
+                "downsample_type": downsample_type,
+                "encoder_causal": encoder_causal,
+                "in_channels": in_channels,
+                "latent_channels": latent_channels,
+                "layers_per_block": layers_per_block,
+                "out_channels": out_channels,
+                "patch_size": patch_size,
+                "patch_size_t": patch_size_t,
+                "resnet_norm_eps": resnet_norm_eps,
+                "scaling_factor": scaling_factor,
+                "spatio_temporal_scaling": spatio_temporal_scaling,
+                "timestep_conditioning": timestep_conditioning,
+                "upsample_factor": upsample_factor,
+                "upsample_residual": upsample_residual,
+            }
         )
-        self.decoder = LTX2VideoDecoder3d(
-            in_channels=latent_channels,
-            out_channels=out_channels,
-            block_out_channels=decoder_block_out_channels,
-            spatio_temporal_scaling=decoder_spatio_temporal_scaling,
-            layers_per_block=decoder_layers_per_block,
-            patch_size=patch_size,
-            patch_size_t=patch_size_t,
-            resnet_norm_eps=resnet_norm_eps,
-            is_causal=decoder_causal,
-            timestep_conditioning=timestep_conditioning,
-            inject_noise=decoder_inject_noise,
-            upsample_residual=upsample_residual,
-            upsample_factor=upsample_factor,
-            spatial_padding_mode=decoder_spatial_padding_mode,
+        
+
+        self.encoder = VideoEncoder(
+            convolution_dimensions=converted_cfg["dims"],
+            in_channels=converted_cfg["in_channels"],
+            out_channels=converted_cfg["latent_channels"],
+            encoder_blocks=converted_cfg["encoder_blocks"],
+            patch_size=converted_cfg["patch_size"],
+            norm_layer=NormLayerType(converted_cfg["norm_layer"]),
+            latent_log_var=LogVarianceType(converted_cfg["latent_log_var"]),
+            encoder_spatial_padding_mode=encoder_spatial_padding_mode,
+        )
+        
+        self.decoder = VideoDecoder(
+            convolution_dimensions=converted_cfg["dims"],
+            in_channels=converted_cfg["latent_channels"],
+            out_channels=converted_cfg["out_channels"],
+            decoder_blocks=converted_cfg["decoder_blocks"],
+            patch_size=converted_cfg["patch_size"],
+            norm_layer=NormLayerType(converted_cfg["norm_layer"]),
+            causal=converted_cfg["causal_decoder"],
+            timestep_conditioning=converted_cfg["timestep_conditioning"],
+            decoder_spatial_padding_mode=decoder_spatial_padding_mode,
         )
 
         latents_mean = torch.zeros((latent_channels,), requires_grad=False)
         latents_std = torch.ones((latent_channels,), requires_grad=False)
         self.register_buffer("latents_mean", latents_mean, persistent=True)
         self.register_buffer("latents_std", latents_std, persistent=True)
+        
+        self.decoder.denormalize_latents = self.denormalize_latents
+        self.decoder.normalize_latents = self.normalize_latents
+        self.encoder.denormalize_latents = self.denormalize_latents
+        self.encoder.normalize_latents = self.normalize_latents
 
         self.spatial_compression_ratio = (
             patch_size * 2 ** sum(spatio_temporal_scaling)
@@ -1131,411 +1116,15 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
             else temporal_compression_ratio
         )
 
-        # When decoding a batch of video latents at a time, one can save memory by slicing across the batch dimension
-        # to perform decoding of a single video latent at a time.
-        self.use_slicing = False
-
-        # When decoding spatially large video latents, the memory requirement is very high. By breaking the video latent
-        # frames spatially into smaller tiles and performing multiple forward passes for decoding, and then blending the
-        # intermediate tiles together, the memory requirement can be lowered.
-        self.use_tiling = False
-
-        # When decoding temporally long video latents, the memory requirement is very high. By decoding latent frames
-        # at a fixed frame batch size (based on `self.num_latent_frames_batch_sizes`), the memory requirement can be lowered.
-        self.use_framewise_encoding = False
-        self.use_framewise_decoding = False
-
-        # This can be configured based on the amount of GPU memory available.
-        # `16` for sample frames and `2` for latent frames are sensible defaults for consumer GPUs.
-        # Setting it to higher values results in higher memory usage.
-        self.num_sample_frames_batch_size = 16
-        self.num_latent_frames_batch_size = 2
-
-        # The minimal tile height and width for spatial tiling to be used
-        self.tile_sample_min_height = 512
-        self.tile_sample_min_width = 512
-        self.tile_sample_min_num_frames = 32
-
-        # The minimal distance between two spatial tiles
-        self.tile_sample_stride_height = 448
-        self.tile_sample_stride_width = 448
-        self.tile_sample_stride_num_frames = 16
-
-    def enable_tiling(
-        self,
-        tile_sample_min_height: Optional[int] = None,
-        tile_sample_min_width: Optional[int] = None,
-        tile_sample_min_num_frames: Optional[int] = None,
-        tile_sample_stride_height: Optional[float] = None,
-        tile_sample_stride_width: Optional[float] = None,
-        tile_sample_stride_num_frames: Optional[float] = None,
-        use_framewise_encoding: Optional[bool] = None,
-        use_framewise_decoding: Optional[bool] = None,
-        num_sample_frames_batch_size: Optional[int] = None,
-        num_latent_frames_batch_size: Optional[int] = None,
-        enabled: bool = True,
-    ) -> None:
-        r"""
-        Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
-        compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
-        processing larger images.
-
-        Args:
-            tile_sample_min_height (`int`, *optional*):
-                The minimum height required for a sample to be separated into tiles across the height dimension.
-            tile_sample_min_width (`int`, *optional*):
-                The minimum width required for a sample to be separated into tiles across the width dimension.
-            tile_sample_stride_height (`int`, *optional*):
-                The minimum amount of overlap between two consecutive vertical tiles. This is to ensure that there are
-                no tiling artifacts produced across the height dimension.
-            tile_sample_stride_width (`int`, *optional*):
-                The stride between two consecutive horizontal tiles. This is to ensure that there are no tiling
-                artifacts produced across the width dimension.
-        """
-        self.use_tiling = enabled
-        self.tile_sample_min_height = tile_sample_min_height or self.tile_sample_min_height
-        self.tile_sample_min_width = tile_sample_min_width or self.tile_sample_min_width
-        self.tile_sample_min_num_frames = tile_sample_min_num_frames or self.tile_sample_min_num_frames
-        self.tile_sample_stride_height = tile_sample_stride_height or self.tile_sample_stride_height
-        self.tile_sample_stride_width = tile_sample_stride_width or self.tile_sample_stride_width
-        self.tile_sample_stride_num_frames = tile_sample_stride_num_frames or self.tile_sample_stride_num_frames
-        self.use_framewise_encoding = use_framewise_encoding or self.use_framewise_encoding
-        self.use_framewise_decoding = use_framewise_decoding or self.use_framewise_decoding
-        self.num_sample_frames_batch_size = num_sample_frames_batch_size or self.num_sample_frames_batch_size
-        self.num_latent_frames_batch_size = num_latent_frames_batch_size or self.num_latent_frames_batch_size
-        
-    def _encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
-        batch_size, num_channels, num_frames, height, width = x.shape
-
-        if self.use_framewise_decoding and num_frames > self.tile_sample_min_num_frames:
-            return self._temporal_tiled_encode(x, causal=causal)
-
-        if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
-            return self.tiled_encode(x, causal=causal)
-
-        enc = self.encoder(x, causal=causal)
-
-        return enc
-
-    @apply_forward_hook
-    def encode(
-        self, x: torch.Tensor, causal: Optional[bool] = None, return_dict: bool = True
-    ) -> Union[AutoencoderKLOutput, Tuple[DiagonalGaussianDistribution]]:
-        """
-        Encode a batch of images into latents.
-
-        Args:
-            x (`torch.Tensor`): Input batch of images.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether to return a [`~models.autoencoder_kl.AutoencoderKLOutput`] instead of a plain tuple.
-
-        Returns:
-                The latent representations of the encoded videos. If `return_dict` is True, a
-                [`~models.autoencoder_kl.AutoencoderKLOutput`] is returned, otherwise a plain `tuple` is returned.
-        """
-        if self.use_slicing and x.shape[0] > 1:
-            encoded_slices = [self._encode(x_slice, causal=causal) for x_slice in x.split(1)]
-            h = torch.cat(encoded_slices)
-        else:
-            h = self._encode(x, causal=causal)
-        posterior = DiagonalGaussianDistribution(h)
-
-        if not return_dict:
-            return (posterior,)
-        return AutoencoderKLOutput(latent_dist=posterior)
-
-    def _decode(
-        self,
-        z: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
-        causal: Optional[bool] = None,
-        return_dict: bool = True,
-    ) -> Union[DecoderOutput, torch.Tensor]:
-        batch_size, num_channels, num_frames, height, width = z.shape
-
-        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
-        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
-        tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
+    def forward(self, latent: torch.Tensor) -> torch.Tensor:
+        return self.decoder(latent)
     
-        if self.use_framewise_decoding and num_frames > tile_latent_min_num_frames:
-            return self._temporal_tiled_decode(z, temb, causal=causal, return_dict=return_dict)
-
-        if self.use_tiling and (width > tile_latent_min_width or height > tile_latent_min_height):
-            return self.tiled_decode(z, temb, causal=causal, return_dict=return_dict)
-
-        dec = self.decoder(z, temb, causal=causal)
-
-        if not return_dict:
-            return (dec,)
-
-        return DecoderOutput(sample=dec)
-
-    @apply_forward_hook
-    def decode(
-        self,
-        z: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
-        causal: Optional[bool] = None,
-        return_dict: bool = True,
-    ) -> Union[DecoderOutput, torch.Tensor]:
-        """
-        Decode a batch of images.
-
-        Args:
-            z (`torch.Tensor`): Input batch of latent vectors.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
-
-        Returns:
-            [`~models.vae.DecoderOutput`] or `tuple`:
-                If return_dict is True, a [`~models.vae.DecoderOutput`] is returned, otherwise a plain `tuple` is
-                returned.
-        """
-        if self.use_slicing and z.shape[0] > 1:
-            if temb is not None:
-                decoded_slices = [
-                    self._decode(z_slice, t_slice, causal=causal).sample
-                    for z_slice, t_slice in (z.split(1), temb.split(1))
-                ]
-            else:
-                decoded_slices = [self._decode(z_slice, causal=causal).sample for z_slice in z.split(1)]
-            decoded = torch.cat(decoded_slices)
-        else:
-            decoded = self._decode(z, temb, causal=causal).sample
-
-        if not return_dict:
-            return (decoded,)
-
-        return DecoderOutput(sample=decoded)
-
-    def blend_v(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
-        blend_extent = min(a.shape[3], b.shape[3], blend_extent)
-        for y in range(blend_extent):
-            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (1 - y / blend_extent) + b[:, :, :, y, :] * (
-                y / blend_extent
-            )
-        return b
-
-    def blend_h(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
-        blend_extent = min(a.shape[4], b.shape[4], blend_extent)
-        for x in range(blend_extent):
-            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, :, x] * (
-                x / blend_extent
-            )
-        return b
-
-    def blend_t(self, a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
-        blend_extent = min(a.shape[-3], b.shape[-3], blend_extent)
-        for x in range(blend_extent):
-            b[:, :, x, :, :] = a[:, :, -blend_extent + x, :, :] * (1 - x / blend_extent) + b[:, :, x, :, :] * (
-                x / blend_extent
-            )
-        return b
-
-    def tiled_encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> torch.Tensor:
-        r"""Encode a batch of images using a tiled encoder.
-
-        Args:
-            x (`torch.Tensor`): Input batch of videos.
-
-        Returns:
-            `torch.Tensor`:
-                The latent representation of the encoded videos.
-        """
-        batch_size, num_channels, num_frames, height, width = x.shape
-        latent_height = height // self.spatial_compression_ratio
-        latent_width = width // self.spatial_compression_ratio
-
-        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
-        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
-        tile_latent_stride_height = self.tile_sample_stride_height // self.spatial_compression_ratio
-        tile_latent_stride_width = self.tile_sample_stride_width // self.spatial_compression_ratio
-
-        blend_height = tile_latent_min_height - tile_latent_stride_height
-        blend_width = tile_latent_min_width - tile_latent_stride_width
-
-        # Split x into overlapping tiles and encode them separately.
-        # The tiles have an overlap to avoid seams between tiles.
-        rows = []
-        for i in range(0, height, self.tile_sample_stride_height):
-            row = []
-            for j in range(0, width, self.tile_sample_stride_width):
-                time = self.encoder(
-                    x[:, :, :, i : i + self.tile_sample_min_height, j : j + self.tile_sample_min_width],
-                    causal=causal,
-                )
-
-                row.append(time)
-            rows.append(row)
-
-        result_rows = []
-        for i, row in enumerate(rows):
-            result_row = []
-            for j, tile in enumerate(row):
-                # blend the above tile and the left tile
-                # to the current tile and add the current tile to the result row
-                if i > 0:
-                    tile = self.blend_v(rows[i - 1][j], tile, blend_height)
-                if j > 0:
-                    tile = self.blend_h(row[j - 1], tile, blend_width)
-                result_row.append(tile[:, :, :, :tile_latent_stride_height, :tile_latent_stride_width])
-            result_rows.append(torch.cat(result_row, dim=4))
-
-        enc = torch.cat(result_rows, dim=3)[:, :, :, :latent_height, :latent_width]
-        return enc
-
-    def tiled_decode(
-        self, z: torch.Tensor, temb: Optional[torch.Tensor], causal: Optional[bool] = None, return_dict: bool = True
-    ) -> Union[DecoderOutput, torch.Tensor]:
-        r"""
-        Decode a batch of images using a tiled decoder.
-
-        Args:
-            z (`torch.Tensor`): Input batch of latent vectors.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
-
-        Returns:
-            [`~models.vae.DecoderOutput`] or `tuple`:
-                If return_dict is True, a [`~models.vae.DecoderOutput`] is returned, otherwise a plain `tuple` is
-                returned.
-        """
-
-        batch_size, num_channels, num_frames, height, width = z.shape
-        sample_height = height * self.spatial_compression_ratio
-        sample_width = width * self.spatial_compression_ratio
-
-        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
-        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
-        tile_latent_stride_height = self.tile_sample_stride_height // self.spatial_compression_ratio
-        tile_latent_stride_width = self.tile_sample_stride_width // self.spatial_compression_ratio
-
-        blend_height = self.tile_sample_min_height - self.tile_sample_stride_height
-        blend_width = self.tile_sample_min_width - self.tile_sample_stride_width
-
-        # Split z into overlapping tiles and decode them separately.
-        # The tiles have an overlap to avoid seams between tiles.
-        rows = []
-        for i in range(0, height, tile_latent_stride_height):
-            row = []
-            for j in range(0, width, tile_latent_stride_width):
-                time = self.decoder(
-                    z[:, :, :, i : i + tile_latent_min_height, j : j + tile_latent_min_width], temb, causal=causal
-                )
-
-                row.append(time)
-            rows.append(row)
-
-        result_rows = []
-        for i, row in enumerate(rows):
-            result_row = []
-            for j, tile in enumerate(row):
-                # blend the above tile and the left tile
-                # to the current tile and add the current tile to the result row
-                if i > 0:
-                    tile = self.blend_v(rows[i - 1][j], tile, blend_height)
-                if j > 0:
-                    tile = self.blend_h(row[j - 1], tile, blend_width)
-                result_row.append(tile[:, :, :, : self.tile_sample_stride_height, : self.tile_sample_stride_width])
-            result_rows.append(torch.cat(result_row, dim=4))
-
-        dec = torch.cat(result_rows, dim=3)[:, :, :, :sample_height, :sample_width]
-
-        if not return_dict:
-            return (dec,)
-
-        return DecoderOutput(sample=dec)
-
-    def _temporal_tiled_encode(self, x: torch.Tensor, causal: Optional[bool] = None) -> AutoencoderKLOutput:
-        batch_size, num_channels, num_frames, height, width = x.shape
-        latent_num_frames = (num_frames - 1) // self.temporal_compression_ratio + 1
-
-        tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
-        tile_latent_stride_num_frames = self.tile_sample_stride_num_frames // self.temporal_compression_ratio
-        blend_num_frames = tile_latent_min_num_frames - tile_latent_stride_num_frames
-
-        row = []
-        for i in range(0, num_frames, self.tile_sample_stride_num_frames):
-            tile = x[:, :, i : i + self.tile_sample_min_num_frames + 1, :, :]
-            if self.use_tiling and (height > self.tile_sample_min_height or width > self.tile_sample_min_width):
-                tile = self.tiled_encode(tile, causal=causal)
-            else:
-                tile = self.encoder(tile, causal=causal)
-            if i > 0:
-                tile = tile[:, :, 1:, :, :]
-            row.append(tile)
-
-        result_row = []
-        for i, tile in enumerate(row):
-            if i > 0:
-                tile = self.blend_t(row[i - 1], tile, blend_num_frames)
-                result_row.append(tile[:, :, :tile_latent_stride_num_frames, :, :])
-            else:
-                result_row.append(tile[:, :, : tile_latent_stride_num_frames + 1, :, :])
-
-        enc = torch.cat(result_row, dim=2)[:, :, :latent_num_frames]
-        return enc
-
-    def _temporal_tiled_decode(
-        self, z: torch.Tensor, temb: Optional[torch.Tensor], causal: Optional[bool] = None, return_dict: bool = True
-    ) -> Union[DecoderOutput, torch.Tensor]:
-        batch_size, num_channels, num_frames, height, width = z.shape
-        num_sample_frames = (num_frames - 1) * self.temporal_compression_ratio + 1
-
-        tile_latent_min_height = self.tile_sample_min_height // self.spatial_compression_ratio
-        tile_latent_min_width = self.tile_sample_min_width // self.spatial_compression_ratio
-        tile_latent_min_num_frames = self.tile_sample_min_num_frames // self.temporal_compression_ratio
-        tile_latent_stride_num_frames = self.tile_sample_stride_num_frames // self.temporal_compression_ratio
-        blend_num_frames = self.tile_sample_min_num_frames - self.tile_sample_stride_num_frames
-
-        row = []
-        from tqdm import tqdm
-        for i in tqdm(range(0, num_frames, tile_latent_stride_num_frames)):
-            tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
-            if self.use_tiling and (tile.shape[-1] > tile_latent_min_width or tile.shape[-2] > tile_latent_min_height):
-                decoded = self.tiled_decode(tile, temb, causal=causal, return_dict=True).sample
-            else:
-                decoded = self.decoder(tile, temb, causal=causal)
-            if i > 0:
-                decoded = decoded[:, :, :-1, :, :]
-            row.append(decoded.cpu())
-
-        result_row = []
-        for i, tile in enumerate(row):
-            if i > 0:
-                tile = self.blend_t(row[i - 1], tile, blend_num_frames)
-                tile = tile[:, :, : self.tile_sample_stride_num_frames, :, :]
-                result_row.append(tile)
-            else:
-                result_row.append(tile[:, :, : self.tile_sample_stride_num_frames + 1, :, :])
-
-        dec = torch.cat(result_row, dim=2)[:, :, :num_sample_frames]
-
-        if not return_dict:
-            return (dec,)
-        return DecoderOutput(sample=dec)
-
-    def forward(
-        self,
-        sample: torch.Tensor,
-        temb: Optional[torch.Tensor] = None,
-        sample_posterior: bool = False,
-        encoder_causal: Optional[bool] = None,
-        decoder_causal: Optional[bool] = None,
-        return_dict: bool = True,
-        generator: Optional[torch.Generator] = None,
-    ) -> Union[torch.Tensor, torch.Tensor]:
-        x = sample
-        posterior = self.encode(x, causal=encoder_causal).latent_dist
-        if sample_posterior:
-            z = posterior.sample(generator=generator)
-        else:
-            z = posterior.mode()
-        dec = self.decode(z, temb, causal=decoder_causal)
-        if not return_dict:
-            return (dec.sample,)
-        return dec
-
+    def encode(self, video: torch.Tensor) -> torch.Tensor:
+        return self.encoder(video)
+    
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        return self.decoder(latent)
+    
     def denormalize_latents(self, latents: torch.Tensor):
         latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(
             latents.device, latents.dtype
@@ -1555,3 +1144,124 @@ class AutoencoderKLLTX2Video(ModelMixin, AutoencoderMixin, ConfigMixin, FromOrig
         )
         latents = (latents - latents_mean) * self.config.scaling_factor / latents_std
         return latents
+
+@torch.no_grad()
+def decode_video(
+    latent: torch.Tensor,
+    video_decoder: VideoDecoder,
+    tiling_config: TilingConfig | None = None,
+    generator: torch.Generator | None = None,
+) -> Iterator[torch.Tensor]:
+    """
+    Decode a video latent tensor with the given decoder.
+    Args:
+        latent: Tensor [c, f, h, w]
+        video_decoder: Decoder module.
+        tiling_config: Optional tiling settings.
+        generator: Optional random generator for deterministic decoding.
+    Yields:
+        Decoded chunk [f, h, w, c], uint8 in [0, 255].
+    """
+    
+    video_decoder.eval()
+
+    def convert_to_uint8(frames: torch.Tensor) -> torch.Tensor:
+        frames = (((frames + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
+        frames = rearrange(frames[0], "c f h w -> f h w c")
+        return frames
+    
+    out_frames = []
+    if tiling_config is not None:
+        for frames in tqdm(video_decoder.tiled_decode(latent, tiling_config, generator=generator), desc="Decoding video"):
+            out_frames.append(convert_to_uint8(frames))
+    else:
+        decoded_video = video_decoder(latent, generator=generator)
+        out_frames.append(convert_to_uint8(decoded_video))
+
+    return torch.cat(out_frames, dim=0)
+
+
+def get_video_chunks_number(num_frames: int, tiling_config: TilingConfig | None = None) -> int:
+    """
+    Get the number of video chunks for a given number of frames and tiling configuration.
+    Args:
+        num_frames: Number of frames in the video.
+        tiling_config: Tiling configuration.
+    Returns:
+        Number of video chunks.
+    """
+    if not tiling_config or not tiling_config.temporal_config:
+        return 1
+    cfg = tiling_config.temporal_config
+    frame_stride = cfg.tile_size_in_frames - cfg.tile_overlap_in_frames
+    return (num_frames - 1 + frame_stride - 1) // frame_stride
+
+
+def split_in_spatial(size: int, overlap: int) -> SplitOperation:
+    def split(dimension_size: int) -> DimensionIntervals:
+        if dimension_size <= size:
+            return DEFAULT_SPLIT_OPERATION(dimension_size)
+        amount = (dimension_size + size - 2 * overlap - 1) // (size - overlap)
+        starts = [i * (size - overlap) for i in range(amount)]
+        ends = [start + size for start in starts]
+        ends[-1] = dimension_size
+        left_ramps = [0] + [overlap] * (amount - 1)
+        right_ramps = [overlap] * (amount - 1) + [0]
+        return DimensionIntervals(starts=starts, ends=ends, left_ramps=left_ramps, right_ramps=right_ramps)
+
+    return split
+
+
+def split_in_temporal(size: int, overlap: int) -> SplitOperation:
+    non_causal_split = split_in_spatial(size, overlap)
+
+    def split(dimension_size: int) -> DimensionIntervals:
+        if dimension_size <= size:
+            return DEFAULT_SPLIT_OPERATION(dimension_size)
+        intervals = non_causal_split(dimension_size)
+        starts = intervals.starts
+        starts[1:] = [s - 1 for s in starts[1:]]
+        left_ramps = intervals.left_ramps
+        left_ramps[1:] = [r + 1 for r in left_ramps[1:]]
+        return replace(intervals, starts=starts, left_ramps=left_ramps)
+
+    return split
+
+
+def to_mapping_operation(
+    map_func: Callable[[int, int, int, int, int], Tuple[slice, torch.Tensor]],
+    scale: int,
+) -> MappingOperation:
+    def map_op(intervals: DimensionIntervals) -> tuple[list[slice], list[torch.Tensor | None]]:
+        output_slices: list[slice] = []
+        masks_1d: list[torch.Tensor | None] = []
+        number_of_slices = len(intervals.starts)
+        for i in range(number_of_slices):
+            start = intervals.starts[i]
+            end = intervals.ends[i]
+            left_ramp = intervals.left_ramps[i]
+            right_ramp = intervals.right_ramps[i]
+            output_slice, mask_1d = map_func(start, end, left_ramp, right_ramp, scale)
+            output_slices.append(output_slice)
+            masks_1d.append(mask_1d)
+        return output_slices, masks_1d
+
+    return map_op
+
+
+def map_temporal_slice(begin: int, end: int, left_ramp: int, right_ramp: int, scale: int) -> Tuple[slice, torch.Tensor]:
+    start = begin * scale
+    stop = 1 + (end - 1) * scale
+    left_ramp = 1 + (left_ramp - 1) * scale
+    right_ramp = right_ramp * scale
+
+    return slice(start, stop), compute_trapezoidal_mask_1d(stop - start, left_ramp, right_ramp, True)
+
+
+def map_spatial_slice(begin: int, end: int, left_ramp: int, right_ramp: int, scale: int) -> Tuple[slice, torch.Tensor]:
+    start = begin * scale
+    stop = end * scale
+    left_ramp = left_ramp * scale
+    right_ramp = right_ramp * scale
+
+    return slice(start, stop), compute_trapezoidal_mask_1d(stop - start, left_ramp, right_ramp, False)

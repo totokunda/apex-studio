@@ -154,7 +154,13 @@ def _chunked_modulated_norm(
     Expects `hidden_states` to be `[batch, seq_len, dim]`.
     """
     if chunk_size is None:
-        return norm_layer(hidden_states) * (1 + scale) + shift
+        # Non-chunked path: still needs to support per-frame modulation tensors shaped `[B, F, D]`
+        # applied to token sequences `[B, (F*T), D]`.
+        out = norm_layer(hidden_states)
+        if out.ndim == 3:
+            _apply_scale_shift_inplace(out, scale, shift)
+            return out
+        return out * (1 + scale) + shift
     if chunk_size <= 0:
         raise ValueError(f"chunk_size must be positive or None, got {chunk_size}")
 
@@ -267,6 +273,12 @@ def _chunked_apply_scale_shift(
     Chunked `hidden_states * (1 + scale) + shift` along sequence dim (dim=1).
     """
     if chunk_size is None:
+        # Non-chunked path: still needs to support per-frame scale/shift tensors shaped `[B, F, D]`
+        # applied to token sequences `[B, (F*T), D]`.
+        if hidden_states.ndim == 3:
+            out = hidden_states.clone()
+            _apply_scale_shift_inplace(out, scale, shift)
+            return out
         return hidden_states * (1 + scale) + shift
     if chunk_size <= 0:
         raise ValueError(f"chunk_size must be positive or None, got {chunk_size}")

@@ -1,0 +1,258 @@
+api_version: apex/v1
+kind: Model
+type: image
+metadata:
+  id: flux2-klein-9b-base-text-to-image-edit
+  model: flux2-klein
+  name: Flux Klein 9B Base Text to Image Edit
+  version: 0.1.2
+  description: Flux Klein is a 9B parameter model for text-to-image and image-to-image
+    generation.
+  tags:
+  - flux2
+  - klein
+  - image-edit
+  - i2i
+  categories:
+  - image-edit
+  - text-to-image
+  author: Black Forest Labs
+  license: Apache-2.0
+  demo_path: models/flux2-klein-9b-base-text-to-image-edit.png
+spec:
+  engine: flux2
+  model_type: klein
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: vae
+    label: Flux VAE
+    base: flux2
+    config_path: totoku/apex-models/FLUX.2-dev/vae/config.json
+    model_path:
+    - path: totoku/apex-models/FLUX.2-dev/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+  - type: text_encoder
+    name: text_encoder
+    label: Flux2 Text Encoder
+    base: Qwen3ForCausalLM
+    ignore_offloading_modules:
+    - lm_head
+    - embed_tokens
+    block_modules:
+    - model
+    config_path: totoku/apex-models/FLUX.2-klein-9B/text_encoder/config.json
+    model_path:
+    - path: totoku/apex-models/FLUX.2-klein-9B/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+    - path: totoku/apex-models/FLUX.2-klein-9B/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/FLUX.2-klein-9B/text_encoder/text_encoder-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    tokenizer_class: Qwen2Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: FLUX.2-klein-9B/tokenizer
+  - type: transformer
+    label: Flux Transformer
+    base: flux2.base
+    config_path: totoku/apex-models/FLUX.2-klein-9B/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/FLUX.2-klein-base-9B/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/FLUX.2-klein-base-9B/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/FLUX.2-klein-base-9B/transformer/transformer-gguf_q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/FLUX.2-klein-base-9B/transformer/transformer-gguf_q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/FLUX.2-klein-base-9B/transformer/transformer-gguf_q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+  defaults:
+    run:
+      num_inference_steps: 4
+      guidance_scale: 1.0
+      return_latents: false
+  ui:
+    panels:
+    - name: images
+      label: Images
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: image
+      label: Images
+      description: The input image to edit.
+      type: image_list
+      panel: input
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 720
+      options:
+      - name: HD
+        value: 720
+        height: 720
+      - name: Ultra HD
+        value: 1024
+        height: 1024
+      - name: SD
+        value: 480
+        height: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 4
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 1024
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5

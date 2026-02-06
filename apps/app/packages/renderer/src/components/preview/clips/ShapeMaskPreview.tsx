@@ -220,8 +220,11 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
 
         if (result) {
           const currentMasks = (targetClip as any).masks || [];
+          const now = Date.now();
           const updatedMasks = currentMasks.map((m: MaskClipProps) =>
-            m.id === mask.id ? { ...m, keyframes: result.keyframes } : m,
+            m.id === mask.id
+              ? { ...m, keyframes: result.keyframes, lastModified: now }
+              : m,
           );
 
           clipStoreState.updateClip(mask.clipId, { masks: updatedMasks });

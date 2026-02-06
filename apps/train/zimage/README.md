@@ -160,12 +160,26 @@ The simplest way is via `train.sh` (it is location-independent):
 RUN_NAME="my_run" MAX_STEPS=5000 OPTIMIZER="adamw" bash ./train.sh
 ```
 
+Resume an existing run (continues writing into `lora/<run_name>/`):
+
+```bash
+RUN_NAME="my_run" RESUME_RUN=1 bash ./train.sh
+```
+
 On Windows (Command Prompt):
 
 ```bat
 set RUN_NAME=my_run
 set MAX_STEPS=5000
 set OPTIMIZER=adamw
+call .\train.bat
+```
+
+Resume an existing run on Windows:
+
+```bat
+set RUN_NAME=my_run
+set RESUME_RUN=1
 call .\train.bat
 ```
 

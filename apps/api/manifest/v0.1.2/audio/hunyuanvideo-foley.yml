@@ -1,0 +1,223 @@
+api_version: apex/v1
+kind: Model
+type: audio
+metadata:
+  id: hunyuanvideo-foley
+  model: hunyuanvideo
+  name: HunyuanVideo-Foley
+  version: 0.1.2
+  description: Generate high-fidelity 48kHz Foley audio from a video and a text prompt.
+  tags:
+  - hunyuanvideo
+  - foley
+  - video-to-audio
+  author: Tencent
+  license: Tencent Hunyuan Community License Agreement
+  homepage: https://huggingface.co/tencent/HunyuanVideo-Foley
+  categories:
+  - video-to-audio
+spec:
+  engine: hunyuanvideo
+  model_type: foley
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - mps
+    - cpu
+  defaults:
+    guidance_scale: 4.5
+    num_inference_steps: 50
+    offload: true
+  components:
+  - type: scheduler
+    name: scheduler
+    label: HunyuanVideo-Foley Scheduler
+    scheduler_options:
+    - name: FoleyFlowMatchDiscreteScheduler
+      label: Foley FlowMatch Discrete Scheduler
+      description: The FlowMatch Discrete Scheduler is a scheduler for the HunyuanVideo-Foley model.
+      config:
+        denoise_type: "flow"
+        flow_path_type: "linear"
+        flow_predict_type: "velocity"
+        flow_reverse: True
+        flow_solver: "euler"
+        sample_flow_shift: 1.0
+        sample_use_flux_shift: False
+        flux_base_shift: 0.5
+        flux_max_shift: 1.15
+  - type: transformer
+    name: foley_model
+    label: HunyuanVideo-Foley Diffusion Model
+    base: hunyuanvideo.foley
+    config_name: totoku/apex-models/HunyuanVideo-Foley/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: fp8
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q4_k_m.gguf
+      variant: gguf_q4_k_m
+      precision: q4_k_m
+      type: gguf
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q6_k.gguf
+      variant: gguf_q6_k
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q8_0.gguf
+      variant: gguf_q8_0
+      precision: q8_0
+      type: gguf
+  - type: vae
+    name: dac_model
+    label: DAC VAE 128d 48kHz
+    base: dac
+    config_path: totoku/apex-models/HunyuanVideo-Foley/vae/config.json
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+  - type: text_encoder
+    name: clap_model
+    label: CLAP Text Encoder
+    base: ClapTextModelWithProjection
+    config_path: totoku/apex-models/HunyuanVideo-Foley/text_encoder/config.json
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    tokenizer_class: RobertaTokenizer
+    tokenizer_path: totoku/apex-models/HunyuanVideo-Foley/tokenizer
+  - type: helper
+    name: siglip_model
+    label: SigLIP2 Model
+    module: transformers
+    base: SiglipModel
+    config_path: totoku/apex-models/HunyuanVideo-Foley/siglip_encoder/config.json
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/siglip_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: helper
+    name: syncformer_model
+    label: Synchformer Model
+    base: hunyuanvideofoley.synchformer
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/syncformer_encoder
+      variant: default
+      precision: bf16
+      type: pth
+  ui:
+    panels:
+    - name: video
+      label: Video
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    - name: performance
+      label: Performance
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - offload
+    inputs:
+    - id: video
+      label: Video
+      description: The input video to generate Foley audio from.
+      type: video
+      panel: video
+      required: true
+    - id: prompt
+      label: Prompt
+      description: Describe the Foley audio you want to generate for the video.
+      placeholder: Crunchy footsteps on gravel, distant traffic, soft wind, and a brief metallic clink.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the audio generation.
+      placeholder: noisy, harsh, distorted, clipping
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: noisy, harsh
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps.
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      description: Classifier-free guidance strength.
+      type: number+slider
+      value_type: float
+      panel: sampling
+      default: 4.5
+      min: 1.0
+      max: 15.0
+      step: 0.5
+      required: false
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility.
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: use_video_duration
+      label: Use Video Duration
+      description: Use the duration of the video to determine the number of frames.
+      type: boolean
+      panel: sampling
+      required: false
+      default: true
