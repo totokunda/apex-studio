@@ -4,6 +4,8 @@ import torch
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 
+from src.scheduler.scheduler import _ensure_step_output_consistency
+
 
 class FlowMatchScheduler():
     def __init__(
@@ -73,6 +75,7 @@ class FlowMatchScheduler():
             self.training = False
 
 
+    @_ensure_step_output_consistency
     def step(self, model_output, timestep, sample, to_final=False, **kwargs):
         if isinstance(timestep, torch.Tensor):
             timestep = timestep.cpu()
@@ -338,6 +341,7 @@ class FlowMatchPairScheduler(FlowMatchScheduler, SchedulerMixin, ConfigMixin):
         idx = torch.argmin((self.train_timesteps - t_cpu).abs())
         return self.train_sigmas[idx]
 
+    @_ensure_step_output_consistency
     def step_from_to(self, model_output: torch.Tensor, timestep_from: torch.Tensor, timestep_to: torch.Tensor | None, sample: torch.Tensor) -> torch.Tensor:
         """
         Use an explicit (from, to) timestep pair to update one step:

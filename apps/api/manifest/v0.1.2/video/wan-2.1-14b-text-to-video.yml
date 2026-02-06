@@ -50,182 +50,70 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: UniPCMultistepScheduler
-    scheduler_options:
-    - name: UniPCMultistepScheduler
-      label: UniPC Multistep Scheduler
-      description: The UniPC Multistep Scheduler is used for WAN 2.1 14B Text to Video.
-      base: diffusers.UniPCMultistepScheduler
-      config_path: Wan-AI/Wan2.1-T2V-14B-Diffusers/scheduler/scheduler_config.json
+    default: UniPCMultistepSchedulerBH2
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
-    name: wan/vae
-    label: Wan VAE
+    label: WAN VAE
+    name: vae
     base: wan
+    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
-      precision: fp16
+      precision: bf16
       type: safetensors
-      file_size: 507592616
-      resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
-    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae/config.json
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
+    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
     model_path:
-    - path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
-      precision: fp16
-      type: safetensors
-      file_size: 11361874539
-      resource_requirements:
-        min_vram_gb: 17
-        recommended_vram_gb: 23
-    - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
-      variant: FP8
-      precision: fp8
-      type: safetensors
-      file_size: 6731333792
-      resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
-    config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
-  - type: transformer
-    base: wan.base
-    label: Wan Transformer
-    model_path:
-    - path: Wan-AI/Wan2.1-T2V-14B-Diffusers/transformer
-      variant: default
-      precision: fp16
-      type: safetensors
-      file_size: 57154175533
-      resource_requirements:
-        min_vram_gb: 51
-        recommended_vram_gb: 68
-    - path: Kijai/WanVideo_comfy_fp8_scaled/T2V/Wan2_1-T2V-14B_fp8_e4m3fn_scaled_KJ.safetensors
-      variant: FP8
-      precision: fp8
-      type: safetensors
-      file_size: 14526876890
-      resource_requirements:
-        min_vram_gb: 22
-        recommended_vram_gb: 30
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-BF16.gguf
-      variant: GGUF_BF16
       precision: bf16
-      type: gguf
-      file_size: 29052197504
-      resource_requirements:
-        min_vram_gb: 30
-        recommended_vram_gb: 40
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-F16.gguf
-      variant: GGUF_F16
-      precision: f16
-      type: gguf
-      file_size: 29052197504
-      resource_requirements:
-        min_vram_gb: 23
-        recommended_vram_gb: 31
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q8_0.gguf
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-      file_size: 15879461504
-      resource_requirements:
-        min_vram_gb: 21
-        recommended_vram_gb: 28
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q6_K.gguf
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    base: wan.base
+    label: Wan Transformer
+    config_path: totoku/apex-models/Wan2.1-T2V/transformer/config.json
+    model_path:
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-      file_size: 12476504704
-      resource_requirements:
-        min_vram_gb: 16
-        recommended_vram_gb: 22
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q5_K_M.gguf
-      variant: GGUF_Q5_K_M
-      precision: q5_k_m
-      type: gguf
-      file_size: 11264907904
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q5_1.gguf
-      variant: GGUF_Q5_1
-      precision: q5_1
-      type: gguf
-      file_size: 11488549504
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q5_0.gguf
-      variant: GGUF_Q5_0
-      precision: q5_0
-      type: gguf
-      file_size: 10787314304
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q5_K_S.gguf
-      variant: GGUF_Q5_K_S
-      precision: q5_k_s
-      type: gguf
-      file_size: 10610367104
-      resource_requirements:
-        min_vram_gb: 14
-        recommended_vram_gb: 19
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q4_K_M.gguf
+    - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-      file_size: 10124581504
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q4_1.gguf
-      variant: GGUF_Q4_1
-      precision: q4_1
-      type: gguf
-      file_size: 9732184704
-      resource_requirements:
-        min_vram_gb: 13
-        recommended_vram_gb: 18
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q4_0.gguf
-      variant: GGUF_Q4_0
-      precision: q4_0
-      type: gguf
-      file_size: 9030949504
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q4_K_S.gguf
-      variant: GGUF_Q4_K_S
-      precision: q4_k_s
-      type: gguf
-      file_size: 9221003904
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q3_K_M.gguf
-      variant: GGUF_Q3_K_M
-      precision: q3_k_m
-      type: gguf
-      file_size: 7648959104
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    - path: city96/Wan2.1-T2V-14B-gguf/wan2.1-t2v-14b-Q3_K_S.gguf
-      variant: GGUF_Q3_K_S
-      precision: q3_k_s
-      type: gguf
-      file_size: 6987864704
-      resource_requirements:
-        min_vram_gb: 12
-        recommended_vram_gb: 16
-    config_path: Wan-AI/Wan2.1-T2V-14B-Diffusers/transformer/config.json
   defaults:
     run:
       num_inference_steps: 8

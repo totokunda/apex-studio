@@ -47,14 +47,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchDiscreteScheduler
-    scheduler_options:
-    - name: FlowMatchDiscreteScheduler
-      label: FlowMatch Discrete Scheduler
-      description: The FlowMatch Discrete Scheduler is a scheduler for the LTX2 19B
-        model.
-      base: diffusers.schedulers.FlowMatchEulerDiscreteScheduler
-      config_path: Lightricks/LTX-2/scheduler/scheduler_config.json
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 1.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: LTX2 Video Vae
     name: video_vae

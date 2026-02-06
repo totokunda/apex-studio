@@ -1,0 +1,557 @@
+api_version: apex/v1
+kind: SchedulerCatalog
+metadata:
+  id: flow-matching-schedulers
+  name: Flow-Matching Schedulers
+  version: 0.1.2
+  description: >
+    Shared scheduler catalog for flow-matching and related diffusion samplers.
+    Any model manifest can reference this catalog via `scheduler_manifest`.
+spec:
+  # Frontend/universal-engine hints: typed config fields that are safe to expose.
+  # UI can render controls for any key present in a scheduler's `config` using this map.
+  fields:
+    num_train_timesteps:
+      label: Num Train Timesteps
+      description: Number of training diffusion timesteps used by the scheduler.
+      type: number
+      value_type: integer
+      min: 1
+      max: 10000
+      step: 1
+    shift:
+      label: Shift
+      description: Flow-matching time/sigma shifting parameter.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 50.0
+      step: 0.01
+    sigma_max:
+      label: Sigma Max
+      description: Maximum sigma for the noise schedule.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 100.0
+      step: 0.001
+    sigma_min:
+      label: Sigma Min
+      description: Minimum sigma for the noise schedule.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 10.0
+      step: 0.000001
+    eta:
+      label: Eta
+      description: Stochasticity / ancestral noise amount (0=ODE, 1=full SDE).
+      type: number
+      value_type: float
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    s_noise:
+      label: S-Noise
+      description: Noise multiplier used by some ancestral/SDE samplers.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 5.0
+      step: 0.01
+    alpha:
+      label: Alpha
+      description: Beta57 alpha parameter.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 1.0
+      step: 0.001
+    beta:
+      label: Beta
+      description: Beta57 beta parameter.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 1.0
+      step: 0.001
+    lms_order:
+      label: LMS Order
+      description: Order of the linear multistep (Adams-Bashforth) method.
+      type: number
+      value_type: integer
+      min: 1
+      max: 8
+      step: 1
+    deis_order:
+      label: DEIS Order
+      description: Polynomial order for DEIS.
+      type: number
+      value_type: integer
+      min: 1
+      max: 8
+      step: 1
+    max_order:
+      label: Max Order
+      description: Maximum multistep order used by iPNDM variants.
+      type: number
+      value_type: integer
+      min: 1
+      max: 8
+      step: 1
+    ge_gamma:
+      label: GE Gamma
+      description: Gradient-estimation correction strength.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 10.0
+      step: 0.01
+    r:
+      label: SEEDS r
+      description: SEEDS-2 parameter r.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 1.0
+      step: 0.01
+    predictor_order:
+      label: Predictor Order
+      description: Predictor order for SA-Solver variants.
+      type: number
+      value_type: integer
+      min: 1
+      max: 8
+      step: 1
+    corrector_order:
+      label: Corrector Order
+      description: Corrector order for SA-Solver variants.
+      type: number
+      value_type: integer
+      min: 1
+      max: 8
+      step: 1
+    prediction_type:
+      label: Prediction Type
+      description: What the model predicts (flow/noise/x0).
+      type: select
+      options:
+        - name: Flow prediction
+          value: flow_prediction
+        - name: Epsilon (noise)
+          value: epsilon
+        - name: X0 (data)
+          value: sample
+    predict_x0:
+      label: Predict X0
+      description: Whether the solver uses x0/data prediction.
+      type: boolean
+      default: true
+    solver_order:
+      label: Solver Order
+      description: UniPC solver order.
+      type: number
+      value_type: integer
+      min: 1
+      max: 5
+      step: 1
+    solver_type:
+      label: Solver Type
+      description: UniPC solver type variant.
+      type: select
+      options:
+        - name: bh1
+          value: bh1
+        - name: bh2
+          value: bh2
+    lower_order_final:
+      label: Lower Order Final
+      description: Use lower order in final steps for stability.
+      type: boolean
+      default: true
+    use_dynamic_shifting:
+      label: Use Dynamic Shifting
+      description: Enable dynamic shift adjustments during sampling.
+      type: boolean
+      default: true
+    max_stage:
+      label: Max Stage
+      description: Maximum stage for ER-SDE variants.
+      type: number
+      value_type: integer
+      min: 1
+      max: 10
+      step: 1
+
+  scheduler_options:
+    - name: Beta57Scheduler
+      label: Beta57 Scheduler
+      description: The Beta57 Scheduler is a scheduler for flow-matching models.
+      base: src.scheduler.beta57.Beta57Scheduler
+      config:
+        num_train_timesteps: 1000
+        # This matches RES4LYF beta57:
+        alpha: 0.5
+        beta: 0.7
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: DDIMEulerFlowScheduler
+      label: DDIM Euler Flow Scheduler
+      description: The DDIM Euler Flow Scheduler is a scheduler for flow-matching models.
+      base: src.scheduler.ddim_euler.DDIMEulerFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: EulerAncestralFlowScheduler
+      label: Euler Ancestral Flow Scheduler
+      description: Euler ancestral sampler adapted for flow-matching models (ComfyUI-style).
+      base: src.scheduler.flow_ancestral.EulerAncestralFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        eta: 1.0
+        s_noise: 1.0
+
+    - name: DPM2AncestralFlowScheduler
+      label: DPM2 Ancestral Flow Scheduler
+      description: DPM-Solver-2 ancestral sampler adapted for flow-matching models (ComfyUI-style).
+      base: src.scheduler.flow_ancestral.DPM2AncestralFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        eta: 0.0
+        s_noise: 1.0
+
+    - name: DPMpp2SAncestralFlowScheduler
+      label: DPM++ 2S Ancestral Flow Scheduler
+      description: DPM++(2S) ancestral sampler adapted for flow-matching models (ComfyUI-style).
+      base: src.scheduler.flow_ancestral.DPMpp2SAncestralFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        eta: 0.0
+        s_noise: 1.0
+
+    - name: DDPMFlowScheduler
+      label: DDPM Flow Scheduler
+      description: Classic DDPM reverse process adapted for flow-matching with Karras alpha_cumprod mapping and ancestral noise injection.
+      base: src.scheduler.flow_ancestral.DDPMFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: EulerFlowScheduler
+      label: Euler Flow Scheduler
+      description: Euler method for the flow-matching ODE. Simplest deterministic sampler.
+      base: src.scheduler.flow_deterministic.EulerFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: HeunFlowScheduler
+      label: Heun Flow Scheduler
+      description: Heun's method (trapezoidal / improved Euler) for flow-matching. 2nd-order with two model evals per step.
+      base: src.scheduler.flow_deterministic.HeunFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: LMSFlowScheduler
+      label: LMS Flow Scheduler
+      description: Linear Multi-Step (Adams-Bashforth) method for flow-matching. Uses derivative history for higher-order extrapolation.
+      base: src.scheduler.flow_deterministic.LMSFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        lms_order: 4
+
+    - name: DPM2FlowScheduler
+      label: DPM-2 Flow Scheduler
+      description: DPM-Solver-2 (midpoint method) for flow-matching. 2nd-order with two model evals per step.
+      base: src.scheduler.flow_deterministic.DPM2FlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: DPMpp2MFlowScheduler
+      label: DPM++ 2M Flow Scheduler
+      description: DPM-Solver++(2M) for flow-matching. Single-eval multi-step method using denoised history.
+      base: src.scheduler.flow_deterministic.DPMpp2MFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: ResMultistepFlowScheduler
+      label: RES Multistep Flow Scheduler
+      description: Recursive Exponential Solver multistep for flow-matching. 2nd-order exponential integrator with phi-functions.
+      base: src.scheduler.flow_deterministic.ResMultistepFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: DEISFlowScheduler
+      label: DEIS Flow Scheduler
+      description: Diffusion Exponential Integrator Sampler for flow-matching. Uses precomputed polynomial coefficients.
+      base: src.scheduler.flow_deterministic.DEISFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        deis_order: 3
+
+    - name: IPNDMFlowScheduler
+      label: iPNDM Flow Scheduler
+      description: Improved Pseudo Numerical Diffusion Model for flow-matching. Fixed Adams-Bashforth coefficients with derivative history.
+      base: src.scheduler.flow_deterministic.IPNDMFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        max_order: 4
+
+    - name: IPNDMVFlowScheduler
+      label: iPNDM-v Flow Scheduler
+      description: iPNDM variable step-size variant for flow-matching. More accurate with non-uniform sigma schedules.
+      base: src.scheduler.flow_deterministic.IPNDMVFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        max_order: 4
+
+    - name: GradientEstimationFlowScheduler
+      label: Gradient Estimation Flow Scheduler
+      description: Euler + gradient-estimation correction for flow-matching. Simple and effective.
+      base: src.scheduler.flow_deterministic.GradientEstimationFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        ge_gamma: 2.0
+
+    - name: Seeds2FlowScheduler
+      label: SEEDS-2 Flow Scheduler
+      description: Deterministic SEEDS-2 exponential integrator for flow-matching. Two model evals per step in logSNR space.
+      base: src.scheduler.flow_deterministic.Seeds2FlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        r: 0.5
+
+    - name: Seeds3FlowScheduler
+      label: SEEDS-3 Flow Scheduler
+      description: Deterministic SEEDS-3 exponential integrator for flow-matching. Three model evals per step in logSNR space.
+      base: src.scheduler.flow_deterministic.Seeds3FlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: ExpHeun2X0FlowScheduler
+      label: Exp Heun 2 X0 Flow Scheduler
+      description: Deterministic exponential Heun 2nd-order in data-prediction (x0) and logSNR time.
+      base: src.scheduler.flow_deterministic.ExpHeun2X0FlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: SASolverFlowScheduler
+      label: SA-Solver Flow Scheduler
+      description: Deterministic Stochastic Adams Solver for flow-matching. Predictor-corrector Adams method in logSNR space.
+      base: src.scheduler.flow_deterministic.SASolverFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        predictor_order: 3
+        corrector_order: 4
+
+    - name: SASolverPECEFlowScheduler
+      label: SA-Solver PECE Flow Scheduler
+      description: Deterministic SA-Solver PECE (Predict-Evaluate-Correct-Evaluate) for flow-matching. Two model evals per step.
+      base: src.scheduler.flow_deterministic.SASolverPECEFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        predictor_order: 3
+        corrector_order: 4
+
+    - name: HeunPP2FlowScheduler
+      label: Heun++ (PP2) Flow Scheduler
+      description: Heun++ method for flow-matching. Up to 3 model evals per step with weighted derivative blending.
+      base: src.scheduler.flow_deterministic.HeunPP2FlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: DPMFastFlowScheduler
+      label: DPM-Fast Flow Scheduler
+      description: DPM-Solver-Fast for flow-matching. Mixed-order (1,2,3) DPM-Solver steps on a uniform log-sigma grid.
+      base: src.scheduler.flow_deterministic.DPMFastFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: DPMAdaptiveFlowScheduler
+      label: DPM-Adaptive Flow Scheduler
+      description: DPM-Solver-3 with logSNR-uniform schedule for flow-matching. Approximates adaptive step-size selection.
+      base: src.scheduler.flow_deterministic.DPMAdaptiveFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: LCMFlowScheduler
+      label: LCM Flow Scheduler
+      description: Latent Consistency Model sampler for flow-matching. Single eval per step, jumps to denoised then re-noises.
+      base: src.scheduler.flow_deterministic.LCMFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+
+    - name: UniPCMultistepSchedulerBH1
+      label: UniPC Multistep Scheduler (BH1)
+      description: Unified Predictor-Corrector (UniPC) multistep sampler, ComfyUI-style bh1 variant.
+      base: src.scheduler.unipc.UniPCMultistepScheduler
+      config:
+        num_train_timesteps: 1000
+        prediction_type: flow_prediction
+        predict_x0: true
+        solver_order: 3
+        solver_type: bh1
+        lower_order_final: true
+        use_dynamic_shifting: true
+        shift: 3.0
+
+    - name: UniPCMultistepSchedulerBH2
+      label: UniPC Multistep Scheduler (BH2)
+      description: Unified Predictor-Corrector (UniPC) multistep sampler, ComfyUI-style bh2 variant.
+      base: src.scheduler.unipc.UniPCMultistepScheduler
+      config:
+        num_train_timesteps: 1000
+        prediction_type: flow_prediction
+        predict_x0: true
+        solver_order: 3
+        solver_type: bh2
+        lower_order_final: true
+        use_dynamic_shifting: true
+        shift: 3.0
+
+    - name: DPMppSDEFlowScheduler
+      label: DPM++ SDE Flow Scheduler
+      description: DPM-Solver++ stochastic for flow-matching. Two evals per step with BrownianTree noise in logSNR space.
+      base: src.scheduler.flow_sde.DPMppSDEFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        # eta: 0=ODE, 1=full SDE. Flow models need lower eta (~0.25)
+        # because noise/signal ratio is inherently high in the logSNR SDE.
+        eta: 0.25
+        s_noise: 1.0
+
+    - name: DPMpp2MSDEFlowScheduler
+      label: DPM++ 2M SDE Flow Scheduler
+      description: DPM-Solver++(2M) SDE for flow-matching. Single eval with denoised history and BrownianTree noise.
+      base: src.scheduler.flow_sde.DPMpp2MSDEFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        eta: 0.25
+        s_noise: 1.0
+
+    - name: DPMpp2MSDEHeunFlowScheduler
+      label: DPM++ 2M SDE Heun Flow Scheduler
+      description: DPM-Solver++(2M) SDE Heun variant for flow-matching. Uses Heun correction with BrownianTree noise.
+      base: src.scheduler.flow_sde.DPMpp2MSDEHeunFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        eta: 0.25
+        s_noise: 1.0
+
+    - name: DPMpp3MSDEFlowScheduler
+      label: DPM++ 3M SDE Flow Scheduler
+      description: DPM-Solver++(3M) SDE for flow-matching. Single eval with 3rd-order correction and BrownianTree noise.
+      base: src.scheduler.flow_sde.DPMpp3MSDEFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        eta: 0.15
+        s_noise: 1.0
+
+    - name: ExpHeun2X0SDEFlowScheduler
+      label: Exp Heun 2 X0 SDE Flow Scheduler
+      description: Stochastic exponential Heun 2nd-order in x0-prediction and logSNR time for flow-matching. Two evals per step with SDE noise.
+      base: src.scheduler.flow_sde.ExpHeun2X0SDEFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        eta: 1.0
+        s_noise: 1.0
+
+    - name: ERSDEFlowScheduler
+      label: ER-SDE Flow Scheduler
+      description: Extended Reverse-Time SDE solver (VP ER-SDE-Solver-3) for flow-matching. Single eval with history-based corrections and noise injection.
+      base: src.scheduler.flow_sde.ERSDEFlowScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        s_noise: 1.0
+        max_stage: 3
+

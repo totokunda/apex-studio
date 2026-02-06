@@ -284,9 +284,9 @@ def _arch_from_transformer_base(base: str) -> str:
 
 BF16_FILENAME = "transformer-bf16.safetensors"
 FP8_FILENAME = "transformer-fp8_e4m3fn.safetensors"
-GGUF_Q8_0_FILENAME = "transformer-gguf_q8_0.gguf"
-GGUF_Q6_K_FILENAME = "transformer-gguf_q6_k.gguf"
-GGUF_Q4_K_M_FILENAME = "transformer-gguf_q4_k_m.gguf"
+GGUF_Q8_0_FILENAME = "transformer-q8_0.gguf"
+GGUF_Q6_K_FILENAME = "transformer-q6_k.gguf"
+GGUF_Q4_K_M_FILENAME = "transformer-q4_k_m.gguf"
 
 
 def _slugify_dir_name(s: str) -> str:

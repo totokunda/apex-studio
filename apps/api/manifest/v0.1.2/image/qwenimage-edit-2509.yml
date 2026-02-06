@@ -40,14 +40,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchEulerDiscreteScheduler
-    scheduler_options:
-    - name: FlowMatchEulerDiscreteScheduler
-      label: FlowMatch Euler Discrete Scheduler
-      description: The FlowMatch Euler Discrete Scheduler is a scheduler for the QwenImage
-        Edit model.
-      base: diffusers.FlowMatchEulerDiscreteScheduler
-      config_path: Qwen/Qwen-Image-Edit-2509/scheduler/scheduler_config.json
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 1.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: QwenImage VAE
     base: qwenimage

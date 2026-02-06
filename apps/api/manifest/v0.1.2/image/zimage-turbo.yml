@@ -39,12 +39,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchEulerDiscreteScheduler
-    scheduler_options:
-    - name: apex_flowmatch_discrete_uniform_v1
-      label: FlowMatch Discrete (Uniform)
-      description: FlowMatch discrete solver with uniform sigmas.
-      preset_id: apex_flowmatch_discrete_uniform_v1
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
   - type: vae
     label: ZImage Turbo VAE
     base: auto

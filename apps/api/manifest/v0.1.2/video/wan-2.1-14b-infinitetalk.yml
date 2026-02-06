@@ -52,20 +52,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchScheduler
-    scheduler_options:
-    - name: FlowMatchScheduler
-      label: FlowMatch Scheduler
-      description: The FlowMatch Scheduler is used for WAN 2.1 14B MultiTalk Text
-        to Video.
-      base: src.scheduler.FlowMatchScheduler
-    config:
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
       shift: 7.0
       sigma_max: 1.0
-      sigma_min: 0.001
-      inverse_timesteps: false
-      extra_one_step: false
-      reverse_sigmas: false
+      sigma_min: 0.002994011976047904
   - type: vae
     label: WAN VAE
     name: vae

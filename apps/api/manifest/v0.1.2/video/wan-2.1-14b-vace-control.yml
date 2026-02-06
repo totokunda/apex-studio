@@ -44,12 +44,6 @@ spec:
     label: Lightx2v LoRA
     component: transformer
     verified: true
-  - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Phantom_Wan_14B_FusionX_LoRA.safetensors
-    scale: 0.0
-    name: fusionx_lora
-    label: FusionX LoRA
-    component: transformer
-    verified: true
   components:
   - type: scheduler
     label: Scheduler

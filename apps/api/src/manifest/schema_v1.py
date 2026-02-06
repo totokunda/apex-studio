@@ -180,6 +180,18 @@ MANIFEST_SCHEMA_V1: dict = {
                                     "additional_properties": True,
                                 },
                             },
+                            # Optional reference to a scheduler catalog YAML (kept outside
+                            # individual model manifests). When present, runtime loaders
+                            # expand it into `scheduler_options`.
+                            "scheduler_manifest": {"type": "string"},
+                            "scheduler_config_defaults": {
+                                "type": "object",
+                                "additional_properties": True,
+                            },
+                            "scheduler_config_overrides": {
+                                "type": "object",
+                                "additional_properties": True,
+                            },
                             "gguf_files": {
                                 "type": "array",
                                 "items": {
