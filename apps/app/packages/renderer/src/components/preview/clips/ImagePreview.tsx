@@ -201,7 +201,34 @@ const ImagePreview: React.FC<
             m.isTracked ? "tracked" : "static",
             m.lastModified,
             keyframeKeys,
+            // Operation / rendering settings that affect the masked output
+            m.featherAmount,
+            m.brushSize ?? "na",
             m.inverted ? "inv" : "norm",
+            m.maskColorEnabled ?? true,
+            m.maskColor ?? "na",
+            m.maskOpacity ?? "na",
+            m.backgroundColorEnabled ?? true,
+            m.backgroundColor ?? "na",
+            m.backgroundOpacity ?? "na",
+            // Tracking-related knobs that can influence which keyframes exist / are used
+            m.trackingDirection ?? "na",
+            m.confidenceThreshold ?? "na",
+            m.maxTrackingFrames ?? "na",
+            // Transform (mask application depends on this)
+            (() => {
+              const t = m.transform as any;
+              if (!t) return "t:none";
+              return `t:${[
+                t.x,
+                t.y,
+                t.width,
+                t.height,
+                t.scaleX,
+                t.scaleY,
+                t.rotation,
+              ].join(",")}`;
+            })(),
           ].join("#");
         })
         .join("|");

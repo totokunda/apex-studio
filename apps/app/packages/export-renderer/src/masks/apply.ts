@@ -1,6 +1,4 @@
-import { ShapeMask } from "../../../renderer/src/components/preview/mask/shape";
-import { LassoMask } from "../../../renderer/src/components/preview/mask/lasso";
-import { TouchMask } from "../../../renderer/src/components/preview/mask/touch";
+import { getSharedMaskEngines } from "../../../renderer/src/components/preview/mask/sharedMaskEngines";
 
 type MaskTool = "lasso" | "shape" | "draw" | "touch";
 
@@ -101,13 +99,12 @@ export function applyMasksToCanvas(
   workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
   workingCtx.drawImage(sourceCanvas, 0, 0);
 
-  // Create local mask engines; ensure separate GL contexts via unique keys
-  const contextKey = `export-webgl-mask:${clip?.clipId || "mask"}:${Math.random().toString(36).slice(2)}`;
-  const shapeMask = new ShapeMask(contextKey);
-  const lassoMask = new LassoMask(contextKey);
-  const touchMask = new TouchMask(contextKey);
+  // Use a shared WebGL context/engines to avoid Chromium WebGL context limits.
+  // Keep export isolated from preview by using a separate context key.
+  const { shape: shapeMask, lasso: lassoMask, touch: touchMask } =
+    getSharedMaskEngines("export-webgl-mask-shared");
 
-  try {
+  {
     let acc: HTMLCanvasElement = workingCanvas;
     for (let i = 0; i < masks.length; i++) {
       const mask = masks[i];
@@ -164,16 +161,5 @@ export function applyMasksToCanvas(
       srcCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
       srcCtx.drawImage(workingCanvas, 0, 0);
     }
-  } finally {
-    // Dispose mask resources
-    try {
-      shapeMask.dispose();
-    } catch {}
-    try {
-      lassoMask.dispose();
-    } catch {}
-    try {
-      touchMask.dispose();
-    } catch {}
   }
 }

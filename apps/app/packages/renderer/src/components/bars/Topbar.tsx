@@ -261,16 +261,32 @@ const TopBar: React.FC<TopBarProps> = () => {
         clips as AnyClipProps[],
         timelines,
       );
-      // filter clips with non visible timelines
+
+      // Mirror preview timeline visibility/mute behavior for grouped clips:
+      // - If a clip is part of a group, the group's timeline state takes precedence.
+      // - Otherwise, use the clip's own timeline state.
+      const getEffectiveTimelineForClip = (clip: AnyClipProps) => {
+        const timelineId = clip.groupId
+          ? (clips as AnyClipProps[]).find((c) => c.clipId === clip.groupId)
+              ?.timelineId ?? clip.timelineId
+          : clip.timelineId;
+        return timelines.find((t) => t.timelineId === timelineId);
+      };
+
+      // Filter clips on hidden timelines (using effective timeline rules).
       contentClips = contentClips.filter((clip) => {
-        const timeline = timelines.find(
-          (t) => t.timelineId === clip.timelineId,
-        );
+        const timeline = getEffectiveTimelineForClip(clip as AnyClipProps);
         return !timeline?.hidden;
       });
 
       for (const clip of contentClips) {
         if (clip.type === "filter") continue; // filters become applicators, not standalone content
+        const effectiveTimeline = getEffectiveTimelineForClip(clip as AnyClipProps);
+        const muteAudioForClip =
+          settings.kind === "video" &&
+          !!settings.includeAudio &&
+          !!effectiveTimeline?.muted;
+
         const prepared = prepareExportClipsForValue(
           clip as AnyClipProps,
           {
@@ -287,7 +303,19 @@ const TopBar: React.FC<TopBarProps> = () => {
             dimensionsFrom: "aspect",
           },
         );
-        preparedClips.push(...prepared.exportClips);
+
+        // Ensure muted audio/video clips don't contribute audio to exports.
+        // - Skip audio clips entirely when muted.
+        // - For video clips, clear `audioSrc` so the exporter won't mix/embed audio.
+        const exportClipsForThisValue = muteAudioForClip
+          ? prepared.exportClips
+              .filter((c) => c.type !== "audio")
+              .map((c) =>
+                c.type === "video" ? ({ ...c, audioSrc: undefined } as ExportClip) : c,
+              )
+          : prepared.exportClips;
+
+        preparedClips.push(...exportClipsForThisValue);
       }
 
 

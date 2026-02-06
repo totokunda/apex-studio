@@ -6,9 +6,7 @@ import { fetchCanvasSamples, fetchCanvasSample } from "./canvas";
 import { IMAGE_EXTS, AUDIO_EXTS } from "../settings";
 import { getLowercaseExtension, readFileBuffer } from "@app/preload";
 import { getMediaInfo } from "./utils";
-import { ShapeMask } from "@/components/preview/mask/shape";
-import { LassoMask } from "@/components/preview/mask/lasso";
-import { TouchMask } from "@/components/preview/mask/touch";
+import { getSharedMaskEngines } from "@/components/preview/mask/sharedMaskEngines";
 import { useClipStore } from "../clip";
 
 export const createThumbnailKey = (
@@ -896,61 +894,58 @@ export const generatePosterCanvas = async (
     ): HTMLCanvasElement => {
       const masks = options?.masks || [];
       if (!masks || masks.length === 0) return source;
-      const shape = new ShapeMask();
-      const lasso = new LassoMask();
-      const touch = new TouchMask();
-      try {
-        const working = source.cloneNode(false) as HTMLCanvasElement;
-        working.width = source.width;
-        working.height = source.height;
-        const wctx = working.getContext("2d");
-        if (!wctx) return source;
-        wctx.drawImage(source, 0, 0);
-        return masks.reduce((acc, mask, index) => {
-          const effectiveMask =
-            index === 0
-              ? mask
-              : ({ ...mask, backgroundColorEnabled: false } as MaskClipProps);
-          let masked: HTMLCanvasElement = acc;
-          if ((mask as any).tool === "shape") {
-            masked = shape.apply(
-              acc,
-              effectiveMask,
-              fidx ?? 0,
-              undefined,
-              effectiveMask.transform,
-            );
-          } else if ((mask as any).tool === "lasso") {
-            masked = lasso.apply(
-              acc,
-              effectiveMask,
-              fidx ?? 0,
-              undefined,
-              effectiveMask.transform,
-            );
-          } else if ((mask as any).tool === "touch") {
-            masked = touch.apply(
-              acc,
-              effectiveMask,
-              fidx ?? 0,
-              undefined,
-              effectiveMask.transform,
-            );
+      // Use a shared WebGL context/engines to avoid Chromium WebGL context limits.
+      const { shape, lasso, touch } = getSharedMaskEngines(
+        "preview-webgl-mask-shared",
+      );
+
+      const working = source.cloneNode(false) as HTMLCanvasElement;
+      working.width = source.width;
+      working.height = source.height;
+      const wctx = working.getContext("2d");
+      if (!wctx) return source;
+      wctx.drawImage(source, 0, 0);
+
+      return masks.reduce((acc, mask, index) => {
+        const effectiveMask =
+          index === 0
+            ? mask
+            : ({ ...mask, backgroundColorEnabled: false } as MaskClipProps);
+        let masked: HTMLCanvasElement = acc;
+        if ((mask as any).tool === "shape") {
+          masked = shape.apply(
+            acc,
+            effectiveMask,
+            fidx ?? 0,
+            undefined,
+            effectiveMask.transform,
+          );
+        } else if ((mask as any).tool === "lasso") {
+          masked = lasso.apply(
+            acc,
+            effectiveMask,
+            fidx ?? 0,
+            undefined,
+            effectiveMask.transform,
+          );
+        } else if ((mask as any).tool === "touch") {
+          masked = touch.apply(
+            acc,
+            effectiveMask,
+            fidx ?? 0,
+            undefined,
+            effectiveMask.transform,
+          );
+        }
+        if (masked !== acc) {
+          const c = acc.getContext("2d");
+          if (c) {
+            c.clearRect(0, 0, acc.width, acc.height);
+            c.drawImage(masked, 0, 0);
           }
-          if (masked !== acc) {
-            const c = acc.getContext("2d");
-            if (c) {
-              c.clearRect(0, 0, acc.width, acc.height);
-              c.drawImage(masked, 0, 0);
-            }
-          }
-          return acc;
-        }, working);
-      } finally {
-        shape.dispose();
-        lasso.dispose();
-        touch.dispose();
-      }
+        }
+        return acc;
+      }, working);
     };
 
     // Detect by effective path extension
