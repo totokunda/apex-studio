@@ -65,7 +65,7 @@ spec:
     name: transformer_vae
     label: Wan VAE
     base: wan
-    config_path: totoku/apex-models/Wan2.2-TI2V-5B/vae/config.json
+    config_id: Wan2.2-TI2V-5B/vae
     model_path:
     - path: totoku/apex-models/Wan2.2-TI2V-5B/vae/vae-bf16.safetensors
       variant: default
@@ -75,19 +75,17 @@ spec:
     name: audio_vae
     label: Audio VAE
     base: mmaudio
-    extra_kwargs:
-      require_conversion: true
     model_path:
-    - path: totoku/apex-models/Ovi-5s/audio_vae/best_netG.pt
+    - path: totoku/apex-models/Ovi-5s/audio_vae/v1-16.pth
       variant: default
       precision: fp16
       type: safetensors
   - type: extra_model_path
-    name: audio_vae_extra_model_path
-    label: Audio VAE Extra Model Path
+    name: vocoder_model
+    label: Vocoder Model
     component: audio_vae
     model_path:
-    - path: totoku/apex-models/Ovi-5s/audio_vae/v1-16.pth
+    - path: totoku/apex-models/Ovi-5s/audio_vae/best_netG.pt 
       variant: default
       precision: fp16
       type: safetensors
@@ -95,7 +93,7 @@ spec:
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
-    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    config_id: Wan2.1-T2V/text_encoder
     model_path:
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -117,7 +115,7 @@ spec:
     base: wan.ovi
     label: Ovi Transformer
     name: 960x960_10s
-    config_path: totoku/apex-models/Ovi-10s/transformer/config.json
+    config_id: Ovi-10s/transformer
     ignore_offloading_modules:
     - video_model.patch_embedding
     - video_model.head

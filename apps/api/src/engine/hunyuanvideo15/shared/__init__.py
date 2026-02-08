@@ -318,7 +318,6 @@ class HunyuanVideo15Shared(BaseEngine):
             del image_encoder
             del feature_extractor
         self._offload("image_encoder")
-        self._offload("feature_extractor")
 
         return image_enc_hidden_states
 

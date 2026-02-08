@@ -47,7 +47,7 @@ spec:
   - type: vae
     label: ZImage Turbo VAE
     base: auto
-    config_path: totoku/apex-models/Z-Image/vae/config.json
+    config_id: Z-Image/vae
     model_path:
     - path: totoku/apex-models/Z-Image/vae/vae-bf16.safetensors
       variant: default
@@ -57,28 +57,30 @@ spec:
     label: ZImage Text Encoder
     base: Qwen3ForCausalLM
     name: text_encoder
-    config_path: totoku/apex-models/Z-Image/text_encoder/config.json
+    gguf_kwargs:
+      key_map: qwen3
+    config_id: FLUX.2-klein-4B/text_encoder
     model_path:
-    - path: totoku/apex-models/Z-Image/text_encoder/text_encoder-bf16.safetensors
+    - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
-    - path: totoku/apex-models/Z-Image/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/Z-Image/text_encoder/text_encoder-q8_0.gguf
+    - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
-      subfolder: Z-Image/tokenizer
+      subfolder: FLUX.2-klein-4B/tokenizer
   - type: transformer
     label: ZImage Transformer
     base: zimage.base
-    config_path: totoku/apex-models/Z-Image/transformer/config.json
+    config_id: Z-Image/transformer
     model_path:
     - path: totoku/apex-models/Z-Image/transformer/transformer-bf16.safetensors
       variant: default

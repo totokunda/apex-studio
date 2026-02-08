@@ -860,9 +860,6 @@ class LTX2TI2VEngine(LTX2Shared):
             offload=offload,
         )
         
-        print(prompt_embeds, negative_prompt_embeds)
-        print(prompt_embeds.shape, negative_prompt_embeds.shape)
-
         if self.do_classifier_free_guidance:
             # We still build the combined [uncond; cond] embedding stack for connectors, but optionally
             # avoid duplicating the *latents* batch during denoising by running two forward passes.

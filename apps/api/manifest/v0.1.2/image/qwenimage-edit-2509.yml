@@ -50,7 +50,7 @@ spec:
   - type: vae
     label: QwenImage VAE
     base: qwenimage
-    config_path: totoku/apex-models/Qwen-Image/vae/config.json
+    config_id: Qwen-Image/vae
     model_path:
     - path: totoku/apex-models/Qwen-Image/vae/vae-bf16.safetensors
       variant: default
@@ -59,7 +59,7 @@ spec:
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration
-    config_path: totoku/apex-models/Qwen-Image/text_encoder/config.json
+    config_id: Qwen-Image/text_encoder
     gguf_kwargs:
       key_map: qwen_vl
     model_path:
@@ -82,7 +82,7 @@ spec:
   - type: transformer
     label: QwenImage Transformer
     base: qwenimage.base
-    config_path: totoku/apex-models/Qwen-Image-Edit-2509/transformer/config.json
+    config_id: Qwen-Image-Edit-2509/transformer
     model_path:
     - path: totoku/apex-models/Qwen-Image-Edit-2509/transformer/transformer-bf16.safetensors
       variant: default

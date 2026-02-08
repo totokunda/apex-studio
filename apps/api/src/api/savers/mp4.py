@@ -19,6 +19,24 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _with_legacy_vsync_cfr(cmd: List[str]) -> List[str]:
+    """
+    Some older ffmpeg builds don't support `-fps_mode cfr` (newer API) and instead
+    require `-vsync cfr` (legacy API). This helper returns a modified command
+    that swaps the flag when present.
+    """
+    out: List[str] = []
+    i = 0
+    while i < len(cmd):
+        if i + 1 < len(cmd) and cmd[i] == "-fps_mode" and cmd[i + 1] == "cfr":
+            out.extend(["-vsync", "cfr"])
+            i += 2
+            continue
+        out.append(cmd[i])
+        i += 1
+    return out
+
+
 def optimize_mp4_for_editor_in_place(
     video_path: str,
     *,
@@ -147,7 +165,7 @@ def optimize_mp4_for_editor_in_place(
             )
 
         # Re-encode path (needed for CFR/GOP/B-frames tuning).
-        cmd: List[str] = (
+        cmd_base: List[str] = (
             common
             + [
                 "-c:v",
@@ -164,14 +182,19 @@ def optimize_mp4_for_editor_in_place(
         )
 
         if gop is not None:
-            cmd.extend(["-g", str(gop), "-keyint_min", str(gop)])
+            cmd_base.extend(["-g", str(gop), "-keyint_min", str(gop)])
         if fps_int is not None:
-            cmd.extend(["-fps_mode", "cfr", "-r", str(fps_int)])
+            # Prefer the modern API (`-fps_mode`) but keep a legacy fallback
+            # (`-vsync`) for older ffmpeg builds.
+            cmd_base.extend(["-fps_mode", "cfr", "-r", str(fps_int)])
         if no_bframes:
-            cmd.extend(["-x264-params", "bframes=0"])
+            cmd_base.extend(["-x264-params", "bframes=0"])
 
-        cmd.extend(["-movflags", "+faststart", str(temp_out_path)])
-        candidate_cmds.append(cmd)
+        cmd_base.extend(["-movflags", "+faststart", str(temp_out_path)])
+        candidate_cmds.append(cmd_base)
+        if fps_int is not None:
+            # Second attempt swaps `-fps_mode cfr` -> `-vsync cfr` for older ffmpeg.
+            candidate_cmds.append(_with_legacy_vsync_cfr(cmd_base))
 
         last_err: Optional[str] = None
         for attempt, cmd_i in enumerate(candidate_cmds, start=1):

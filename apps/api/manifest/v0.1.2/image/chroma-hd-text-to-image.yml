@@ -48,7 +48,7 @@ spec:
   - type: vae
     label: Chroma VAE
     base: auto
-    config_path: totoku/apex-models/Chroma1-HD/vae/config.json
+    config_id: Chroma1-HD/vae
     model_path:
     - path: totoku/apex-models/Chroma1-HD/vae/vae-bf16.safetensors
       precision: bf16
@@ -61,7 +61,7 @@ spec:
   - type: text_encoder
     label: T5 Text Encoder
     base: T5EncoderModel
-    config_path: totoku/apex-models/Chroma1-HD/text_encoder/config.json
+    config_id: Chroma1-HD/text_encoder
     model_path:
     - path: totoku/apex-models/Chroma1-HD/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -82,7 +82,7 @@ spec:
   - type: transformer
     label: Chroma Transformer
     base: chroma.base
-    config_path: totoku/apex-models/Chroma1-HD/transformer/config.json
+    config_id: Chroma1-HD/transformer
     model_path:
     - path: totoku/apex-models/Chroma1-HD/transformer/transformer-bf16.safetensors
       variant: default

@@ -154,6 +154,8 @@ class EngineRegistry:
             spec = data.get("spec", {})
             engine_type = engine_type or spec.get("engine")
             model_type = model_type or spec.get("model_type")
+            if isinstance(model_type, list):
+                model_type = model_type[0]
             engine_kwargs = spec.get("engine_kwargs", {})
             if engine_type is None or model_type is None:
                 raise ValueError(

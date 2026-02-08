@@ -47,7 +47,7 @@ spec:
   - type: vae
     label: HunyuanImage VAE
     base: hunyuanvideo15
-    config_path: totoku/apex-models/HunyuanVideo-1.5/vae/config.json
+    config_id: HunyuanVideo-1.5/vae
     model_path:
     - path: totoku/apex-models/HunyuanVideo-1.5/vae/vae-bf16.safetensors
       variant: default
@@ -58,7 +58,7 @@ spec:
   - type: transformer
     label: HunyuanVideo Transformer
     base: hunyuanvideo15.base
-    config_path: totoku/apex-models/HunyuanVideo-1.5-T2V/transformer/config.json
+    config_id: HunyuanVideo-1.5-T2V/transformer
     model_path:
     - path: totoku/apex-models/HunyuanVideo-1.5-T2V/transformer/transformer-bf16.safetensors
       variant: default
@@ -84,7 +84,7 @@ spec:
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration
-    config_path: totoku/apex-models/Qwen-Image/text_encoder/config.json
+    config_id: Qwen-Image/text_encoder
     gguf_kwargs:
       key_map: qwen_vl
     model_path:
@@ -109,6 +109,7 @@ spec:
     label: HunyuanVideo ByT5 Encoder
     base: T5EncoderModel
     name: text_encoder_2
+    config_id: HunyuanVideo-1.5/text_encoder_2
     tokenizer_class: ByT5Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -122,7 +123,6 @@ spec:
     run:
       num_inference_steps: 50
       return_latents: false
-      enable_cache: false
       resolution: 720p
       guidance_scale: 1.0
       attention_kwargs: {}

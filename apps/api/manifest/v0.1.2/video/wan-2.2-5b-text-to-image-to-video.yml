@@ -62,7 +62,7 @@ spec:
     name: transformer_vae
     label: Wan VAE
     base: wan
-    config_path: totoku/apex-models/Wan2.2-TI2V-5B/vae/config.json
+    config_id: Wan2.2-TI2V-5B/vae
     model_path:
     - path: totoku/apex-models/Wan2.2-TI2V-5B/vae/vae-bf16.safetensors
       variant: default
@@ -72,7 +72,7 @@ spec:
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
-    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    config_id: Wan2.1-T2V/text_encoder
     model_path:
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -93,7 +93,7 @@ spec:
   - type: transformer
     base: wan.base
     label: Wan 2.2 5B Transformer
-    config_path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/config.json
+    config_id: Wan2.2-TI2V-5B/transformer
     model_path:
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-bf16.safetensors
       variant: default

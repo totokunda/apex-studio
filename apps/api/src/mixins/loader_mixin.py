@@ -23,6 +23,7 @@ from glob import glob
 from src.mixins.download_mixin import DownloadMixin
 # Import pretrained config from transformers
 from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
+from src.config_registry import resolve_config_path, resolve_config_dir, load_config as registry_load_config, config_exists
 from src.types import InputImage, InputVideo, InputAudio
 import types
 import numpy as np
@@ -123,15 +124,41 @@ class LoaderMixin(DownloadMixin):
 
     def fetch_config(
         self,
-        config_path: str,
+        config_path: str = None,
         config_save_path: str = DEFAULT_CONFIG_SAVE_PATH,
         return_path: bool = False,
+        config_id: str = None,
     ):
-        path = self._download(config_path, config_save_path)
-        if return_path:
-            return path
-        else:
-            return self._load_config_file(path)
+        # Prefer config_id (local registry) over config_path (remote download)
+        if config_id:
+            try:
+                path = resolve_config_path(config_id)
+                if return_path:
+                    return path
+                else:
+                    return self._load_config_file(path)
+            except FileNotFoundError:
+                self.logger.warning(
+                    f"Config not found in registry for config_id='{config_id}', "
+                    f"falling back to download."
+                )
+
+        # If config_path is already a local path, use it directly
+        if config_path and os.path.exists(config_path):
+            if return_path:
+                return config_path
+            else:
+                return self._load_config_file(config_path)
+
+        # Fallback: download from remote (legacy config_path behavior)
+        if config_path:
+            path = self._download(config_path, config_save_path)
+            if return_path:
+                return path
+            else:
+                return self._load_config_file(path)
+
+        return None
 
     def _load_model(
         self,
@@ -181,13 +208,16 @@ class LoaderMixin(DownloadMixin):
         if model_class is None:
             raise ValueError(f"Model class for base '{model_base}' not found")
         config_path = component.get("config_path")
+        config_id = component.get("config_id")
         config = {}
 
         if "nunchaku" in model_base:
             return model_class.from_pretrained(model_path, torch_dtype=load_dtype)
 
-        if config_path:
-            pydash.merge(config, self.fetch_config(config_path))
+        if config_id or config_path:
+            fetched = self.fetch_config(config_path=config_path, config_id=config_id)
+            if fetched:
+                pydash.merge(config, fetched)
 
         if component.get("config"):
             pydash.merge(config, component.get("config"))
@@ -196,6 +226,7 @@ class LoaderMixin(DownloadMixin):
         from src.converters.convert import (
             get_transformer_converter,
             get_vae_converter,
+            get_helper_converter,
             NoOpConverter,
             get_text_encoder_converter,
         )
@@ -207,15 +238,19 @@ class LoaderMixin(DownloadMixin):
             converter = get_transformer_converter(model_base)
         elif component.get("type") == "text_encoder":
             converter = get_text_encoder_converter(model_base)
+        elif component.get("type") == "helper":
+            converter = get_helper_converter(model_base)
         else:
             converter = NoOpConverter()
-            
-
-        if os.path.isdir(model_path) and not config_path:
+    
+        if os.path.isdir(model_path) and not config_path and not config_id:
             # look for a config.json file
             config_path = os.path.join(model_path, "config.json")
             if os.path.exists(config_path):
                 pydash.merge(config, self._load_json(config_path))
+                
+        
+        init_config = True
 
         with init_empty_weights():
             # Check the constructor signature to determine what it expects
@@ -255,7 +290,19 @@ class LoaderMixin(DownloadMixin):
                 if hasattr(model_class, "_from_config"):
                     model = model_class._from_config(config, **extra_kwargs)
                 else:
-                    model = model_class.from_config(config, **extra_kwargs)
+                    try:
+                        model = model_class.from_config(config, **extra_kwargs)
+                    except Exception as e:
+                        init_config = False
+                        # try just straight from_pretrained
+                    
+        if not init_config:
+            try:
+                model = model_class.from_pretrained(model_path, **extra_kwargs)
+            except Exception as e:
+                # as last resort just plug the wholr component into the model
+                model = model_class(**component)
+            return model
 
         if no_weights:
             return model
@@ -358,6 +405,7 @@ class LoaderMixin(DownloadMixin):
 
         patched_for_fpscaled = False
         gguf_kwargs = component.get("gguf_kwargs", {})
+        
         for file_path in tqdm(
             files_to_load, desc="Loading weights", total=len(files_to_load)
         ):
@@ -465,6 +513,8 @@ class LoaderMixin(DownloadMixin):
             if load_dtype and not is_safetensors:
                 for k, v in state_dict.items():
                     state_dict[k] = v.to(load_dtype)
+            
+            
             # Detect FP-scaled checkpoints (e.g., Wan2.2 FP e4m3fn scaled)
             # and patch the model with FPScaled* layers *before* loading
             # the state dict. We only do this once per model.
@@ -472,18 +522,20 @@ class LoaderMixin(DownloadMixin):
                 from src.utils.mlx import check_mlx_convolutional_weights
 
                 check_mlx_convolutional_weights(state_dict, model)
-            if (
-                not patched_for_fpscaled
-                and getattr(self, "engine_type", "torch") == "torch"
+            
+
+            _this_sd_has_fp_weights = (
+                getattr(self, "engine_type", "torch") == "torch"
                 and isinstance(state_dict, dict)
                 and (
                     any(k.endswith("scale_weight") for k in state_dict.keys())
                     or any(
-                        (v.dtype == torch.float8_e4m3fn or v.dtype == torch.float8_e5m2)
+                        v is not None and isinstance(v, torch.Tensor) and (v.dtype == torch.float8_e4m3fn or v.dtype == torch.float8_e5m2)
                         for v in state_dict.values()
                     )
                 )
-            ):
+            )
+            if _this_sd_has_fp_weights:
                 from src.quantize.scaled_layer import (
                     patch_fpscaled_model_from_state_dict,
                 )
@@ -533,6 +585,7 @@ class LoaderMixin(DownloadMixin):
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
+            
 
         if getattr(self, "engine_type", "torch") == "torch":
             has_meta_params = False
@@ -760,6 +813,8 @@ class LoaderMixin(DownloadMixin):
 
             for name, param in model.named_parameters():
                 if param.device.type == "meta":
+                    
+
                     # If this is an FP-scaled model and the offending parameter
                     # is a residual `scale_weight` that never got real weights
                     # loaded, we can safely drop it instead of erroring out.
@@ -958,12 +1013,15 @@ class LoaderMixin(DownloadMixin):
             )
 
         config_path = component.get("config_path")
+        config_id = component.get("config_id")
         config = component.get("config")
-        if config_path and config:
-            fetched_config = self.fetch_config(config_path)
+        fetched_config = None
+        if config_id or config_path:
+            fetched_config = self.fetch_config(config_path=config_path, config_id=config_id)
+        if fetched_config and config:
             config = {**fetched_config, **config}
-        elif config_path:
-            config = self.fetch_config(config_path)
+        elif fetched_config:
+            config = fetched_config
         else:
             config = component.get("config", {})
 

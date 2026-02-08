@@ -490,11 +490,11 @@ class FPScaledLayer(nn.Module):
         # logical compute dtype; for dequant we must check the physical dtype.
         physical_dtype = getattr(weight, "physical_dtype", weight.dtype)
         if (
-            physical_dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+            physical_dtype in [torch.float8_e4m3fn, torch.float8_e5m2]
             and scale_weight is not None
         ):
             return fp8_activation_dequant(weight, scale_weight, target_dtype)
-        if physical_dtype in (torch.uint8) and scale_weight is not None:
+        if physical_dtype in [torch.uint8] and scale_weight is not None:
             return dequantize_from_fp4(weight, scale_weight, target_dtype)
 
         # Dequantize / cast from FP8 (or any low-precision) to target_dtype.

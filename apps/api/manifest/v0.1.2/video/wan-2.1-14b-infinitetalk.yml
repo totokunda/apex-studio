@@ -44,26 +44,32 @@ spec:
   - xformers
   loras:
   - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
-    scale: 1.0
+    scale: 0.0
     name: lightx2v_lora
     label: Lightx2v LoRA
+    component: transformer
+    verified: true
+  - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_T2V_14B_FusionX_LoRA.safetensors
+    scale: 1.0
+    name: fusionx_t2v_lora
+    label: FusionX T2V LoRA
     component: transformer
     verified: true
   components:
   - type: scheduler
     label: Scheduler
-    default: EulerFlowScheduler
+    default: Beta57Scheduler
     scheduler_manifest: schedulers/flow_matching.yml
     scheduler_config_defaults:
       num_train_timesteps: 1000
-      shift: 7.0
+      shift: 5.0
       sigma_max: 1.0
-      sigma_min: 0.002994011976047904
+      sigma_min: 0.0
   - type: vae
     label: WAN VAE
     name: vae
     base: wan
-    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
+    config_id: Wan2.2-I2V/vae
     model_path:
     - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
@@ -73,7 +79,7 @@ spec:
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
-    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    config_id: Wan2.1-T2V/text_encoder
     model_path:
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -94,7 +100,7 @@ spec:
   - type: transformer
     base: wan.multitalk
     label: Wan MultiTalk Transformer
-    config_path: totoku/apex-models/Wan2.1-I2V-480P/transformer/config.json
+    config_id: Wan2.1-I2V-480P/transformer
     model_path:
     - path: totoku/apex-models/Wan2.1-I2V-480P/transformer/transformer-bf16.safetensors
       variant: default
@@ -125,7 +131,7 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
-    preprocessor_path: totoku/apex-models/Wan2.1-I2V-480P/image_processor
+    preprocessor_config_id: Wan2.1-I2V-480P/image_processor
     processor_class: CLIPImageProcessor
     model_class: CLIPVisionModel
   - type: extra_model_path

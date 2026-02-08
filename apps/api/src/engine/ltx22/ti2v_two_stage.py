@@ -65,6 +65,9 @@ class LTX2TI2VEngine(LTX2Shared):
 
         height = round(height / (self.vae_spatial_compression_ratio * 2) * (self.vae_spatial_compression_ratio * 2))
         width = round(width / (self.vae_spatial_compression_ratio * 2) * (self.vae_spatial_compression_ratio * 2))
+        # ensure height and width are divisible by 128
+        height = height // 128 * 128
+        width = width // 128 * 128
         
         num_frames = self._parse_num_frames(duration, fps)
 
@@ -196,7 +199,7 @@ class LTX2TI2VEngine(LTX2Shared):
         self.to_device(self.transformer)
         dtype = self.component_dtypes["transformer"]
         
-        
+
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_1_output_shape,
             conditionings=stage_1_conditionings,
@@ -297,7 +300,7 @@ class LTX2TI2VEngine(LTX2Shared):
 
         decoded_video = decode_video(
             video_state.latent, self.video_vae.decoder, tiling_config, generator
-        )
+        ).cpu()
         
         if offload:
             self._offload("video_vae")
@@ -311,7 +314,7 @@ class LTX2TI2VEngine(LTX2Shared):
 
         decoded_audio = decode_audio(
             audio_state.latent, self.audio_vae.decoder, vocoder
-        )
+        ).cpu()
         
         if offload:
             self._offload("audio_vae")

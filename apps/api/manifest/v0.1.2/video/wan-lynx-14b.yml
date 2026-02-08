@@ -63,7 +63,7 @@ spec:
     label: WAN VAE
     name: vae
     base: wan
-    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
+    config_id: Wan2.2-I2V/vae
     model_path:
     - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
@@ -73,7 +73,7 @@ spec:
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
-    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    config_id: Wan2.1-T2V/text_encoder
     model_path:
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -92,9 +92,9 @@ spec:
     tokenizer_kwargs:
       subfolder: Wan2.1-T2V/tokenizer
   - type: transformer
-    base: wan.base
+    base: wan.lynx
     label: Wan Transformer
-    config_path: totoku/apex-models/Wan2.1-T2V/transformer/config.json
+    config_id: Wan2.1-T2V/transformer
     extra_kwargs:
       load_extra_model_paths: false
     model_path:

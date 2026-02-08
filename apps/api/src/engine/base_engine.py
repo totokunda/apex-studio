@@ -23,6 +23,7 @@ from src.utils.defaults import (
     DEFAULT_CACHE_PATH,
 )
 from src.utils.module import find_class_recursive
+from src.config_registry import resolve_config_path, resolve_config_dir, config_exists
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from src.transformer.base import TRANSFORMERS_REGISTRY as TRANSFORMERS_REGISTRY_TORCH
@@ -839,14 +840,23 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     pass
 
         if helper is None:
-            if "config_path" in config and module is not None:
-                config_path = config.pop("config_path")
-                # try download the config file
+            helper_config_id = config.pop("config_id", None)
+            helper_config_path = config.pop("config_path", None)
+            if helper_config_id:
                 try:
-                    config_path = self._download(config_path, get_components_path())
+                    resolved = resolve_config_path(helper_config_id)
+                    config = self._load_config_file(resolved)
+                except FileNotFoundError:
+                    self.logger.warning(
+                        f"Config not found in registry for helper config_id='{helper_config_id}'"
+                    )
+            elif helper_config_path and module is not None:
+                # try download the config file (legacy path)
+                try:
+                    helper_config_path = self._download(helper_config_path, get_components_path())
                 except Exception:
                     pass
-                config = self._load_config_file(config_path)
+                config = self._load_config_file(helper_config_path)
             helper_class = get_helper(base)
             config.pop("label", None)
             config.pop("description", None)
@@ -855,6 +865,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             config.pop("name", None)
             config.pop("type", None)
             config.pop("config_path", None)
+            config.pop("config_id", None)
             config.pop("extra_kwargs", None)
             config.pop("key_map", None)
             helper = helper_class(**config)
@@ -1073,7 +1084,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             load_device=device,
         )
         if self.component_dtypes and "vae" in self.component_dtypes:
-            self.to_dtype(vae, self.component_dtypes["vae"])
+            self.to_dtype(vae, component.get("dtype", self.component_dtypes["vae"]))
         if self.vae_tiling:
             self.enable_vae_tiling()
         if self.vae_slicing:
@@ -1192,9 +1203,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     def load_text_encoder(
         self, component: Dict[str, Any], no_weights: bool = False, device: str = "cpu"
     ):
-        component_name = component.get("name") or "text_encoder"
-        component["load_dtype"] = self.component_load_dtypes.get("text_encoder", None)
-        component["dtype"] = self.component_dtypes.get("text_encoder", None)
+        component["load_dtype"] = component.get("dtype", self.component_load_dtypes.get("text_encoder", None))
+        component["dtype"] = component.get("dtype", self.component_dtypes.get("text_encoder", None))
         text_encoder = TextEncoder(component, no_weights, device=device)
         text_encoder.enable_cache = not self.disable_text_encoder_cache
 
@@ -1301,7 +1311,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         if self.component_dtypes and "transformer" in self.component_dtypes:
             if isinstance(transformer, torch.nn.Module):
 
-                self.to_dtype(transformer, self.component_dtypes["transformer"])
+                self.to_dtype(transformer, component.get("dtype", self.component_dtypes["transformer"]))
 
             elif mx_nn is not None and isinstance(transformer, mx_nn.Module):
                 self.to_mlx_dtype(transformer, self.component_dtypes["transformer"])
@@ -2544,6 +2554,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         )
 
         return formatted, final_names
+    
+    def _coerce_dtype(self, dtype: str | torch.dtype):
+        if isinstance(dtype, str):
+            if dtype.lower() == "float32" or dtype.lower() == "fp32":
+                return torch.float32
+            elif dtype.lower() == "float16" or dtype.lower() == "fp16":
+                return torch.float16
+            elif dtype.lower() == "bfloat16" or dtype.lower() == "bf16":
+                return torch.bfloat16
+        return torch.dtype(dtype)
 
     def download(
         self,
@@ -2702,7 +2722,17 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 # Pseudo component: already handled in pre-pass.
                 continue
 
-            if config_path := component.get("config_path"):
+            config_id = component.get("config_id")
+            config_path = component.get("config_path")
+            if config_id:
+                try:
+                    resolved_path = resolve_config_path(config_id)
+                    component["config_path"] = resolved_path
+                except FileNotFoundError:
+                    self.logger.warning(
+                        f"Config not found in registry for config_id='{config_id}'"
+                    )
+            elif config_path:
                 downloaded_config_path = self.fetch_config(
                     config_path, return_path=True, config_save_path=components_path
                 )
@@ -2711,6 +2741,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
             component_type = component.get("type")
             component_name = component.get("name")
+            
+            if component.get("dtype"):
+                component["dtype"] = self._coerce_dtype(component.get("dtype"))
+                component["load_dtype"] = component["dtype"]
 
             if component_type == "scheduler":
                 scheduler_options = component.get("scheduler_options")
@@ -2785,9 +2819,19 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 if component_name:
                     component["name"] = component_name
 
-                if component.get("config_path"):
+                sched_config_id = component.get("config_id")
+                sched_config_path = component.get("config_path")
+                if sched_config_id:
+                    try:
+                        resolved = resolve_config_path(sched_config_id)
+                        component["config_path"] = resolved
+                    except FileNotFoundError:
+                        self.logger.warning(
+                            f"Scheduler config not found for config_id='{sched_config_id}'"
+                        )
+                elif sched_config_path:
                     downloaded_config_path = self.fetch_config(
-                        component["config_path"],
+                        sched_config_path,
                         return_path=True,
                         config_save_path=components_path,
                     )

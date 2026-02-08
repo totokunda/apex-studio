@@ -39,18 +39,18 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchPairScheduler
-    scheduler_manifest: schedulers/flow_match_pair.yml
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
     scheduler_config_defaults:
       num_train_timesteps: 1000
-      shift: 5.0
+      shift: 1.0
       sigma_max: 1.0
       sigma_min: 0.002994011976047904
   - type: vae
     label: WAN VAE
     name: vae
     base: wan
-    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
+    config_id: Wan2.2-I2V/vae
     model_path:
     - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
@@ -60,7 +60,7 @@ spec:
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
-    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    config_id: Wan2.1-T2V/text_encoder
     model_path:
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -82,7 +82,7 @@ spec:
     label: MOVA Audio Transformer
     base: wan.mova_audio
     name: audio_transformer
-    config_path: totoku/apex-models/MOVA-360p/audio_transformer/config.json
+    config_id: MOVA-360p/audio_transformer
     model_path:
     - path: totoku/apex-models/MOVA-360p/audio_transformer/diffusion_pytorch_model.safetensors
       variant: default
@@ -92,7 +92,7 @@ spec:
     label: MOVA Audio VAE
     base: movaaudiovae
     name: audio_vae
-    config_path: totoku/apex-models/MOVA-360p/audio_vae/config.json
+    config_id: MOVA-360p/audio_vae
     model_path:
     - path: totoku/apex-models/MOVA-360p/audio_vae/diffusion_pytorch_model.safetensors
       variant: default
@@ -102,7 +102,7 @@ spec:
     label: Dual Tower Bridge
     base: wan.mova
     name: dual_tower_bridge
-    config_path: totoku/apex-models/MOVA-360p/dual_tower_bridge/config.json
+    config_id: MOVA-360p/dual_tower_bridge
     model_path:
     - path: totoku/apex-models/MOVA-360p/dual_tower_bridge/diffusion_pytorch_model.safetensors
       variant: default
@@ -112,7 +112,7 @@ spec:
     label: High Noise Transformer
     base: wan.mova
     name: high_noise_transformer
-    config_path: totoku/apex-models/MOVA-360p/high_noise_transformer/config.json
+    config_id: MOVA-360p/high_noise_transformer
     model_path:
     - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-bf16.safetensors
       variant: default
@@ -139,7 +139,7 @@ spec:
     label: Low Noise Transformer
     base: wan.mova
     name: low_noise_transformer
-    config_path: totoku/apex-models/MOVA-360p/low_noise_transformer/config.json
+    config_id: MOVA-360p/low_noise_transformer
     model_path:
     - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-bf16.safetensors
       variant: default
