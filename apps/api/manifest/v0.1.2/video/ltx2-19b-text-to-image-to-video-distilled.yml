@@ -19,8 +19,8 @@ metadata:
   - text-to-video
   - image-to-video
 spec:
-  engine: ltx2
-  model_type: ti2v
+  engine: ltx22
+  model_type: distilled
   engine_type: torch
   default_duration_secs: 5.0
   fps: 25
@@ -52,7 +52,7 @@ spec:
     label: LTX2 Video Vae
     name: video_vae
     base: ltx2
-    config_path: totoku/apex-models/LTX-2/vae/config.json
+    config_id: LTX-2/vae
     model_path:
     - path: totoku/apex-models/LTX-2/vae/vae-bf16.safetensors
       variant: default
@@ -62,7 +62,7 @@ spec:
     label: LTX2 Audio Vae
     name: audio_vae
     base: ltx2audio
-    config_path: totoku/apex-models/LTX-2/audio_vae/config.json
+    config_id: LTX-2/audio_vae
     model_path:
     - path: totoku/apex-models/LTX-2/audio_vae/vae-bf16.safetensors
       variant: default
@@ -79,7 +79,7 @@ spec:
     - embed_tokens
     block_modules:
     - model.language_model
-    config_path: totoku/apex-models/LTX-2/text_encoder/config.json
+    config_id: LTX-2/text_encoder
     model_path:
     - path: totoku/apex-models/LTX-2/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -100,8 +100,8 @@ spec:
   - type: transformer
     label: LTX2 Transformer
     name: transformer
-    base: ltx2.base
-    config_path: totoku/apex-models/LTX-2-Distilled/transformer/config.json
+    base: ltx2.base2
+    config_id: LTX-2-Distilled/transformer
     model_path:
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-bf16.safetensors
       variant: default
@@ -127,7 +127,7 @@ spec:
     label: LTX2 Connectors
     name: connectors
     base: ltx2.connectors
-    config_path: totoku/apex-models/LTX-2/connectors/config.json
+    config_id: LTX-2/connectors
     model_path:
     - path: totoku/apex-models/LTX-2/connectors/diffusion_pytorch_model.safetensors
       variant: default
@@ -137,7 +137,7 @@ spec:
     label: LTX2 Vocoder
     name: vocoder
     base: ltx2.vocoder
-    config_path: totoku/apex-models/LTX-2/vocoder/config.json
+    config_id: LTX-2/vocoder
     model_path:
     - path: totoku/apex-models/LTX-2/vocoder/diffusion_pytorch_model.safetensors
       variant: default
@@ -147,7 +147,7 @@ spec:
     label: LTX2 Spatial Upsampler
     name: latent_upsampler
     base: ltx2.upsampler
-    config_path: totoku/apex-models/LTX-2/latent_upsampler/config.json
+    config_id: LTX-2/latent_upsampler
     model_path:
     - path: totoku/apex-models/LTX-2/latent_upsampler/diffusion_pytorch_model.safetensors
       variant: default

@@ -20,12 +20,14 @@ from . import activations
 from .alias_free_activation.torch.act import Activation1d as TorchActivation1d
 from .env import AttrDict
 from .utils import get_padding, init_weights
+from src.mixins.loader_mixin import LoaderMixin
 
 
 def load_hparams_from_json(path) -> AttrDict:
-    with open(path) as f:
-        data = f.read()
-    return AttrDict(json.loads(data))
+    # check if 
+    loader = LoaderMixin()
+    data = loader.fetch_config(path)
+    return AttrDict(data)
 
 
 class AMPBlock1(torch.nn.Module):
@@ -264,10 +266,17 @@ class BigVGAN(
         - Ensure that the activation function is correctly specified in the hyperparameters (h.activation).
     """
 
-    def __init__(self, h: AttrDict, use_cuda_kernel: bool = False):
+    def __init__(self, config_path: str = None, config: dict = None, use_cuda_kernel: bool = False):
         super().__init__()
-        self.h = h
+        if config_path is not None:
+            self.h = load_hparams_from_json(config_path)
+        elif config is not None:
+            self.h = AttrDict(config)
+        else:
+            raise ValueError("Either config_path or config must be provided")
+
         self.h["use_cuda_kernel"] = use_cuda_kernel
+        h = self.h
 
         # Select which Activation1d, lazy-load cuda version to ensure backward compatibility
         if self.h.get("use_cuda_kernel", False):

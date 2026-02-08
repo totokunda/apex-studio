@@ -50,7 +50,7 @@ spec:
   - type: vae
     label: Flux VAE
     base: flux2
-    config_path: totoku/apex-models/FLUX.2-dev/vae/config.json
+    config_id: FLUX.2-dev/vae
     model_path:
     - path: totoku/apex-models/FLUX.2-dev/vae/vae-bf16.safetensors
       variant: default
@@ -60,7 +60,9 @@ spec:
     name: text_encoder
     label: Flux2 Text Encoder
     base: Qwen3ForCausalLM
-    config_path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/config.json
+    config_id: FLUX.2-klein-4B/text_encoder
+    gguf_kwargs:
+      key_map: qwen3
     ignore_offloading_modules:
     - lm_head
     - embed_tokens
@@ -79,10 +81,6 @@ spec:
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-q4_k_m.gguf
-      variant: GGUF_Q4_K_M
-      precision: q4_k_m
-      type: gguf
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -90,7 +88,8 @@ spec:
   - type: transformer
     label: Flux Transformer
     base: flux2.base
-    config_path: totoku/apex-models/FLUX.2-klein-4B/transformer/config.json
+    config_id: FLUX.2-klein-4B/transformer
+    
     model_path:
     - path: totoku/apex-models/FLUX.2-klein-4B/transformer/transformer-bf16.safetensors
       variant: default
@@ -100,15 +99,15 @@ spec:
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/FLUX.2-klein-4B/transformer/transformer-gguf_q8_0.gguf
+    - path: totoku/apex-models/FLUX.2-klein-4B/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: totoku/apex-models/FLUX.2-klein-4B/transformer/transformer-gguf_q6_k.gguf
+    - path: totoku/apex-models/FLUX.2-klein-4B/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-    - path: totoku/apex-models/FLUX.2-klein-4B/transformer/transformer-gguf_q4_k_m.gguf
+    - path: totoku/apex-models/FLUX.2-klein-4B/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf

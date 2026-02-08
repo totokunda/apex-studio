@@ -195,8 +195,7 @@ class BasicAVTransformerBlock(torch.nn.Module):
         run_a2v = run_vx and (audio is not None and audio.enabled and ax.numel() > 0)
         run_v2a = run_ax and (video is not None and video.enabled and vx.numel() > 0)
         
-        step_mem("block_forward", device=0, log_tensors=True)
-
+ 
         if run_vx:
             vshift_msa, vscale_msa, vgate_msa = self.get_ada_values(
                 self.scale_shift_table, vx.shape[0], video.timesteps, slice(0, 3)
@@ -210,7 +209,7 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 v_mask = perturbations.mask_like(PerturbationType.SKIP_VIDEO_SELF_ATTN, self.idx, vx)
                 x_list = [norm_vx]
                 del norm_vx
-                step_mem("attn1", device=0, log_tensors=True)
+ 
                 attn_out = self.attn1(x_list, pe=video.positional_embeddings)
                 attn_out = _apply_gate(attn_out, vgate_msa)
                 attn_out.mul_(v_mask)

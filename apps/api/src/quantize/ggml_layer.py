@@ -286,7 +286,24 @@ class GGMLRMSNorm(GGMLLayer, nn.RMSNorm):
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         w, b = self.cast_bias_weight(x)
-        return F.rms_norm(x, self.normalized_shape, w, self.eps)
+
+        # NOTE:
+        # `patch_model()` swaps modules' `__class__` in-place without calling
+        # `__init__`. This means attributes expected by `torch.nn.RMSNorm`
+        # (e.g. `normalized_shape`) may be missing when the original module was
+        # Diffusers' `RMSNorm` (which uses `.dim` instead).
+        normalized_shape = getattr(self, "normalized_shape", None)
+        if normalized_shape is None:
+            normalized_shape = getattr(self, "dim", None)
+        if normalized_shape is None and getattr(self, "weight", None) is not None:
+            normalized_shape = tuple(self.weight.shape)
+        if normalized_shape is None:
+            normalized_shape = (x.shape[-1],)
+
+        out = F.rms_norm(x, normalized_shape, w, self.eps)
+        if b is not None:
+            out = out + b
+        return out
 
 
 _TYPE_MAP = {
@@ -320,9 +337,19 @@ def patch_model(
             qname = f"{prefix}{name}"
             t = type(child)
             if t in _TYPE_MAP and (name_filter is None or name_filter(qname)):
-                child.__class__ = _TYPE_MAP[t]  # swap class w/o reallocation
+                new_cls = _TYPE_MAP[t]
+                child.__class__ = new_cls  # swap class w/o reallocation
                 if default_dequant_dtype is not None and isinstance(child, GGMLLayer):
                     child.dequant_dtype = default_dequant_dtype
+                # `torch.nn.RMSNorm` expects `.normalized_shape`; Diffusers'
+                # `RMSNorm` stores it as `.dim`. Since we class-swap without
+                # `__init__`, synthesize `.normalized_shape` if missing.
+                if new_cls is GGMLRMSNorm and not hasattr(child, "normalized_shape"):
+                    dim = getattr(child, "dim", None)
+                    if dim is not None:
+                        child.normalized_shape = dim
+                    elif getattr(child, "weight", None) is not None:
+                        child.normalized_shape = tuple(child.weight.shape)
             if child is not None and len(child._modules) > 0:
                 stack.append((qname + ".", child))
 

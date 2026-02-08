@@ -48,7 +48,7 @@ spec:
   - type: vae
     label: Flux VAE
     base: auto
-    config_path: totoku/apex-models/Chroma1-HD/vae/config.json
+    config_id: Chroma1-HD/vae
     model_path:
     - path: totoku/apex-models/Chroma1-HD/vae/vae-bf16.safetensors
       variant: default
@@ -76,7 +76,7 @@ spec:
   - type: vae
     label: Flux VAE
     base: auto
-    config_path: totoku/apex-models/Chroma1-HD/vae/config.json
+    config_id: Chroma1-HD/vae
     model_path:
     - path: totoku/apex-models/Chroma1-HD/vae/vae-bf16.safetensors
       precision: bf16
@@ -90,7 +90,7 @@ spec:
     label: T5 Text Encoder
     name: text_encoder_2
     base: T5EncoderModel
-    config_path: totoku/apex-models/Chroma1-HD/text_encoder/config.json
+    config_id: Chroma1-HD/text_encoder
     model_path:
     - path: totoku/apex-models/Chroma1-HD/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -131,7 +131,7 @@ spec:
     - path: totoku/apex-models/FLUX.1-Fill-dev/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
-    config_path: totoku/apex-models/FLUX.1-Fill-dev/transformer/config.json
+    config_id: FLUX.1-Fill-dev/transformer
   defaults:
     run:
       num_inference_steps: 40

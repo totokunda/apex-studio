@@ -12,7 +12,7 @@ import numpy as np
 import torch
 
 # from audio_separator.separator import Separator
-from transformers import WhisperModel, AutoFeatureExtractor
+from transformers import  AutoFeatureExtractor, WhisperModel
 import torch.nn.functional as F
 from src.helpers.base import BaseHelper
 from src.utils.defaults import get_components_path
@@ -85,17 +85,19 @@ class HuMoAudioProcessor(BaseHelper):
             config_path = os.path.join(model_path, "config.json")
             if not os.path.isfile(config_path):
                 config_path = None
-        if config_path is None:
-            config_path = "https://huggingface.co/totoku/apex-models/resolve/main/HuMo/audio_encoder/config.json"
-        # check if is file or directory
         
+        component = {
+            "base": "WhisperModel",
+            "type": "helper",
+            "model_path": model_path,
+            "config_id": "HuMo/audio_encoder",
+        }
+        if config_path:
+            component["config_path"] = config_path
         self.whisper = self._load_model(
-                {
-                    "base": "WhisperModel",
-                    "model_path": model_path,
-                    "config_path": config_path,
-                },
+                component,
                 module_name="transformers",
+                load_dtype=torch.float32,
             )
         self.to_device(self.whisper)
         self.whisper.requires_grad_(False)

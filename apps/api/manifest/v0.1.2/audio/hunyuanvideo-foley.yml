@@ -34,25 +34,19 @@ spec:
   - type: scheduler
     name: scheduler
     label: HunyuanVideo-Foley Scheduler
-    scheduler_options:
-    - name: FoleyFlowMatchDiscreteScheduler
-      label: Foley FlowMatch Discrete Scheduler
-      description: The FlowMatch Discrete Scheduler is a scheduler for the HunyuanVideo-Foley model.
-      config:
-        denoise_type: "flow"
-        flow_path_type: "linear"
-        flow_predict_type: "velocity"
-        flow_reverse: True
-        flow_solver: "euler"
-        sample_flow_shift: 1.0
-        sample_use_flux_shift: False
-        flux_base_shift: 0.5
-        flux_max_shift: 1.15
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 1.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+    
   - type: transformer
     name: foley_model
     label: HunyuanVideo-Foley Diffusion Model
     base: hunyuanvideo.foley
-    config_name: totoku/apex-models/HunyuanVideo-Foley/transformer/config.json
+    config_id: HunyuanVideo-Foley/transformer
     model_path:
     - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-bf16.safetensors
       variant: default
@@ -62,23 +56,23 @@ spec:
       variant: fp8
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q4_k_m.gguf
-      variant: gguf_q4_k_m
-      precision: q4_k_m
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q8_0.gguf
+      variant: gguf_q8_0
+      precision: q8_0
       type: gguf
-    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q6_k.gguf
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q6_k.gguf
       variant: gguf_q6_k
       precision: q6_k
       type: gguf
-    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-gguf_q8_0.gguf
-      variant: gguf_q8_0
-      precision: q8_0
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q4_k_m.gguf
+      variant: gguf_q4_k_m
+      precision: q4_k_m
       type: gguf
   - type: vae
     name: dac_model
     label: DAC VAE 128d 48kHz
     base: dac
-    config_path: totoku/apex-models/HunyuanVideo-Foley/vae/config.json
+    config_id: HunyuanVideo-Foley/vae
     model_path:
     - path: totoku/apex-models/HunyuanVideo-Foley/vae/vae-bf16.safetensors
       variant: default
@@ -88,7 +82,7 @@ spec:
     name: clap_model
     label: CLAP Text Encoder
     base: ClapTextModelWithProjection
-    config_path: totoku/apex-models/HunyuanVideo-Foley/text_encoder/config.json
+    config_id: HunyuanVideo-Foley/text_encoder
     model_path:
     - path: totoku/apex-models/HunyuanVideo-Foley/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -101,7 +95,7 @@ spec:
     label: SigLIP2 Model
     module: transformers
     base: SiglipModel
-    config_path: totoku/apex-models/HunyuanVideo-Foley/siglip_encoder/config.json
+    config_id: HunyuanVideo-Foley/siglip_encoder
     model_path:
     - path: totoku/apex-models/HunyuanVideo-Foley/siglip_encoder
       variant: default

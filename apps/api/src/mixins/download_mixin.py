@@ -508,7 +508,6 @@ class DownloadMixin:
     ):
         # check if model_path is a local path
         is_downloaded_path = self.is_downloaded(model_path, save_path)
-        print(model_path, save_path, is_downloaded_path)
         if is_downloaded_path:
             return is_downloaded_path
         elif "drive.google.com" in model_path:

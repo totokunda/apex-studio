@@ -442,7 +442,7 @@ class WanMOVAEngine(WanShared):
         # EasyCache parameters
         use_easycache: bool = False,
         easycache_thresh: float = 0.05,
-        easycache_ret_steps: int = 7,
+        easycache_ret_steps: int = 11,
         chunking_profile: str = "none",
         rope_on_cpu: bool = True,
         **kwargs,
@@ -455,6 +455,7 @@ class WanMOVAEngine(WanShared):
 
         use_cfg_guidance = negative_prompt is not None and guidance_scale > 1.0
         num_frames = self._parse_num_frames(duration, fps)
+        
         if high_noise_guidance_scale is not None and low_noise_guidance_scale is not None:
             guidance_scale = [high_noise_guidance_scale, low_noise_guidance_scale]
             safe_emit_progress(
@@ -469,6 +470,7 @@ class WanMOVAEngine(WanShared):
             0.04,
             f"Preprocessing input image (target: ~{height}x{width}, frames: {num_frames}, fps: {fps:g})",
         )
+        
         image, height, width = self._aspect_ratio_resize(image, max_area=height * width, mod_value=16)
         image = self.video_processor.preprocess(image, height=height, width=width).to(self.device, dtype=torch.float32)
         audio_num_samples = int(self.audio_sample_rate * num_frames / fps)

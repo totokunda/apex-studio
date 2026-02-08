@@ -129,6 +129,8 @@ MANIFEST_SCHEMA_V1: dict = {
                                 ]
                             },
                             "config_path": {"type": "string"},
+                            "config_id": {"type": "string"},
+                            "preprocessor_config_id": {"type": "string"},
                             "file_pattern": {"type": "string"},
                             "tag": {"type": "string"},
                             "key_map": {
@@ -176,6 +178,7 @@ MANIFEST_SCHEMA_V1: dict = {
                                         "description": {"type": "string"},
                                         "base": {"type": "string"},
                                         "config_path": {"type": "string"},
+                                        "config_id": {"type": "string"},
                                     },
                                     "additional_properties": True,
                                 },

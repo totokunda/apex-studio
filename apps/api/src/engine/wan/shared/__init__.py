@@ -720,6 +720,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
                     noise_pred = uncond_noise_pred + guidance_scale * (
                         noise_pred - uncond_noise_pred
                     )
+                    
 
                 latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 

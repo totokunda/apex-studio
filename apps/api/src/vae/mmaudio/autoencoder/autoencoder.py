@@ -1,17 +1,25 @@
 from typing import Literal
+from pathlib import Path
 import torch
 import torch.nn as nn
 
 from .vae import VAE, get_my_vae
 from .distributions import DiagonalGaussianDistribution
-from ..bigvgan import BigVGAN
+from ..bigvgan.models import BigVGANVocoder
+from omegaconf import OmegaConf
+from ..bigvgan_v2.bigvgan import BigVGAN as BigVGANv2
+
+_bigvgan_vocoder_config_path = Path(__file__).parent.parent / "bigvgan" / "bigvgan_vocoder.yml"
+
 
 
 class AutoEncoderModule(nn.Module):
     def __init__(
         self,
         *,
-        mode: Literal["16k"],
+        mode: Literal["16k", "44k"],
+        vocoder_config_path: str = None,
+        vocoder_config: dict = None,
         need_vae_encoder: bool = True,
     ):
         """
@@ -24,7 +32,11 @@ class AutoEncoderModule(nn.Module):
 
         # --- VAE ---
         self.vae: VAE = get_my_vae(mode).eval()
-        self.vocoder = BigVGAN().eval()
+        if mode == '16k':
+            vocoder_cfg = OmegaConf.load(_bigvgan_vocoder_config_path)
+            self.vocoder = BigVGANVocoder(vocoder_cfg).eval()
+        elif mode == '44k':
+            self.vocoder = BigVGANv2(config_path=vocoder_config_path, config=vocoder_config)
         self.weight_norm_removed = False
 
         for param in self.parameters():

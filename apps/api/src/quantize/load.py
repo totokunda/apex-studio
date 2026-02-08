@@ -119,6 +119,7 @@ QWEN_VL_SD_MAP = {
     ".ffn_up": ".mlp.up_proj",
     ".ffn_gate": ".mlp.gate_proj",
     ".output": ".lm_head",
+    "output.weight": "lm_head.weight",
     "output_norm.": "model.norm.",
 }
 
@@ -176,12 +177,28 @@ GEMMA3_VISION_SD_MAP = {
     "ffn_up": "mlp.fc1",
 }
 
+QWEN3_SD_MAP = {
+    "blk.": "model.layers.",
+    "token_embd.": "model.embed_tokens.",
+    ".attn_norm.": ".input_layernorm.",
+    ".attn_k.": ".self_attn.k_proj.",
+    ".attn_q.": ".self_attn.q_proj.",
+    ".attn_v.": ".self_attn.v_proj.",
+    ".attn_output": ".self_attn.o_proj",
+    ".ffn_down": ".mlp.down_proj",
+    ".ffn_up": ".mlp.up_proj",
+    ".ffn_gate": ".mlp.gate_proj",
+    ".ffn_norm.": ".post_attention_layernorm.",
+    "output_norm.": "model.norm.",
+    ".attn_k_norm": ".self_attn.k_norm",
+    ".attn_q_norm": ".self_attn.q_norm",
+}
+
 
 def remap_key(
     key: str,
-    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3"] = "t5",
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3", "qwen3"] = "t5",
 ):
-
     if key_map == "t5":
         key_map = T5_SD_MAP
     elif key_map == "llama":
@@ -204,6 +221,9 @@ def remap_key(
             if (key.startswith("v.") or key.startswith("mm."))
             else GEMMA3_SD_MAP
         )
+        
+    elif key_map == "qwen3":
+        key_map = QWEN3_SD_MAP
     else:
         raise ValueError(f"Invalid key map: {key_map}")
 
@@ -214,7 +234,7 @@ def remap_key(
 
 def load_text_encoder_gguf(
     path: str,
-    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl"] = "t5",
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3", "qwen3"] = "t5",
     dequant_dtype: torch.dtype | str = torch.float16,
     device: str = "cpu",
     **kwargs,
@@ -310,7 +330,9 @@ def load_transformer_gguf(
         dequant_dtype = convert_str_dtype(dequant_dtype)
 
     dev = torch.device(device)
+
     reader = gguf.GGUFReader(path)
+    
     state_dict: Dict[str, GGMLTensor] = {}
     qtype_dict: Dict[str, int] = {}
 
@@ -372,7 +394,7 @@ def load_transformer_gguf(
 def load_gguf(
     path: str,
     type: Literal["text_encoder", "transformer"],
-    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl"] | None = None,
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3", "qwen3"] | None = None,
     device: str = "cpu",
     **kwargs,
 ):

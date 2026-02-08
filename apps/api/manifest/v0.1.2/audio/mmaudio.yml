@@ -1,0 +1,377 @@
+api_version: apex/v1
+kind: Model
+type: video
+metadata:
+  id: mmaudio
+  model: wan
+  name: MMAudio
+  version: 0.1.2
+  description: MMAudio is a model for generating audio from video and text prompts.
+  tags:
+  - mmaudio
+  - t2v
+  - i2v
+  author: Tencent
+  license: Tencent Hunyuan Community License Agreement
+  categories:
+  - video-to-audio
+spec:
+  engine: mmaudio
+  model_type: tv2a
+  engine_type: torch
+  default_duration_secs: 5.0
+  fps: 24
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  components:
+  - type: scheduler
+    name: scheduler
+    label: Scheduler
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 1.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: vae
+    name: vae
+    label: Audio VAE
+    base: mmaudio
+    extra_kwargs:
+      require_conversion: true
+    config:
+      mode: 44k
+      vocoder_config_id: MMAudio/vocoder
+    model_path:
+    - path: totoku/apex-models/Ovi-5s/audio_vae/v1-44.pth
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: extra_model_path
+    name: vocoder_model
+    label: Vocoder Model
+    component: vae
+    model_path:
+    - path: totoku/apex-models/MMAudio/vocoder/bigvgan_generator.pt 
+      variant: default
+      precision: fp16
+      type: safetensors
+  - type: text_encoder
+    label: Text Encoder
+    name: text_encoder
+    label: CLIP Model
+    base: CLIPModel
+    module: transformers
+    config_id: MMAudio/text_encoder
+    dtype: float32
+    model_path:
+    - path: totoku/apex-models/MMAudio/text_encoder/model.safetensors
+      variant: default
+      precision: fp32
+      type: safetensors
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: MMAudio/text_encoder
+  - type: helper
+    name: syncformer_model
+    label: Synchformer Model
+    base: hunyuanvideofoley.synchformer
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/syncformer_encoder
+      variant: default
+      precision: bf16
+      type: pth
+  - type: transformer
+    name: transformer
+    label: Transformer
+    base: mmaudio.base
+    config_id: MMAudio/transformer
+    model_path:
+    - path: totoku/apex-models/MMAudio/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+  defaults:
+    run:
+      num_inference_steps: 50
+      video_guidance_scale: 4.0
+      audio_guidance_scale: 3.0
+      easy_cache_thresh: 0.05
+      easy_cache_ret_steps: 10
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: image
+      label: Image
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+        - - audio_negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - video_guidance_scale
+        - - audio_guidance_scale
+        - - seed
+        - - shift
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+        - - rope_on_cpu
+    - name: easy_cache
+      label: Easy Cache
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - easy_cache_thresh
+        - - easy_cache_ret_steps
+    inputs:
+    - id: image
+      label: Image
+      description: The input image to generate a video from.
+      type: image_list
+      panel: image
+      map_h: height
+      map_w: width
+      scale_by: resolution
+      required: false
+      min: 0
+      max: 1
+    - id: prompt
+      label: Prompt
+      description: Describe the video you want to generate using the <S> and <E> tags
+        for start and end of the text.
+      placeholder: A man in the video grumbles angrily and says <S>I love open source.
+        I can create anything I want.<E> in a deep low voice.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: jitter, bad hands, blur, distortion
+    - id: audio_negative_prompt
+      label: Audio Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: robotic, muffled, echo, distorted
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: robotic, muffled, echo, distorted
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output video
+      panel: size
+      type: select
+      default: 960
+      options:
+      - name: Full HD
+        value: 960
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output video
+      panel: size
+      type: select
+      default: '1:1'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 960
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 960
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: video_guidance_scale
+      label: Video Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: audio_guidance_scale
+      label: Audio Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 3.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: shift
+      label: Scheduler Shift
+      description: Shift for the scheduler
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: easy_cache_thresh
+      label: Easy Cache Threshold
+      description: Threshold for the easy cache
+      type: number+slider
+      value_type: float
+      panel: easy_cache
+      required: false
+      default: 0.05
+      min: 0.0
+      max: 1.0
+      step: 0.001
+    - id: easy_cache_ret_steps
+      label: Easy Cache Return Steps
+      description: Number of steps to return for the easy cache
+      type: number+slider
+      value_type: integer
+      panel: easy_cache
+      required: false
+      default: 10
+      min: 1
+      max: 100
+      step: 1
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false

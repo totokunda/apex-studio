@@ -77,14 +77,14 @@ spec:
     base: hunyuanvideo15.base
     config_path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v/transformer/config.json
     model_path:
-    - path: tencent/HunyuanVideo-1.5/transformer/720p_t2v
+    - path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v/transformer
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 33306830724
       resource_requirements:
         min_vram_gb: 33
         recommended_vram_gb: 44
-      file_size: 33306633160
     - path: tencent/HunyuanVideo-1.5/transformer/480p_t2v
       variant: DEFAULT_480P
       precision: fp16

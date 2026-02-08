@@ -318,12 +318,12 @@ class MMAudioVAEConverter(VAEConverter):
         if len(keys) == 1 and keys[0] == "generator":
             generator_state = state_dict["generator"]
             for key in list(generator_state.keys()):
-                update_state_dict_(generator_state, key, f"tod.vocoder.vocoder.{key}")
+                update_state_dict_(generator_state, key, f"tod.vocoder.{key}")
         elif "data_mean" in keys:
             decoder_state = state_dict.copy()
             for key in list(decoder_state.keys()):
                 update_state_dict_(decoder_state, key, f"tod.vae.{key}")
-
+        
         state_dict.clear()
         if generator_state is not None:
             state_dict.update(generator_state)

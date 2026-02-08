@@ -47,6 +47,9 @@ class LTX2TI2VEngine(LTX2Shared):
         height = round(height / (self.vae_spatial_compression_ratio * 2) * (self.vae_spatial_compression_ratio * 2))
         width = round(width / (self.vae_spatial_compression_ratio * 2) * (self.vae_spatial_compression_ratio * 2))
         
+        height = height // 128 * 128
+        width = width // 128 * 128
+        
         num_frames = self._parse_num_frames(duration, fps)
 
         tiling_config = _build_tiling_config(tile_size=tile_size, fps=fps)
@@ -86,7 +89,7 @@ class LTX2TI2VEngine(LTX2Shared):
             
         
         text_encoder_results = self._encode_text([prompt], offload=offload)
-        context_p = text_encoder_results
+        context_p = text_encoder_results[0]
         v_context_p, a_context_p, _ = context_p
 
 
@@ -240,7 +243,7 @@ class LTX2TI2VEngine(LTX2Shared):
 
         decoded_video = decode_video(
             video_state.latent, self.video_vae.decoder, tiling_config, generator
-        )
+        ).cpu()
         
         
         if offload:
@@ -255,7 +258,7 @@ class LTX2TI2VEngine(LTX2Shared):
 
         decoded_audio = decode_audio(
             audio_state.latent, self.audio_vae.decoder, vocoder
-        )
+        ).cpu()
         
         if offload:
             self._offload("audio_vae")

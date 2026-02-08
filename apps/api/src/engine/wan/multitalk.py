@@ -656,7 +656,7 @@ class WanMultitalkEngine(WanShared):
                 break
 
             # update next condition frames
-            is_first_clip = False
+            
             cur_motion_frames_num = motion_frames
             cond_frame = (
                 videos[:, :, -cur_motion_frames_num:].to(torch.float32).to(self.device)
@@ -681,6 +681,9 @@ class WanMultitalkEngine(WanShared):
             audio_start_idx += num_frames - cur_motion_frames_num
             audio_end_idx = audio_start_idx + clip_length
             miss_lengths = []
+            
+            if audio_end_idx >= min(max_num_frames, len(full_audio_embs[0])) and is_first_clip:
+               break
 
             if audio_end_idx >= min(max_num_frames, len(full_audio_embs[0])):
                 arrive_last_frame = True
@@ -702,6 +705,8 @@ class WanMultitalkEngine(WanShared):
                         miss_lengths.append(miss_length)
                     else:
                         miss_lengths.append(0)
+            
+            is_first_clip = False
 
             if max_num_frames <= num_frames:
                 break

@@ -1110,6 +1110,20 @@ class WanLynxHelper(BaseHelper):
                     ip_sd,
                     default_dequant_dtype=dtype,
                 )
+
+                # GGML patching only handles .weight/.bias keys.  Parameters
+                # like `registers` are raw nn.Parameters whose quantised
+                # physical storage shape differs from the logical shape (e.g.
+                # Q8_0 packs 5120 elements into 5440 bytes).  Dequantize them
+                # before load_state_dict sees the shape mismatch.
+                from src.quantize.dequant import is_quantized, dequantize_tensor
+
+                for k in list(ip_sd.keys()):
+                    if k.endswith(".registers") or k == "registers":
+                        v = ip_sd[k]
+                        if is_quantized(v):
+                            ip_sd[k] = dequantize_tensor(v, dtype=dtype)
+
                 ip_layers.load_state_dict(ip_sd, strict=False, assign=True)
             else:
                 patched_for_fpscaled = False

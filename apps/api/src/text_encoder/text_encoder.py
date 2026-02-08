@@ -10,6 +10,7 @@ import os
 from src.mixins.to_mixin import ToMixin
 from src.mixins.cache_mixin import CacheMixin, sanitize_path_for_filename
 from src.utils.module import find_class_recursive
+from src.config_registry import resolve_config_path as _resolve_config_path
 import transformers
 import inspect
 
@@ -39,6 +40,7 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
             self.base = self.base.replace("transformer.", "")
         self.model_path = config.get("model_path")
         self.config_path = config.get("config_path", None)
+        self.config_id = config.get("config_id", None)
         self.tokenizer_path = config.get("tokenizer_path", None)
         self.model_config = config.get("config", {})
         self.config = config
@@ -49,13 +51,17 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         self.cache_file = cache_file
         self.device = device
         self.max_cache_size = max_cache_size
-        # download config path if it is there
-        if self.config_path:
+        # Resolve config: prefer config_id (local registry), then config_path
+        if self.config_id and not self.config_path:
+            try:
+                self.config_path = _resolve_config_path(self.config_id)
+            except FileNotFoundError:
+                pass
+        if self.config_path and not os.path.exists(self.config_path):
             self.config_path = self._download(
                 self.config_path, get_components_path()
             )
-            
-
+     
         if self.enable_cache and self.cache_file is None:
             self.cache_file = os.path.join(
                 get_cache_path(),
@@ -88,16 +94,19 @@ class TextEncoder(torch.nn.Module, LoaderMixin, CacheMixin, ToMixin):
         override_kwargs: Dict[str, Any] = None,
         to_device: bool = True,
     ):
+        component = {
+            "config": self.model_config,
+            "config_path": self.config_path,
+            "model_path": self.model_path,
+            "base": self.base,
+            "type": "text_encoder",
+            "gguf_kwargs": self.config.get("gguf_kwargs", {}),
+            "extra_model_paths": self.config.get("extra_model_paths", []),
+        }
+        if self.config_id:
+            component["config_id"] = self.config_id
         input_kwargs = dict(
-            component={
-                "config": self.model_config,
-                "config_path": self.config_path,
-                "model_path": self.model_path,
-                "base": self.base,
-                "type": "text_encoder",
-                "gguf_kwargs": self.config.get("gguf_kwargs", {}),
-                "extra_model_paths": self.config.get("extra_model_paths", []),
-            },
+            component=component,
             load_dtype=self.dtype,
             module_name=self.module_name,
             no_weights=no_weights,

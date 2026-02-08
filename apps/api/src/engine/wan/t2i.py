@@ -40,14 +40,7 @@ class WanT2IEngine(WanShared):
         **kwargs,
     ):
 
-        if guidance_scale is not None and isinstance(guidance_scale, list):
-            use_cfg_guidance = (
-                negative_prompt is not None
-                and guidance_scale[0] > 1.0
-                and guidance_scale[1] > 1.0
-            )
-        else:
-            use_cfg_guidance = negative_prompt is not None and guidance_scale > 1.0
+        
 
         safe_emit_progress(progress_callback, 0.0, "Starting t2i pipeline")
 
@@ -59,6 +52,15 @@ class WanT2IEngine(WanShared):
             safe_emit_progress(
                 progress_callback, 0.01, "Using high/low-noise guidance scales"
             )
+            
+        if guidance_scale is not None and isinstance(guidance_scale, list):
+            use_cfg_guidance = (
+                negative_prompt is not None
+                and guidance_scale[0] > 1.0
+                and guidance_scale[1] > 1.0
+            )
+        else:
+            use_cfg_guidance = negative_prompt is not None and guidance_scale > 1.0
 
         if not self.text_encoder:
             safe_emit_progress(progress_callback, 0.02, "Loading text encoder")
@@ -99,6 +101,7 @@ class WanT2IEngine(WanShared):
                 else "Skipped negative prompt"
             ),
         )
+        
 
         if offload:
             safe_emit_progress(progress_callback, 0.15, "Offloading text encoder")

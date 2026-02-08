@@ -13,6 +13,7 @@ import torch.nn as nn
 from src.helpers.base import BaseHelper
 from transformers import CLIPImageProcessor
 from src.utils.module import find_class_recursive
+from src.config_registry import resolve_config_dir, resolve_config_path
 import importlib
 
 
@@ -22,9 +23,11 @@ class CLIP(BaseHelper):
     def __init__(
         self,
         model_path: str,
-        preprocessor_path: str,
+        preprocessor_path: str = None,
+        preprocessor_config_id: str = None,
         model_config_path: str = None,
         model_config: Dict[str, Any] | None = None,
+        config_id: str = None,
         save_path: str = DEFAULT_COMPONENTS_PATH,
         config_save_path: str = DEFAULT_CONFIG_SAVE_PATH,
         processor_class: str = "AutoProcessor",
@@ -42,18 +45,31 @@ class CLIP(BaseHelper):
             importlib.import_module("transformers"), processor_class
         )
 
-        preprocessor_path = self._download(preprocessor_path, get_components_path())
+        # Resolve preprocessor path: prefer local registry, fallback to download
+        if preprocessor_config_id:
+            try:
+                preprocessor_path = resolve_config_dir(preprocessor_config_id)
+            except FileNotFoundError:
+                pass
+        if preprocessor_path and not preprocessor_config_id:
+            preprocessor_path = self._download(preprocessor_path, get_components_path())
 
         self.processor = processor_class.from_pretrained(preprocessor_path)
 
+        # Build model component dict, preferring config_id over config_path
+        model_component = {
+            "type": "clip",
+            "base": model_class,
+            "model_path": model_path,
+            "config": model_config,
+        }
+        if config_id:
+            model_component["config_id"] = config_id
+        elif model_config_path:
+            model_component["config_path"] = model_config_path
+
         self.model = self._load_model(
-            {
-                "type": "clip",
-                "base": model_class,
-                "model_path": model_path,
-                "config_path": model_config_path,
-                "config": model_config,
-            },
+            model_component,
             module_name="transformers",
         )
 

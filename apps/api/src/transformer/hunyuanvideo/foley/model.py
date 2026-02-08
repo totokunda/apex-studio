@@ -200,16 +200,16 @@ class TwoStreamCABlock(nn.Module):
         audio_modulated = modulate(audio_modulated, shift=audio_mod1_shift, scale=audio_mod1_scale)
         audio_qkv = self.audio_self_attn_qkv(audio_modulated)
         audio_q, audio_k, audio_v = rearrange(audio_qkv, "B L (K H D) -> K B L H D", K=3, H=self.num_heads)
-        audio_q = self.audio_self_q_norm(audio_q).to(audio_v)
-        audio_k = self.audio_self_k_norm(audio_k).to(audio_v)
+        audio_q = self.audio_self_q_norm(audio_q).to(dtype=audio_v.dtype, device=audio_v.device)
+        audio_k = self.audio_self_k_norm(audio_k).to(dtype=audio_v.dtype, device=audio_v.device)
         
         # Prepare visual cond for attention
         v_cond_modulated = self.v_cond_norm1(v_cond)
         v_cond_modulated = modulate(v_cond_modulated, shift=v_cond_mod1_shift, scale=v_cond_mod1_scale)
         v_cond_qkv = self.v_cond_attn_qkv(v_cond_modulated)
         v_cond_q, v_cond_k, v_cond_v = rearrange(v_cond_qkv, "B L (K H D) -> K B L H D", K=3, H=self.num_heads)
-        v_cond_q = self.v_cond_attn_q_norm(v_cond_q).to(v_cond_v)
-        v_cond_k = self.v_cond_attn_k_norm(v_cond_k).to(v_cond_v)
+        v_cond_q = self.v_cond_attn_q_norm(v_cond_q).to(dtype=v_cond_v.dtype, device=v_cond_v.device)
+        v_cond_k = self.v_cond_attn_k_norm(v_cond_k).to(dtype=v_cond_v.dtype, device=v_cond_v.device)
         
         # Apply RoPE if needed for audio and visual
         if freqs_cis is not None:
@@ -271,7 +271,7 @@ class TwoStreamCABlock(nn.Module):
         # Prepare text key/value
         text_kv = self.text_cross_kv(cond)
         text_k, text_v = rearrange(text_kv, "B L (K H D) -> K B L H D", K=2, H=self.num_heads)
-        text_k = self.text_cross_k_norm(text_k).to(text_v)
+        text_k = self.text_cross_k_norm(text_k).to(dtype=text_v.dtype, device=text_v.device)
         
         # Apply RoPE to (v_cond, audio) query and text key if needed
         head_dim = self.hidden_size // self.num_heads
