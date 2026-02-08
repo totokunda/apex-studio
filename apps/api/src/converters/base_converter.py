@@ -343,7 +343,15 @@ class BaseConverter:
             return True
 
         keys = list(state_dict.keys())
-
+        # simple test of if we have no missing keys
+        if model_keys is not None:
+            missing_keys = []
+            for key in model_keys:
+                if key not in state_dict:
+                    missing_keys.append(key)
+            
+            if not missing_keys:
+                return True
         # Strongest evidence: if the checkpoint keys already match the instantiated model's
         # keys (modulo common wrapper prefixes), then we should treat this as converted.
         # This helps especially for converters without strong target markers, and avoids

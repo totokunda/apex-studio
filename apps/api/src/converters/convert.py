@@ -38,6 +38,12 @@ from src.converters.transformer_converters import (
     FlashVSRTransformerConverter,
     ZImageTransformerConverter,
     LTX2TransformerConverter,
+    LTX22TransformerConverter,
+)
+
+from src.converters.helper_converters import (
+    WhisperConverter,
+    Wav2Vec2ModelMultitalkConverter,
 )
 
 from src.converters.utils import (
@@ -115,8 +121,10 @@ def get_transformer_converter(model_base: str):
         return FlashVSRTransformerConverter()
     elif model_base == "zimage.base" or model_base == "zimage.control":
         return ZImageTransformerConverter()
-    elif model_base == "ltx2.base" or model_base == "ltx2.base2":
+    elif model_base == "ltx2.base":
         return LTX2TransformerConverter()
+    elif model_base == "ltx2.base2":
+        return LTX22TransformerConverter()
     elif model_base == "chroma.base":
         return Chroma1HDTransformerConverter()
     else:
@@ -201,6 +209,13 @@ def get_text_encoder_converter(text_encoder_type: str):
     else:
         return NoOpConverter()
 
+def get_helper_converter(model_base: str):
+    if "WhisperModel" == model_base:
+        return WhisperConverter()
+    elif "Wav2Vec2ModelMultitalk" == model_base:
+        return Wav2Vec2ModelMultitalkConverter()
+    else:
+        return NoOpConverter()
 
 def load_safetensors(dir: pathlib.Path):
     """Load a sharded safetensors file."""

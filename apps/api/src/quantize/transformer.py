@@ -85,6 +85,7 @@ COMMON_PRESERVE_SUBSTRINGS: list[str] = [
     "timestep",
     # Diffusion-specific modulation tables.
     "scale_shift_table",
+    "modulation",
 ]
 
 FP32_WEIGHTS_PRESERVE_DTYPE = {
@@ -96,6 +97,7 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
         "text_embedder",
         "image_embedder",
         "time_embedder",
+        "modulation",
         "norm1",
         "norm2",
         "norm3",
@@ -105,6 +107,12 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
         "norm_added_k",
         "pos_embed",
         "proj_out",
+        "face_adapter",
+        "motion_encoder",
+        "face_encoder",
+        "condition_embedder",
+        "audio_injector",
+        "trainable_condition_mask",
     ],
     # Cosmos transformers
     ModelArchitecture.COSMOS: [
@@ -174,7 +182,14 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
     ],
     # HunyuanVideo 1.5 transformers (hunyuanvideo15.base)
     ModelArchitecture.HUNYUANVIDEO15: [
-        *COMMON_PRESERVE_SUBSTRINGS,
+        "pos_embed",
+        "rope",
+        # Time embeddings / timestep projections.
+        "time_embed",
+        "time_proj",
+        "timestep",
+        # Diffusion-specific modulation tables.
+        "scale_shift_table",
         "x_embedder",
         "image_embedder",
         "context_embedder",
@@ -184,6 +199,8 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
         "proj_in",
         "rope",
         "proj_out",
+        "norm_out",
+        "byt5_in"
     ],
     # HunyuanImage transformers (hunyuanimage.base)
     ModelArchitecture.HUNYUANIMAGE: [
@@ -243,6 +260,7 @@ FP32_WEIGHTS_PRESERVE_DTYPE = {
         "adaln_single",
         "caption_projection",
         "proj_out",
+        "proj_in",
         # Audio/video multi-modal stack
         "audio_patchify_proj",
         "audio_adaln_single",
@@ -583,6 +601,7 @@ def _prepare_and_quantize_tensor(args):
 
     data = data.numpy()
     n_dims = len(data.shape)
+    
     if old_dtype == torch.bfloat16:
         data_qtype = gguf.GGMLQuantizationType.BF16
     elif old_dtype == torch.float32:
@@ -629,6 +648,31 @@ def _prepare_and_quantize_tensor(args):
 
     try:
         data = quantize(data, data_qtype)
+        # `src.quantize.quants.quantize()` returns the input tensor unchanged when
+        # the requested quantization cannot be applied (e.g. block-size mismatch).
+        # If that happens but we still record `raw_dtype` as a block-quant type,
+        # we will write an invalid GGUF that gguf readers cannot open.
+        #
+        # Ensure block-quantized tensors are actually stored as packed bytes.
+        if (
+            data_qtype
+            not in {
+                gguf.GGMLQuantizationType.F32,
+                gguf.GGMLQuantizationType.F16,
+                gguf.GGMLQuantizationType.BF16,
+            }
+            and getattr(data, "dtype", None) != np.uint8
+        ):
+            logger.warning(
+                f"Quantization {getattr(data_qtype, 'name', data_qtype)} was skipped for "
+                f"{key} (shape={getattr(data, 'shape', None)}); falling back to F16"
+            )
+            data_qtype = (
+                gguf.GGMLQuantizationType.BF16
+                if old_dtype == torch.bfloat16
+                else gguf.GGMLQuantizationType.F16
+            )
+            data = quantize(data, data_qtype)
     except (AttributeError, gguf.QuantError, ValueError) as e:
         logger.warning(f"Falling back to F16: {e}")
         data_qtype = (

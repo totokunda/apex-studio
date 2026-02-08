@@ -116,7 +116,14 @@ class BaseQuantizer(ABC, DownloadMixin):
         cmd = [resolved, fp16_quant_path, output_path, quantization_str]
         logger.info(f"Running: {' '.join(cmd)}")
         try:
-            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            proc = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
             if proc.stdout:
                 logger.debug(proc.stdout)
             if proc.stderr:

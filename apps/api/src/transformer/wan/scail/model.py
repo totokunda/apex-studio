@@ -1460,7 +1460,7 @@ class SCAILModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMix
 
         # unpatchify
         x = self.unpatchify(x, grid_sizes, offset=ref_length)
-        return torch.stack([u.float() for u in x])
+        return (torch.stack([u.float() for u in x]),)
 
     def unpatchify(self, x, grid_sizes, offset: int = 0):
         r"""

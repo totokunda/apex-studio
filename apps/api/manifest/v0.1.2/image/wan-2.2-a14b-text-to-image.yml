@@ -36,34 +36,21 @@ spec:
   - metal_flash
   - efficient_dot_product_attention
   - xformers
-  loras:
-  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors
-    scale: 1.0
-    verified: true
-    name: high_noise_lightning_lora
-    label: High Noise Lightning LoRA
-    component: high_noise_transformer
-  - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors
-    scale: 1.0
-    verified: true
-    name: low_noise_lightning_lora
-    label: Low Noise Lightning LoRA
-    component: low_noise_transformer
   components:
   - type: scheduler
     label: Scheduler
-    default: UniPCMultistepSchedulerBH2
+    default: Beta57Scheduler
     scheduler_manifest: schedulers/flow_matching.yml
     scheduler_config_defaults:
       num_train_timesteps: 1000
-      shift: 3.0
+      shift: 1.0
       sigma_max: 1.0
-      sigma_min: 0.002994011976047904
+      sigma_min: 0
   - type: vae
     label: WAN VAE
     name: vae
     base: wan
-    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
+    config_id: Wan2.2-I2V/vae
     model_path:
     - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
@@ -73,7 +60,7 @@ spec:
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
-    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    config_id: Wan2.1-T2V/text_encoder
     model_path:
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -95,25 +82,25 @@ spec:
     label: High Noise Transformer
     name: high_noise_transformer
     base: wan.base
-    config_path: totoku/apex-models/Wan2.2-T2V/high_noise_transformer/config.json
+    config_id: Wan2.2-T2V-A14B/high_noise_transformer
     model_path:
-    - path: totoku/apex-models/Wan2.2-T2V/high_noise_transformer/transformer-bf16.safetensors
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
-    - path: totoku/apex-models/Wan2.2-T2V/high_noise_transformer/transformer-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/Wan2.2-T2V/high_noise_transformer/transformer-q8_0.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: totoku/apex-models/Wan2.2-T2V/high_noise_transformer/transformer-q6_k.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-    - path: totoku/apex-models/Wan2.2-T2V/high_noise_transformer/transformer-q4_k_m.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/high_noise_transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
@@ -121,25 +108,25 @@ spec:
     label: Low Noise Transformer
     name: low_noise_transformer
     base: wan.base
-    config_path: totoku/apex-models/Wan2.2-T2V/low_noise_transformer/config.json
+    config_id: Wan2.2-T2V-A14B/low_noise_transformer
     model_path:
-    - path: totoku/apex-models/Wan2.2-T2V/low_noise_transformer/transformer-bf16.safetensors
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
-    - path: totoku/apex-models/Wan2.2-T2V/low_noise_transformer/transformer-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/Wan2.2-T2V/low_noise_transformer/transformer-q8_0.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: totoku/apex-models/Wan2.2-T2V/low_noise_transformer/transformer-q6_k.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-    - path: totoku/apex-models/Wan2.2-T2V/low_noise_transformer/transformer-q4_k_m.gguf
+    - path: totoku/apex-models/Wan2.2-T2V-A14B/low_noise_transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf

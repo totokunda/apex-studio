@@ -175,7 +175,7 @@ class TransformerArgsPreprocessor:
         latent_dtype = latent.dtype
         weight = getattr(self.patchify_proj, "weight", None)
         weight_dtype = getattr(weight, "dtype", None)
-
+        
         x = self.patchify_proj(latent)
         timestep, embedded_timestep = self._prepare_timestep(
             modality.timesteps,

@@ -39,7 +39,7 @@ spec:
     name: seedvr2/vae
     label: SeedVR2 VAE
     base: seedvr
-    config_path: totoku/apex-models/SeedVR2-7B/vae/config.json
+    config_id: SeedVR2-7B/vae
     model_path:
     - path: totoku/apex-models/SeedVR2-7B/vae/vae-bf16.safetensors
       variant: default
@@ -48,7 +48,7 @@ spec:
   - type: transformer
     base: seedvr.base
     label: SeedVR2 Transformer
-    config_path: totoku/apex-models/SeedVR2-7B/transformer/config.json
+    config_id: SeedVR2-7B/transformer
     model_path:
     - path: totoku/apex-models/SeedVR2-7B/transformer/transformer-bf16.safetensors
       variant: default

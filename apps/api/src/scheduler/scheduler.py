@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from diffusers.configuration_utils import ConfigMixin
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
+from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 
 from src.utils.dtype import supports_double
 
@@ -279,3 +280,86 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
         self, sample: torch.Tensor, timestep: Optional[int] = None
     ) -> torch.Tensor:
         return sample
+    
+    def set_begin_index(self, begin_index: int):
+        self._begin_index = begin_index
+
+    def set_shift(self, shift: float):
+        self._shift = shift
+    
+    def scale_noise(self, sample: torch.Tensor, timestep: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+        """
+        Forward corruption process for flow-matching style schedules.
+
+        This matches the behavior of diffusers' flow-matching schedulers:
+
+            x_t = (1 - sigma_t) * x_0 + sigma_t * eps
+
+        where ``sample`` is the clean sample ``x_0`` and ``noise`` is ``eps``.
+        """
+
+        if not isinstance(sample, torch.Tensor) or not isinstance(noise, torch.Tensor):
+            raise TypeError("`sample` and `noise` must be torch.Tensors")
+
+        # Align devices/dtypes.
+        if noise.device != sample.device:
+            noise = noise.to(sample.device)
+        if noise.dtype != sample.dtype:
+            noise = noise.to(sample.dtype)
+
+        # Ensure `timestep` is a tensor on the correct device.
+        if not isinstance(timestep, torch.Tensor):
+            timestep = torch.tensor(timestep, device=sample.device)
+
+        if timestep.ndim == 2:
+            timestep = timestep.flatten(0, 1)
+
+        batch = sample.shape[0] if sample.ndim > 0 else 1
+        if timestep.ndim == 0:
+            timestep = timestep.expand(batch)
+        elif timestep.numel() == 1 and batch != 1:
+            timestep = timestep.expand(batch)
+
+        if not hasattr(self, "sigmas") or not hasattr(self, "timesteps"):
+            raise AttributeError(
+                f"{type(self).__name__} must define `sigmas` and `timesteps` to use scale_noise()."
+            )
+
+        sigmas = self.sigmas.to(device=sample.device, dtype=sample.dtype)
+
+        # mps does not support float64; also keep comparison dtype consistent.
+        if sample.device.type == "mps" and torch.is_floating_point(timestep):
+            schedule_timesteps = self.timesteps.to(sample.device, dtype=torch.float32)
+            timestep = timestep.to(sample.device, dtype=torch.float32)
+        else:
+            schedule_timesteps = self.timesteps.to(sample.device)
+            timestep = timestep.to(sample.device)
+
+        begin_index = getattr(self, "begin_index", getattr(self, "_begin_index", None))
+        step_index = getattr(self, "step_index", getattr(self, "_step_index", None))
+
+        step_indices = None
+        if begin_index is None:
+            # Prefer a scheduler-defined mapping when available (handles duplicate / non-monotonic timesteps).
+            if hasattr(self, "index_for_timestep") and callable(getattr(self, "index_for_timestep")):
+                step_indices = [
+                    int(self.index_for_timestep(t, schedule_timesteps)) for t in timestep
+                ]
+            else:
+                # Fallback: nearest-match on the current schedule.
+                step_indices = torch.argmin(
+                    (schedule_timesteps.unsqueeze(0) - timestep.unsqueeze(1)).abs(),
+                    dim=1,
+                ).tolist()
+        elif step_index is not None:
+            # scale_noise is called after the first denoising step (e.g. inpainting).
+            step_indices = [int(step_index)] * int(timestep.shape[0])
+        else:
+            # scale_noise is called before the first denoising step (e.g. img2img init).
+            step_indices = [int(begin_index)] * int(timestep.shape[0])
+
+        sigma = sigmas[step_indices].flatten()
+        while sigma.ndim < sample.ndim:
+            sigma = sigma.unsqueeze(-1)
+
+        return sigma * noise + (1.0 - sigma) * sample

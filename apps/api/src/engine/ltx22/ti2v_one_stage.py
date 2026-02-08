@@ -222,7 +222,7 @@ class LTX2TI2VEngine(LTX2Shared):
 
         decoded_video = decode_video(
             video_state.latent, self.video_vae.decoder, tiling_config, generator
-        )
+        ).cpu()
         
         if offload:
             self._offload("video_vae")
@@ -236,7 +236,7 @@ class LTX2TI2VEngine(LTX2Shared):
 
         decoded_audio = decode_audio(
             audio_state.latent, self.audio_vae.decoder, vocoder
-        )
+        ).cpu()
         
         if offload:
             self._offload("audio_vae")

@@ -48,7 +48,7 @@ spec:
   - type: vae
     label: Anima VAE
     base: qwenimage
-    config_path: totoku/apex-models/Qwen-Image/vae/config.json
+    config_id: Qwen-Image/vae
     model_path:
     - path: totoku/apex-models/Qwen-Image/vae/vae-bf16.safetensors
       variant: default
@@ -62,7 +62,7 @@ spec:
     label: Anima Text Encoder
     base: Qwen3ForCausalLM
     name: text_encoder
-    config_path: totoku/apex-models/Anima/text_encoder/config.json
+    config_id: Anima/text_encoder
     model_path:
     - path: totoku/apex-models/Anima/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -75,7 +75,7 @@ spec:
   - type: transformer
     label: Anima Transformer
     base: anima.base
-    config_path: totoku/apex-models/Anima/transformer/config.json
+    config_id: Anima/transformer
     model_path:
     - path: totoku/apex-models/Anima/transformer/transformer-bf16.safetensors
       variant: default
@@ -85,7 +85,7 @@ spec:
     label: Anima LLM Adapter
     base: anima.llm_adapter
     name: anima.llm_adapter
-    config_path: totoku/apex-models/Anima/llm_adapter/config.json
+    config_id: Anima/llm_adapter
     model_path:
     - path: totoku/apex-models/Anima/llm_adapter/diffusion_pytorch_model.safetensors
       variant: default

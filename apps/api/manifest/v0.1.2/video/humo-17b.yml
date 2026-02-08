@@ -57,7 +57,7 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: UniPCMultistepSchedulerBH2
+    default: Beta57Scheduler
     scheduler_manifest: schedulers/flow_matching.yml
     scheduler_config_defaults:
       num_train_timesteps: 1000
@@ -68,7 +68,7 @@ spec:
     label: WAN VAE
     name: vae
     base: wan
-    config_path: totoku/apex-models/Wan2.2-I2V/vae/config.json
+    config_id: Wan2.2-I2V/vae
     model_path:
     - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
@@ -78,7 +78,7 @@ spec:
     label: WAN Text Encoder
     base: UMT5EncoderModel
     offloading_module: encoder
-    config_path: totoku/apex-models/Wan2.1-T2V/text_encoder/config.json
+    config_id: Wan2.1-T2V/text_encoder
     model_path:
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
       variant: default
@@ -99,25 +99,25 @@ spec:
   - type: transformer
     base: wan.humo
     label: HuMo Transformer
-    config_path: totoku/apex-models/HuMo-17B/transformer/config.json
+    config_id: HuMo/transformer
     model_path:
-    - path: totoku/apex-models/HuMo-17B/transformer/transformer-bf16.safetensors
+    - path: totoku/apex-models/HuMo/transformer/transformer-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
-    - path: totoku/apex-models/HuMo-17B/transformer/transformer-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/HuMo/transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/HuMo-17B/transformer/transformer-q8_0.gguf
+    - path: totoku/apex-models/HuMo/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: totoku/apex-models/HuMo-17B/transformer/transformer-q6_k.gguf
+    - path: totoku/apex-models/HuMo/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-    - path: totoku/apex-models/HuMo-17B/transformer/transformer-q4_k_m.gguf
+    - path: totoku/apex-models/HuMo/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf

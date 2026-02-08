@@ -296,7 +296,7 @@ def fetch_and_save_tokenizer_from_config(
         loaded_config=loaded_config,
         config_path=config_path,
     )
-
+    
     def _looks_like_tokenizer_dir(p: Path) -> bool:
         if not p.exists() or not p.is_dir():
             return False
@@ -319,6 +319,9 @@ def fetch_and_save_tokenizer_from_config(
     local_tokenizer_kwargs.pop("subfolder", None)
     # Be explicit: when we think we have local files, do not touch the network.
     local_tokenizer_kwargs.setdefault("local_files_only", True)
+    
+    
+    
 
     def _load_tokenizer_with_fallbacks(_tokenizer_cls:AutoTokenizer, name_or_path: str):
         # If caller already supplied auth kwargs, respect them.
@@ -352,15 +355,6 @@ def fetch_and_save_tokenizer_from_config(
     # Determine the source identifier for loading.
     # If name/path is missing, prefer local tokenizer next to weights over ambiguous ""/cwd.
     model_dir = _model_dir_from_path(model_path, config_path=config_path)
-
-    # Prefer an on-disk tokenizer saved next to the model (no hub calls).
-    for candidate in (unique_save_dir, legacy_save_dir):
-        if _looks_like_tokenizer_dir(candidate):
-            try:
-                return _load_local_tokenizer(tokenizer_class, str(candidate))
-            except Exception:
-                traceback.print_exc()
-                # Fall through to hub/local-dir fallback below.
 
     load_name_or_path = str(_name_or_path) if _name_or_path is not None else str(model_dir)
     try:

@@ -23,7 +23,7 @@ class FlashVSRTransformerConverter(TransformerConverter):
         }
 
 
-class LTX2TransformerConverter(TransformerConverter):
+class LTX22TransformerConverter(TransformerConverter):
     def __init__(self):
         super().__init__()
         self.rename_dict = {
@@ -37,6 +37,25 @@ class LTX2TransformerConverter(TransformerConverter):
             "av_cross_attn_audio_v2a_gate": "av_ca_v2a_gate_adaln_single",
             "audio_a2v_cross_attn_scale_shift_table": "scale_shift_table_a2v_ca_audio",
             "video_a2v_cross_attn_scale_shift_table": "scale_shift_table_a2v_ca_video",
+            ".k_norm.": ".norm_k.",
+            ".q_norm.": ".norm_q.",
+        }
+
+
+class LTX2TransformerConverter(TransformerConverter):
+    def __init__(self):
+        super().__init__()
+        self.rename_dict = {
+            "patchify_proj": "proj_in",
+            "audio_patchify_proj": "audio_proj_in",
+            "adaln_single": "time_embed",
+            "audio_adaln_single": "audio_time_embed",
+            "av_ca_video_scale_shift_adaln_single": "av_cross_attn_video_scale_shift",
+            "av_ca_audio_scale_shift_adaln_single": "av_cross_attn_audio_scale_shift",
+            "av_ca_a2v_gate_adaln_single": "av_cross_attn_video_a2v_gate",
+            "av_ca_v2a_gate_adaln_single": "av_cross_attn_audio_v2a_gate",
+            "scale_shift_table_a2v_ca_audio": "audio_a2v_cross_attn_scale_shift_table",
+            "scale_shift_table_a2v_ca_video": "video_a2v_cross_attn_scale_shift_table",
             ".k_norm.": ".norm_k.",
             ".q_norm.": ".norm_q.",
         }
@@ -310,7 +329,7 @@ class WanAnimateTransformerConverter(TransformerConverter):
         }
 
     def convert(self, state_dict: Dict[str, Any], model_keys: List[str] = None):
-        if model_keys is not None:
+        if model_keys is not None:  
             if self._already_converted(state_dict, model_keys):
                 return state_dict
         self._sort_rename_dict()
@@ -995,6 +1014,20 @@ class HunyuanVideo15TransformerConverter(TransformerConverter):
             return
 
         weight = state_dict.pop(key)
+        
+        if ".scale_weight" in key:
+            if "self_attn_qkv" in key:
+                # add as scale_weight to q, k, and v
+                state_dict[key.replace("self_attn_qkv", "attn.to_q")] = weight
+                state_dict[key.replace("self_attn_qkv", "attn.to_k")] = weight
+                state_dict[key.replace("self_attn_qkv", "attn.to_v")] = weight
+            elif "self_attn.qkv" in key:
+                # add as scale_weight to q, k, and v
+                state_dict[key.replace("self_attn.qkv", "attn.to_q")] = weight
+                state_dict[key.replace("self_attn.qkv", "attn.to_k")] = weight
+                state_dict[key.replace("self_attn.qkv", "attn.to_v")] = weight
+            return
+        
         to_q, to_k, to_v = ggml_chunk(weight, 3, dim=0)
         if "self_attn_qkv" in key:
             state_dict[key.replace("self_attn_qkv", "attn.to_q")] = to_q

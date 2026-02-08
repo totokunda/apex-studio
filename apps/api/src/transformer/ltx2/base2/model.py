@@ -212,6 +212,7 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
             self.audio_cross_attention_dim = audio_cross_attention_dim
             self._init_audio_video(num_scale_shift_values=4)
 
+        self._cross_pe_max_pos = cross_pe_max_pos
         self._init_preprocessors(cross_pe_max_pos)
         # Initialize transformer blocks
         self._init_transformer_blocks(
@@ -418,6 +419,19 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         )
     
 
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        """Load state dict and rebuild preprocessors to refresh module references.
+
+        FP8/FPScaled patching may replace child modules (e.g. nn.Linear →
+        FPScaledLinear) in the model's _modules dict before this method is
+        called.  The preprocessors store direct Python references to those
+        modules, so they become stale after replacement.  Rebuilding them
+        here ensures they always point to the current (live) modules.
+        """
+        result = super().load_state_dict(state_dict, strict=strict, assign=assign)
+        self._init_preprocessors(getattr(self, "_cross_pe_max_pos", None))
+        return result
+
     def set_gradient_checkpointing(self, enable: bool) -> None:
         """Enable or disable gradient checkpointing for transformer blocks.
         Gradient checkpointing trades compute for memory by recomputing activations
@@ -471,10 +485,18 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         scale_shift_values = (
             scale_shift_table[None, None].to(device=x.device, dtype=x.dtype) + embedded_timestep[:, :, None]
         )
+
         shift, scale = scale_shift_values[:, :, 0], scale_shift_values[:, :, 1]
 
         x = norm_out(x)
-        x = x * (1 + scale) + shift
+        if scale.shape[1] == x.shape[1]:
+            x = x * (1 + scale) + shift
+        else:
+            # Handle compressed timesteps (per-frame instead of per-token)
+            frames = scale.shape[1]
+            x = x.reshape(x.shape[0], frames, -1, x.shape[-1])
+            x = x * (1 + scale.unsqueeze(2)) + shift.unsqueeze(2)
+            x = x.reshape(x.shape[0], -1, x.shape[-1])
         x = proj_out(x)
         return x
     
@@ -552,9 +574,7 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
             raise ValueError("Audio is not enabled for this model")
         
         video_args = self.video_args_preprocessor.prepare(video) if video is not None else None
-        empty_cache()
         audio_args = self.audio_args_preprocessor.prepare(audio) if audio is not None else None
-        empty_cache()
 
         video_out, audio_out = self._process_transformer_blocks(
             video=video_args,

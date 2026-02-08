@@ -21,6 +21,7 @@ import shutil
 import tempfile
 import os
 import wave
+
 DEFAULT_IMAGE_CRF = 33
 
 
@@ -32,126 +33,17 @@ def save_video_ovi(
     fps: int = 24,
     job_dir: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """
-    Combine a sequence of video frames with an optional audio track and save as an MP4.
-    Args:
-        output_path (str): Path to the output MP4 file.
-        video_numpy (np.ndarray): Numpy array of frames. Shape (C, F, H, W).
-                                  Values can be in range [-1, 1] or [0, 255].
-        audio_numpy (Optional[np.ndarray]): 1D or 2D numpy array of audio samples, range [-1, 1].
-        sample_rate (int): Sample rate of the audio in Hz. Defaults to 16000.
-        resample_audio_rate (int): The *input* audio sample rate in Hz. If it differs from
-                                   `sample_rate`, audio is resampled to `sample_rate` before
-                                   muxing. Defaults to 24000.
-        fps (int): Frames per second for the video. Defaults to 24.
-    Returns:
-        str: Path to the saved MP4 file.
-    """
+    # Backwards-compatible shim: implementation moved to `src.api.savers.audio_video`.
+    from src.api.savers.audio_video import save_video_ovi as _save  # noqa: PLC0415
 
-    from moviepy.editor import ImageSequenceClip, AudioFileClip
-    import soundfile as wavfile
-    import tempfile
-    import math
-    import os
-
-    def _audio_to_soundfile_frames(audio: np.ndarray) -> np.ndarray:
-        """
-        Normalize audio array to the shape expected by soundfile: (n_frames,) or (n_frames, n_channels).
-        The engine may produce (channels, n_frames); we transpose that to (n_frames, channels).
-        """
-        x = np.asarray(audio)
-        if x.ndim == 1:
-            return np.clip(x.astype(np.float32, copy=False), -1.0, 1.0)
-        if x.ndim != 2:
-            raise ValueError(f"audio_numpy must be 1D or 2D, got shape={x.shape}")
-
-        # Heuristic: treat the smaller dimension as channels when ambiguous.
-        if x.shape[0] <= x.shape[1]:
-            x = x.T  # (n_frames, n_channels)
-        return np.clip(x.astype(np.float32, copy=False), -1.0, 1.0)
-
-    # Validate inputs
-    assert isinstance(video_numpy, np.ndarray), "video_numpy must be a numpy array"
-    assert video_numpy.ndim == 4, "video_numpy must have shape (C, F, H, W)"
-    assert video_numpy.shape[0] in {
-        1,
-        3,
-    }, "video_numpy must have 1 or 3 channels"
-    if audio_numpy is not None:
-        assert isinstance(audio_numpy, np.ndarray), "audio_numpy must be a numpy array"
-        assert (
-            np.abs(audio_numpy).max() <= 1.0
-        ), "audio_numpy values must be in range [-1, 1]"
-        # If the provided audio is at a different rate than the muxing rate,
-        # resample it before writing the temporary WAV.
-
-    # Reorder dimensions: (C, F, H, W) → (F, H, W, C)
-    video_numpy = video_numpy.transpose(1, 2, 3, 0)
-    # Normalize frames if values are in [-1, 1]
-    if video_numpy.max() <= 1.0:
-        video_numpy = np.clip(video_numpy, -1, 1)
-        video_numpy = ((video_numpy + 1) / 2 * 255).astype(np.uint8)
-    else:
-        video_numpy = video_numpy.astype(np.uint8)
-    # Convert numpy array to a list of frames
-    frames = list(video_numpy)
-    # Create video clip
-    clip = ImageSequenceClip(frames, fps=fps)
-    audio_path: Optional[str] = None
-    audio_clip = None
-    # Add audio if provided
-    if audio_numpy is not None:
-        try:
-            # Create a path, close it, then let soundfile write it (avoid writing to an already-open handle).
-            with tempfile.NamedTemporaryFile(
-                suffix=".wav", delete=False
-            ) as temp_audio_file:
-                audio_path = temp_audio_file.name
-
-            audio_frames = _audio_to_soundfile_frames(audio_numpy)
-            wavfile.write(
-                audio_path,
-                audio_frames,
-                sample_rate,
-                format="WAV",
-                subtype="PCM_16",
-            )
-
-            audio_clip = AudioFileClip(audio_path)
-            final_clip = clip.set_audio(audio_clip)
-        finally:
-            # MoviePy will hold the file open until the clip is closed; we clean up at the end.
-            # (See below where we close clips.)
-            pass
-    else:
-        final_clip = clip
-    # Write final video to disk
-    if job_dir is not None:
-        output_path = str(job_dir / f"{filename_prefix}.mp4")
-    else:
-        output_path = f"{filename_prefix}.mp4"
-    final_clip.write_videofile(
-        output_path,
-        codec="libx264",
-        audio_codec="aac",
+    return _save(
+        video_numpy=video_numpy,
+        audio_numpy=audio_numpy,
+        filename_prefix=filename_prefix,
+        sample_rate=sample_rate,
         fps=fps,
-        verbose=False,
-        logger=None,
+        job_dir=job_dir,
     )
-    # Ensure resources are released (especially the temp audio file on some platforms).
-    try:
-        final_clip.close()
-    finally:
-        try:
-            if audio_clip is not None:
-                audio_clip.close()
-        finally:
-            if audio_numpy is not None and audio_path is not None:
-                try:
-                    os.remove(audio_path)
-                except OSError:
-                    pass
-    return output_path, "video"
 
 
 def resize_aspect_ratio_preserving(image: torch.Tensor, long_side: int) -> torch.Tensor:
@@ -354,67 +246,19 @@ def save_video_ltx2(
     fps: int = 25,
     video_chunks_number: int = 1,
     job_dir: Optional[str] = None,
-) -> None:
-    if job_dir is not None:
-        output_path = str(job_dir / f"{filename_prefix}.mp4")
-    else:
-        output_path = f"{filename_prefix}.mp4"
-    if isinstance(video, torch.Tensor):
-        video = iter([video])
+) -> Tuple[str, str]:
+    # Backwards-compatible shim: implementation moved to `src.api.savers.audio_video`.
+    from src.api.savers.audio_video import save_video_ltx2 as _save  # noqa: PLC0415
 
-    first_chunk = next(video)
-
-    _, height, width, _ = first_chunk.shape
-
-    container = av.open(output_path, mode="w")
-    # Use zerolatency to avoid B-frame reordering that can produce invalid PTS/DTS combos for MP4 muxing.
-    # (Also makes timestamps more stable across environments.)
-    stream = container.add_stream(
-        "libx264",
-        rate=int(fps),
-        options={
-            "preset": "veryfast",
-            "tune": "zerolatency",
-        },
+    return _save(
+        video=video,
+        audio=audio,
+        filename_prefix=filename_prefix,
+        sample_rate=sample_rate,
+        fps=fps,
+        video_chunks_number=video_chunks_number,
+        job_dir=job_dir,
     )
-    stream.width = width
-    stream.height = height
-    stream.pix_fmt = "yuv420p"
-    try:
-        # Be extra explicit: disable B-frames so DTS/PTS stay monotonic for MP4.
-        stream.codec_context.max_b_frames = 0
-    except Exception:
-        pass
-
-    if audio is not None:
-        if sample_rate is None:
-            raise ValueError("sample_rate is required when audio is provided")
-
-        audio_stream = _prepare_audio_stream(container, sample_rate)
-
-    def all_tiles(
-        first_chunk: torch.Tensor,
-        tiles_generator: Generator[tuple[torch.Tensor, int], None, None],
-    ) -> Generator[tuple[torch.Tensor, int], None, None]:
-        yield first_chunk
-        yield from tiles_generator
-
-    for video_chunk in tqdm(all_tiles(first_chunk, video), total=video_chunks_number):
-        video_chunk_cpu = video_chunk.to("cpu").numpy()
-        for frame_array in video_chunk_cpu:
-            frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
-            for packet in stream.encode(frame):
-                container.mux(packet)
-
-    # Flush encoder
-    for packet in stream.encode():
-        container.mux(packet)
-
-    if audio is not None:
-        _write_audio(container, audio_stream, audio, sample_rate)
-
-    container.close()
-    return output_path, "video"
 
 
 def decode_audio_from_file(path: str, device: torch.device) -> torch.Tensor | None:

@@ -51,6 +51,13 @@ class SchedulerDiffusionStep(DiffusionStepProtocol):
         # Convert x0 prediction → flow /  velocity: v = (sample − x0) / σ
         velocity = to_velocity(sample, sigma, denoised_sample)
 
+        # Synchronise the scheduler's internal index with the actual step.
+        # The denoising loop calls step() once for video and once for audio per
+        # iteration, but the scheduler increments its _step_index on every call.
+        # Setting it explicitly prevents the index from drifting out of bounds.
+        if hasattr(self.scheduler, "_step_index"):
+            self.scheduler._step_index = step_index
+
         timestep = self.scheduler.timesteps[step_index]
         result = self.scheduler.step(
             velocity, timestep, sample, return_dict=False

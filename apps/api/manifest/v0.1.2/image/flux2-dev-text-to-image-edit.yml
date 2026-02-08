@@ -50,7 +50,7 @@ spec:
   - type: vae
     label: Flux VAE
     base: flux2
-    config_path: totoku/apex-models/FLUX.2-dev/vae/config.json
+    config_id: FLUX.2-dev/vae
     model_path:
     - path: totoku/apex-models/FLUX.2-dev/vae/vae-bf16.safetensors
       variant: default
@@ -76,11 +76,15 @@ spec:
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+    - path: totoku/apex-models/FLUX.2-dev/text_encoder/text_encoder-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
     - path: totoku/apex-models/FLUX.2-dev/text_encoder/text_encoder-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-    config_path: totoku/apex-models/FLUX.2-dev/text_encoder/config.json
+    config_id: FLUX.2-dev/text_encoder
     tokenizer_class: PixtralProcessor
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -88,7 +92,7 @@ spec:
   - type: transformer
     label: Flux Transformer
     base: flux2.base
-    config_path: totoku/apex-models/FLUX.2-dev/transformer/config.json
+    config_id: FLUX.2-dev/transformer
     model_path:
     - path: totoku/apex-models/FLUX.2-dev/transformer/transformer-bf16.safetensors
       variant: default

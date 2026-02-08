@@ -1151,7 +1151,7 @@ def decode_video(
     video_decoder: VideoDecoder,
     tiling_config: TilingConfig | None = None,
     generator: torch.Generator | None = None,
-) -> Iterator[torch.Tensor]:
+):
     """
     Decode a video latent tensor with the given decoder.
     Args:

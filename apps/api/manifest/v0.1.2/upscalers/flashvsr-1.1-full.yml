@@ -49,16 +49,16 @@ spec:
     name: wan/vae
     label: Wan VAE
     base: wan
-    config_path: totoku/apex-models/Wan-2.2-I2V/vae/config.json
+    config_id: Wan2.2-I2V/vae
     model_path:
-    - path: totoku/apex-models/Wan-2.2-I2V/vae/vae-bf16.safetensors
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
       variant: default
       precision: fp16
       type: safetensors
   - type: transformer
     base: wan.flashvsr
     label: FlashVSR Transformer
-    config_path: totoku/apex-models/FlashVSR-v1.1/transformer/config.json
+    config_id: FlashVSR-v1.1/transformer
     model_path:
     - path: totoku/apex-models/FlashVSR-v1.1/transformer/transformer-bf16.safetensors
       variant: default
