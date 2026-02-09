@@ -1,0 +1,11 @@
+{
+  "_class_name": "LTX2LatentUpsamplerModel",
+  "_diffusers_version": "0.37.0.dev0",
+  "dims": 3,
+  "in_channels": 128,
+  "mid_channels": 1024,
+  "num_blocks_per_stage": 4,
+  "rational_spatial_scale": 2.0,
+  "spatial_upsample": true,
+  "temporal_upsample": false
+}

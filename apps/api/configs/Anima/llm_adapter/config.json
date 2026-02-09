@@ -1,0 +1,9 @@
+{
+    "source_dim": 1024,
+    "target_dim": 1024,
+    "model_dim": 1024,
+    "num_layers": 6,
+    "num_heads": 16,
+    "use_self_attn": true,
+    "layer_norm": false
+}

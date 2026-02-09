@@ -1,0 +1,22 @@
+{
+  "vid_in_channels": 33,
+  "vid_out_channels": 16,
+  "vid_dim": 3072,
+  "vid_out_norm": "rms",
+  "txt_in_dim": 5120,
+  "txt_in_norm": "layer",
+  "txt_dim": 3072,
+  "emb_dim": 18432,
+  "heads": 24,
+  "head_dim": 128,
+  "expand_ratio": 4,
+  "qk_rope": true,
+  "norm": "rms",
+  "norm_eps": 1.0e-06,
+  "ada": "single",
+  "qk_bias": false,
+  "qk_norm": "rms",
+  "patch_size": [1, 2, 2],
+  "num_layers": 36,
+  "mlp_type": "normal"
+}

@@ -1,0 +1,26 @@
+{
+  "_class_name": "HunyuanVideo15Transformer3DModel",
+  "_diffusers_version": "0.36.0.dev0",
+  "attention_head_dim": 128,
+  "image_embed_dim": 1152,
+  "in_channels": 65,
+  "mlp_ratio": 4.0,
+  "num_attention_heads": 16,
+  "num_layers": 54,
+  "num_refiner_layers": 2,
+  "out_channels": 32,
+  "patch_size": 1,
+  "patch_size_t": 1,
+  "qk_norm": "rms_norm",
+  "rope_axes_dim": [
+    16,
+    56,
+    56
+  ],
+  "rope_theta": 256.0,
+  "target_size": 960,
+  "task_type": "t2v",
+  "text_embed_2_dim": 1472,
+  "text_embed_dim": 3584,
+  "use_meanflow": false
+}
