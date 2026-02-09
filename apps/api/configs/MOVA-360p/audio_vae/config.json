@@ -1,0 +1,29 @@
+{
+  "_class_name": "DAC",
+  "_diffusers_version": "0.36.0",
+  "_name_or_path": "checkpoints/MOVA-360p/audio_vae",
+  "codebook_dim": 8,
+  "codebook_size": 1024,
+  "continuous": true,
+  "decoder_dim": 2048,
+  "decoder_rates": [
+    8,
+    5,
+    4,
+    3,
+    2
+  ],
+  "encoder_dim": 128,
+  "encoder_rates": [
+    2,
+    3,
+    4,
+    5,
+    8
+  ],
+  "latent_dim": 128,
+  "n_codebooks": 9,
+  "quantizer_dropout": false,
+  "sample_rate": 48000,
+  "use_weight_norm": false
+}

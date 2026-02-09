@@ -1,0 +1,36 @@
+{
+  "max_img_h": 1024,
+  "max_img_w": 1024,
+  "max_frames": 1,
+
+  "in_channels": 16,
+  "out_channels": 16,
+  "patch_spatial": 2,
+  "patch_temporal": 1,
+  "concat_padding_mask": true,
+
+  "model_channels": 2048,
+  "num_blocks": 28,
+  "num_heads": 16,
+  "mlp_ratio": 4.0,
+  "crossattn_emb_channels": 1024,
+
+  "pos_emb_cls": "rope3d",
+  "pos_emb_learnable": false,
+  "pos_emb_interpolation": "crop",
+  "min_fps": 1,
+  "max_fps": 30,
+  "rope_enable_fps_modulation": true,
+
+  "use_adaln_lora": true,
+  "adaln_lora_dim": 256,
+
+  "rope_h_extrapolation_ratio": 1.0,
+  "rope_w_extrapolation_ratio": 1.0,
+  "rope_t_extrapolation_ratio": 1.0,
+
+  "extra_per_block_abs_pos_emb": false,
+  "extra_h_extrapolation_ratio": 1.0,
+  "extra_w_extrapolation_ratio": 1.0,
+  "extra_t_extrapolation_ratio": 1.0
+}
