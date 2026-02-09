@@ -1,0 +1,16 @@
+{
+  "_class_name": "DualTowerConditionalBridge",
+  "_diffusers_version": "0.36.0",
+  "_name_or_path": "checkpoints/MOVA-360p/dual_tower_bridge",
+  "apply_cross_rope": true,
+  "apply_first_frame_bias_in_rope": false,
+  "audio_fps": 50.0,
+  "audio_hidden_dim": 1536,
+  "audio_layers": 30,
+  "head_dim": 128,
+  "interaction_strategy": "full",
+  "pooled_adaln": false,
+  "trainable_condition_scale": false,
+  "visual_hidden_dim": 5120,
+  "visual_layers": 40
+}

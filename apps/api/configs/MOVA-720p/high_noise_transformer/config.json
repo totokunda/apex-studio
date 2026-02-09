@@ -1,0 +1,28 @@
+{
+  "_class_name": "WanModel",
+  "_diffusers_version": "0.36.0",
+  "_name_or_path": "checkpoints/MOVA-720p/video_dit",
+  "add_control_adapter": false,
+  "dim": 5120,
+  "eps": 1e-06,
+  "ffn_dim": 13824,
+  "freq_dim": 256,
+  "fuse_vae_embedding_in_latents": false,
+  "has_image_input": false,
+  "has_image_pos_emb": false,
+  "has_ref_conv": false,
+  "in_dim": 36,
+  "in_dim_control_adapter": 24,
+  "num_heads": 40,
+  "num_layers": 40,
+  "out_dim": 16,
+  "patch_size": [
+    1,
+    2,
+    2
+  ],
+  "require_clip_embedding": false,
+  "require_vae_embedding": true,
+  "seperated_timestep": false,
+  "text_dim": 4096
+}

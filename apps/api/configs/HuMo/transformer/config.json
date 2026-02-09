@@ -1,0 +1,16 @@
+{
+  "text_len": 512,
+  "patch_size": [1, 2, 2],
+  "dim": 5120,
+  "ffn_dim": 13824,
+  "freq_dim": 256,
+  "in_dim": 36,
+  "model_type": "i2v",
+  "num_heads": 40,
+  "num_layers": 40,
+  "window_size": [-1, -1],
+  "qk_norm": true,
+  "cross_attn_norm": true,
+  "eps": 1.0e-06,
+  "insert_audio": true
+}

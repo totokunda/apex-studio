@@ -1,0 +1,18 @@
+{
+  "has_image_input": false,
+  "patch_size": [1, 2, 2],
+  "in_dim": 16,
+  "dim": 1536,
+  "ffn_dim": 8960,
+  "freq_dim": 256,
+  "text_dim": 4096,
+  "out_dim": 16,
+  "num_heads": 12,
+  "num_layers": 30,
+  "eps": 1.0e-06,
+  "use_causal_lq4x_proj": true,
+  "use_buffer_lq4x_proj": false,
+  "lq4x_proj_in_dim": 3,
+  "lq4x_proj_out_dim": 1536,
+  "lq4x_proj_layer_num": 1
+}
