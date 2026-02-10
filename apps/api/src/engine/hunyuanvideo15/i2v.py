@@ -8,7 +8,7 @@ from src.types.media import InputImage
 from src.helpers.hunyuanvideo15.cache import CacheHelper
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 import torch
-from angelslim.compressor.diffusion import DeepCacheHelper, TeaCacheHelper, TaylorCacheHelper
+from src.model_cache import DeepCacheHelper, TeaCacheHelper, TaylorCacheHelper
 
 
 class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):

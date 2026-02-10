@@ -56,7 +56,7 @@ spec:
     scheduler_manifest: schedulers/flow_matching.yml
     scheduler_config_defaults:
       num_train_timesteps: 1000
-      shift: 3.0
+      shift: 5.0
       sigma_max: 1.0
       sigma_min: 0.002994011976047904
   - type: vae

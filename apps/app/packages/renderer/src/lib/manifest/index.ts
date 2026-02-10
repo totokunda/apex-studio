@@ -5,8 +5,16 @@ export {
   listManifestsByType,
   listManifestsByModelAndType,
   getManifest,
+  listManifestGroups,
+  getManifestGroup,
+  listManifestGroupsByType,
+  listManifestGroupsByCategory,
+  resolveGroupVariantManifest,
   type ConfigResponse,
   type ManifestDocument,
+  type ManifestGroup,
+  type ManifestGroupVariant,
+  type ManifestGroupMetadata,
   type ModelTypeInfo,
 } from "./api";
 

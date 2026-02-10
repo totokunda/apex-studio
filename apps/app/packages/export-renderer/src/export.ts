@@ -481,6 +481,13 @@ export class KonvaExportRenderer {
       noise: clip.noise,
       sharpness: clip.sharpness,
       vignette: clip.vignette,
+      colorTintColor: clip.colorTintColor,
+      colorTintIntensity: clip.colorTintIntensity,
+      scanLines: clip.scanLines,
+      chromaticAberration: clip.chromaticAberration,
+      interlace: clip.interlace,
+      pixelate: clip.pixelate,
+      jitter: clip.jitter,
     });
 
     // 6. Apply Applicators
@@ -614,6 +621,13 @@ export class KonvaExportRenderer {
       noise: clip.noise,
       sharpness: clip.sharpness,
       vignette: clip.vignette,
+      colorTintColor: clip.colorTintColor,
+      colorTintIntensity: clip.colorTintIntensity,
+      scanLines: clip.scanLines,
+      chromaticAberration: clip.chromaticAberration,
+      interlace: clip.interlace,
+      pixelate: clip.pixelate,
+      jitter: clip.jitter,
     });
 
     // 5. Apply Applicators

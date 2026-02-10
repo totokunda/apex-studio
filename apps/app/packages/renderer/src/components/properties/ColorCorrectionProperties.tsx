@@ -88,6 +88,7 @@ const ColorCorrectionProperties: React.FC<ColorCorrectionPropertiesProps> = ({
       <div className="flex flex-col gap-y-2">
         <PropertiesSlider
           label="Brightness"
+          tooltip="Adjusts the overall lightness or darkness of the image. Positive values brighten, negative values darken."
           value={brightness}
           onChange={setBrightness}
           min={-100}
@@ -97,6 +98,7 @@ const ColorCorrectionProperties: React.FC<ColorCorrectionPropertiesProps> = ({
         />
         <PropertiesSlider
           label="Contrast"
+          tooltip="Controls the difference between light and dark areas. Higher values increase the distinction, lower values flatten the tonal range."
           value={contrast}
           onChange={setContrast}
           min={-100}
@@ -106,6 +108,7 @@ const ColorCorrectionProperties: React.FC<ColorCorrectionPropertiesProps> = ({
         />
         <PropertiesSlider
           label="Hue"
+          tooltip="Shifts all colors around the color wheel. Use to change the overall color tone of the image."
           value={hue}
           onChange={setHue}
           min={-100}
@@ -115,6 +118,7 @@ const ColorCorrectionProperties: React.FC<ColorCorrectionPropertiesProps> = ({
         />
         <PropertiesSlider
           label="Saturation"
+          tooltip="Controls color intensity. Positive values make colors more vivid, negative values move toward grayscale."
           value={saturation}
           onChange={setSaturation}
           min={-100}

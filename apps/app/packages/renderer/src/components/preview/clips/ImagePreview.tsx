@@ -730,6 +730,13 @@ const ImagePreview: React.FC<
         sharpness: clip?.sharpness,
         noise: clip?.noise,
         vignette: clip?.vignette,
+        colorTintColor: clip?.colorTintColor,
+        colorTintIntensity: clip?.colorTintIntensity,
+        scanLines: clip?.scanLines,
+        chromaticAberration: clip?.chromaticAberration,
+        interlace: clip?.interlace,
+        pixelate: clip?.pixelate,
+        jitter: clip?.jitter,
       });
 
       // Ensure resources (e.g., CLUTs) are preloaded for applicators before applying
@@ -786,6 +793,13 @@ const ImagePreview: React.FC<
     clip?.sharpness,
     clip?.noise,
     clip?.vignette,
+    clip?.colorTintColor,
+    clip?.colorTintIntensity,
+    clip?.scanLines,
+    clip?.chromaticAberration,
+    clip?.interlace,
+    clip?.pixelate,
+    clip?.jitter,
     masksSignature,
     applicatorsSignature,
     applicatorsActiveStore,

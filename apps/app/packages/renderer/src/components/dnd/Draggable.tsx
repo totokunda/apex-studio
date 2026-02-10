@@ -26,7 +26,7 @@ const Draggable: React.FC<React.PropsWithChildren<DraggableProps>> = (
   };
 
   return (
-    <div ref={setNodeRef} {...listeners} {...attributes} style={style}>
+    <div ref={setNodeRef} {...listeners} {...attributes} style={style} className="relative">
       {props.children}
     </div>
   );

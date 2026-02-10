@@ -1,7 +1,12 @@
 import * as React from "react";
 import * as SliderPrimitive from "@radix-ui/react-slider";
-import { LuChevronDown, LuChevronUp } from "react-icons/lu";
+import { LuChevronDown, LuChevronUp, LuInfo } from "react-icons/lu";
 import { useState, useEffect } from "react";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 
 import { cn } from "@/lib/utils";
 
@@ -41,6 +46,7 @@ interface PropertiesSliderProps {
   inputClass?: string;
   buttonClass?: string;
   disabled?: boolean;
+  tooltip?: string;
 }
 
 const PropertiesSlider: React.FC<PropertiesSliderProps> = ({
@@ -57,6 +63,7 @@ const PropertiesSlider: React.FC<PropertiesSliderProps> = ({
   inputClass,
   buttonClass,
   disabled = false,
+  tooltip,
 }) => {
   const [tempValue, setTempValue] = useState(value.toFixed(toFixed));
   const [isFocused, setIsFocused] = useState(false);
@@ -123,14 +130,35 @@ const PropertiesSlider: React.FC<PropertiesSliderProps> = ({
 
   return (
     <div className="flex flex-col items-start w-full min-w-0">
-      <label
-        className={cn(
-          "text-brand-light  text-[10.5px] font-medium ",
-          labelClass,
+      <div className="flex flex-row items-center gap-x-1">
+        <label
+          className={cn(
+            "text-brand-light  text-[10.5px] font-medium ",
+            labelClass,
+          )}
+        >
+          {label}
+        </label>
+        {tooltip && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="text-brand-light/70 hover:text-brand-light focus:outline-none"
+                aria-label={`Info about ${label}`}
+              >
+                <LuInfo className="w-3 h-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent
+              sideOffset={6}
+              className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+            >
+              {tooltip}
+            </TooltipContent>
+          </Tooltip>
         )}
-      >
-        {label}
-      </label>
+      </div>
       <div className="flex flex-row items-center gap-x-2.5 w-full min-w-0">
         <Slider
           value={[value]}

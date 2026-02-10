@@ -1,0 +1,36 @@
+api_version: apex/v1
+kind: ModelGroup
+type: upscaler
+
+metadata:
+  id: group-seedvr2
+  name: SeedVR2
+  description: SeedVR2 is an upscaler model for video and image upscaling.
+  tags:
+    - seedvr2
+    - upscaler
+  author: SeedVR
+  license: Apache-2.0
+  demo_path: models/seedvr2-7b.png
+  categories:
+    - upscale
+
+variants:
+  - id: seedvr2-7b-image
+    label: "SeedVR2 7B Image"
+    description: "Larger 7B parameter upscaler delivering the highest reconstruction quality. Excels at recovering intricate textures, fine detail, and natural sharpness in both video frames and still images."
+    manifest_ref: upscalers/seedvr2-7b-image
+    default: true
+  - id: seedvr2-7b-video
+    label: "SeedVR2 7B Video"
+    description: "Larger 7B parameter upscaler delivering the highest reconstruction quality. Excels at recovering intricate textures, fine detail, and natural sharpness in both video frames and still images."
+    manifest_ref: upscalers/seedvr2-7b-video
+  - id: seedvr2-3b-image
+    label: "SeedVR2 3B Image"
+    description: "Compact 3B parameter upscaler that balances quality and efficiency. Uses roughly half the VRAM of the 7B variant while still producing visually strong upscaled results, ideal for longer videos or tighter hardware budgets."
+    manifest_ref: upscalers/seedvr2-3b-image
+  - id: seedvr2-3b-video
+    label: "SeedVR2 3B Video"
+    description: "Compact 3B parameter upscaler that balances quality and efficiency. Uses roughly half the VRAM of the 7B variant while still producing visually strong upscaled results, ideal for longer videos or tighter hardware budgets."
+    manifest_ref: upscalers/seedvr2-3b-video
+  

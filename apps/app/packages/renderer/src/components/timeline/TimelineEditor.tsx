@@ -978,6 +978,10 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
         };
 
         (newClip as ModelClipProps).manifest = manifest;
+        // Carry the parent group so the properties panel can offer variant selection
+        if ((manifest as any)._group) {
+          (newClip as ModelClipProps).group = (manifest as any)._group;
+        }
         addClip(newClip as AnyClipProps);
 
         // Best-effort: hydrate global offload defaults for this manifest id.

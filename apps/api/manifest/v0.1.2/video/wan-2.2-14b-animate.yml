@@ -147,16 +147,9 @@ spec:
       text_encoder_kwargs:
         use_attention_mask: true
       attention_kwargs: {}
+      mode: animate
   ui:
     panels:
-    - name: mode
-      label: Mode
-      collapsible: true
-      default_open: true
-      layout:
-        flow: column
-        rows:
-        - - mode
     - name: image
       label: Image
       collapsible: true
@@ -174,15 +167,7 @@ spec:
         rows:
         - - pose_video
         - - face_video
-    - name: replace_videos
-      label: Replace Videos
-      collapsible: true
-      default_open: false
-      layout:
-        flow: column
-        rows:
-        - - background_video
-        - - mask_video
+    
     - name: prompting
       label: Prompting
       collapsible: true
@@ -230,18 +215,6 @@ spec:
         - - chunking_profile
         - - rope_on_cpu
     inputs:
-    - id: mode
-      label: Mode
-      description: The mode to use for the generation.
-      type: select
-      panel: mode
-      required: true
-      default: animate
-      options:
-      - name: Animate
-        value: animate
-      - name: Replace
-        value: replace
     - id: image
       label: Image
       description: The image to condition on.
@@ -264,18 +237,7 @@ spec:
       type: video+preprocessor
       panel: videos
       required: true
-    - id: background_video
-      label: Background Video
-      description: The background video to condition on.
-      type: video
-      panel: videos
-      required: false
-    - id: mask_video
-      label: Mask Video
-      description: The mask video to condition on.
-      type: video+mask
-      panel: videos
-      required: false
+
     - id: prompt
       label: Prompt
       description: Describe the image you want to generate.

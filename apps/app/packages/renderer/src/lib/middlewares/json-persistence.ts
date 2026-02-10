@@ -8,7 +8,6 @@ import {
   listProjects,
   getActiveProjectId,
   setActiveProjectId,
-  listManifests,
   saveProjectCover,
   clearProjectCover,
 } from "@app/preload";
@@ -32,9 +31,8 @@ import { getMediaInfo } from "../media/utils";
 import { Preprocessor } from "../preprocessor/api";
 import {
   getManifest,
-  listModelTypes,
   type ManifestDocument,
-  type ModelTypeInfo,
+  type ManifestGroup,
 } from "../manifest/api";
 import { useViewportStore } from "../viewport";
 import { globalInputControlsStore } from "../inputControl";
@@ -43,6 +41,7 @@ import { queryClient } from "../react-query/queryClient";
 import { exportSequence, type ExportClip } from "@app/export-renderer";
 import { prepareExportClipsForValue } from "../prepareExportClips";
 import { sortClipsForStacking } from "../clipOrdering";
+import { prefetchModelMenuQueries } from "../manifest/queries";
 type JsonProjectSlice = {
   projects: Array<{
     id: number;
@@ -189,6 +188,8 @@ type ProjectJsonSnapshot = {
    */
   manifests?: Record<string, ManifestDocument>;
   preprocessors?: Record<string, Preprocessor>;
+  /** Embedded model groups for this project, keyed by group id. */
+  groups?: Record<string, ManifestGroup>;
 };
 
 type SerializedMaskForJson = Omit<MaskClipProps, "keyframes"> & {
@@ -222,6 +223,7 @@ type TimelineClipJson = TimelineClipBaseForJson & {
   preprocessors?: SerializedPreprocessorForJson[];
   manifestRef?: string;
   manifestVersion?: string;
+  groupRef?: string;
 };
 
 const serializeMaskKeyframesForJson = (
@@ -498,7 +500,10 @@ const stripModelInputValuesFromManifest = (
   manifest: ManifestDocument,
 ): ManifestDocument => {
   try {
-    const clone: any = JSON.parse(JSON.stringify(manifest));
+    // Strip transient `_group` before cloning to avoid circular references
+    // (group -> variants[].manifest -> _group -> group ...)
+    const { _group, ...safeManifest } = manifest as any;
+    const clone: any = JSON.parse(JSON.stringify(safeManifest));
     const uiTargets: any[] = [];
     if (clone.spec && clone.spec.ui && Array.isArray(clone.spec.ui.inputs)) {
       uiTargets.push(clone.spec.ui);
@@ -563,6 +568,7 @@ const buildProjectJsonSnapshot = (
     const clipsForJson: ProjectJsonSnapshot["timeline"]["clips"] = [];
     const localManifests: Record<string, ManifestDocument> = {};
     const localPreprocessors: Record<string, Preprocessor> = {};
+    const localGroups: Record<string, ManifestGroup> = {};
 
     for (const orig of allClips) {
       if (!orig) continue;
@@ -608,7 +614,7 @@ const buildProjectJsonSnapshot = (
 
       const origClip = orig as AnyClipProps;
 
-      // Capture full manifest documents for model clips so the main
+      // Capture full manifest documents and groups for model clips so the main
       // JSONPersistenceModule can persist them locally.
       if (origClip.type === "model") {
         const model = origClip as ModelClipProps;
@@ -624,9 +630,26 @@ const buildProjectJsonSnapshot = (
               // the on-disk manifest JSON remains generic and not
               // user-specific. Per-clip values are stored on the clip
               // itself (see modelInputValues below).
+              // `_group` is stripped inside stripModelInputValuesFromManifest
+              // to avoid circular references.
               localManifests[versionedKey] =
                 stripModelInputValuesFromManifest(manifest as ManifestDocument);
             }
+          }
+        }
+        // Capture the parent group so variant selection can be restored.
+        // Strip resolved `manifest` from each variant to avoid circular
+        // references (variant.manifest._group -> group -> variants).
+        // The individual manifests are already stored in localManifests.
+        const grp = model.group;
+        if (grp) {
+          const gid = grp.id ?? grp.metadata?.id;
+          if (gid != null && !localGroups[String(gid)]) {
+            const safeVariants = (grp.variants ?? []).map((v) => {
+              const { manifest: _m, ...rest } = v as any;
+              return rest;
+            });
+            localGroups[String(gid)] = { ...grp, variants: safeVariants };
           }
         }
       }
@@ -645,6 +668,13 @@ const buildProjectJsonSnapshot = (
       }
       manifestRef = getManifestRefForModelClip(origClip);
       const manifestVersion = getManifestVersionForModelClip(origClip);
+      // Extract group reference for model clips
+      let groupRef: string | undefined;
+      if (origClip.type === "model") {
+        const grp = (origClip as ModelClipProps).group;
+        const gid = grp?.id ?? grp?.metadata?.id;
+        if (gid != null) groupRef = String(gid);
+      }
 
       // Normalize the clip state we persist and strip large/derived fields
       let clipForJson: any = {
@@ -686,12 +716,8 @@ const buildProjectJsonSnapshot = (
         }
       }
 
-      if (
-        clipForJson &&
-        clipForJson.type === "model" &&
-        Object.prototype.hasOwnProperty.call(clipForJson, "manifest")
-      ) {
-        const { manifest, ...rest } = clipForJson;
+      if (clipForJson && clipForJson.type === "model") {
+        const { manifest, group, ...rest } = clipForJson;
         clipForJson = rest;
       }
 
@@ -705,6 +731,7 @@ const buildProjectJsonSnapshot = (
         ...(preprocessors ? { preprocessors } : {}),
         ...(manifestRef ? { manifestRef } : {}),
         ...(manifestRef && manifestVersion ? { manifestVersion } : {}),
+        ...(groupRef ? { groupRef } : {}),
       };
 
       clipsForJson.push(jsonClip);
@@ -863,6 +890,9 @@ const buildProjectJsonSnapshot = (
     if (Object.keys(localPreprocessors).length > 0) {
       snapshot.preprocessors = localPreprocessors;
     }
+    if (Object.keys(localGroups).length > 0) {
+      snapshot.groups = localGroups;
+    }
 
     return { projectId, snapshot };
   } catch (err) {
@@ -875,6 +905,7 @@ let jsonSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 let jsonSyncGeneration = 0;
 let subscriptionsInitialized = false;
 let jsonProjectLoadGeneration = 0;
+let modelMenuWarmupStarted = false;
 
 // Track JSON hydration lifecycle so that autosave does not run while a project
 // is being switched / hydrated, which can otherwise cause one project's state
@@ -1236,6 +1267,10 @@ const hydrateStoresFromProjectJson = async (
         doc && typeof (doc as any).preprocessors === "object"
           ? ((doc as any).preprocessors as Record<string, Preprocessor>)
           : undefined;
+      const groupsMap =
+        doc && typeof (doc as any).groups === "object"
+          ? ((doc as any).groups as Record<string, ManifestGroup>)
+          : undefined;
 
       for (const c of clipsJson) {
         if (!c) continue;
@@ -1356,9 +1391,11 @@ const hydrateStoresFromProjectJson = async (
           if (manifestFromDoc) {
             // Clone so that each clip gets its own manifest instance; this
             // allows per-clip UI values without leaking between clips.
+            // Strip `_group` before cloning to prevent circular references.
             let manifestForClip: ManifestDocument | any;
             try {
-              manifestForClip = JSON.parse(JSON.stringify(manifestFromDoc));
+              const { _group, ...safeMf } = manifestFromDoc as any;
+              manifestForClip = JSON.parse(JSON.stringify(safeMf));
             } catch {
               manifestForClip = manifestFromDoc as any;
             }
@@ -1398,6 +1435,31 @@ const hydrateStoresFromProjectJson = async (
           }
 
           delete mergedAny.manifestRef;
+
+          // Re-hydrate the parent group for variant selection
+          const groupRef =
+            (mergedAny as any).groupRef ?? (c as any).groupRef;
+          const groupId =
+            groupRef != null && groupRef !== ""
+              ? String(groupRef)
+              : undefined;
+          if (groupId && groupsMap && groupsMap[groupId]) {
+            // Re-resolve variant manifests from the local manifest cache
+            // since they were stripped during serialization to avoid cycles.
+            const savedGroup = groupsMap[groupId];
+            const hydratedVariants = (savedGroup.variants ?? []).map((v: any) => {
+              if (v.manifest) return v; // already resolved
+              const vid = v.manifest_ref ?? v.id;
+              const resolved = vid && manifestsMap
+                ? (manifestsMap[vid] ?? Object.values(manifestsMap).find(
+                    (m: any) => m?.metadata?.id === vid || m?.id === vid,
+                  ))
+                : undefined;
+              return resolved ? { ...v, manifest: resolved } : v;
+            });
+            mergedAny.group = { ...savedGroup, variants: hydratedVariants };
+          }
+          delete mergedAny.groupRef;
         }
 
         if (
@@ -1875,6 +1937,17 @@ const initExternalSubscriptions = (getProjectState: () => JsonProjectSlice) => {
   }
 };
 
+const warmModelMenuCache = async (): Promise<void> => {
+  // Keep model menu data hot before the user opens the Models tab.
+  await Promise.allSettled([
+    prefetchModelMenuQueries(queryClient),
+    queryClient.prefetchQuery({
+      queryKey: ["preprocessor", "list"],
+      queryFn: () => fetchPreprocessorsList(),
+    }),
+  ]);
+};
+
 export const withJsonProjectPersistence =
   <T extends JsonProjectSlice>(
     config: StateCreator<T, [], []>,
@@ -2192,39 +2265,16 @@ export const withJsonProjectPersistence =
     try {
       void (async () => {
         // Warm React Query cache early (shared QueryClient instance).
-        await Promise.allSettled([
-          queryClient.prefetchQuery({
-            queryKey: ["manifest"],
-            queryFn: async () => {
-              const response = await listManifests();
-              if (!response.success) {
-                throw new Error(
-                  response.error ||
-                    "Backend is unavailable (failed to load manifests).",
-                );
-              }
-              return response.data ?? [];
-            },
-          }),
-          queryClient.prefetchQuery({
-            queryKey: ["modelTypes"],
-            queryFn: async () => {
-              const response = await listModelTypes();
-              if (!response.success) {
-                throw new Error(
-                  response.error ||
-                    "Backend is unavailable (failed to load model types).",
-                );
-              }
-              const data = response.data;
-              return (Array.isArray(data) ? data : []) as ModelTypeInfo[];
-            },
-          }),
-          queryClient.prefetchQuery({
-            queryKey: ["preprocessor", "list"],
-            queryFn: () => fetchPreprocessorsList(),
-          }),
-        ]);
+        await warmModelMenuCache();
+
+        // Periodically refresh in the background so switching to Models
+        // does not hit a cold query path after extended idle time.
+        if (!modelMenuWarmupStarted) {
+          modelMenuWarmupStarted = true;
+          setInterval(() => {
+            void warmModelMenuCache();
+          }, 60_000);
+        }
       })();
 
       void loadActiveProjectFromJson();

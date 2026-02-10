@@ -94,6 +94,14 @@ export interface ExportImageClip extends ExportClipBase {
   noise?: number;
   sharpness?: number;
   vignette?: number;
+  // found footage / stylize
+  colorTintColor?: string;
+  colorTintIntensity?: number;
+  scanLines?: number;
+  chromaticAberration?: number;
+  interlace?: number;
+  pixelate?: number;
+  jitter?: number;
   masks?: unknown[];
 }
 
@@ -112,6 +120,14 @@ export interface ExportVideoClip extends ExportClipBase {
   noise?: number;
   sharpness?: number;
   vignette?: number;
+  // found footage / stylize
+  colorTintColor?: string;
+  colorTintIntensity?: number;
+  scanLines?: number;
+  chromaticAberration?: number;
+  interlace?: number;
+  pixelate?: number;
+  jitter?: number;
   masks?: unknown[];
   preprocessors?: Array<{
     src?: string;
@@ -367,7 +383,13 @@ const hasAnyVisualEffects = (c: ExportVideoClip): boolean => {
     Number(c.blur || 0) !== 0 ||
     Number(c.noise || 0) !== 0 ||
     Number(c.sharpness || 0) !== 0 ||
-    Number(c.vignette || 0) !== 0;
+    Number(c.vignette || 0) !== 0 ||
+    (Number(c.colorTintIntensity || 0) !== 0 && !!c.colorTintColor) ||
+    Number(c.scanLines || 0) !== 0 ||
+    Number(c.chromaticAberration || 0) !== 0 ||
+    Number(c.interlace || 0) !== 0 ||
+    Number(c.pixelate || 0) !== 0 ||
+    Number(c.jitter || 0) !== 0;
   return !!any;
 };
 

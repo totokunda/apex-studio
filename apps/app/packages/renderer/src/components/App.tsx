@@ -194,7 +194,7 @@ const App: React.FC = () => {
         if (!data) return;
         // Accept media, preprocessor, or model items
         // MediaItem has ClipType in data.type; preprocessors use 'preprocessor'; models use 'model'
-        if ((data as any).name) {
+        if (data.type) {
           setActiveDragItem(data as any);
         }
       }}
@@ -322,7 +322,7 @@ const App: React.FC = () => {
               >
                 {(() => {
                   const m = activeDragItem as ManifestWithType;
-                  return <ModelItem manifest={m} isDragging={true} />;
+                  return <ModelItem manifest={m} isDragging={true} category={(m as any).category} />;
                 })()}
               </div>
             )}

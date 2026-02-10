@@ -1,6 +1,6 @@
 """Guidance and perturbation utilities for attention manipulation."""
 
-from ltx_core.guidance.perturbations import (
+from src.engine.ltx22.shared.guidance.perturbations import (
     BatchedPerturbationConfig,
     Perturbation,
     PerturbationConfig,

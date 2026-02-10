@@ -334,6 +334,13 @@ export const generateTimelineThumbnailVideo = async (
       sharpness: vidClip?.sharpness,
       noise: vidClip?.noise,
       vignette: vidClip?.vignette,
+      colorTintColor: vidClip?.colorTintColor,
+      colorTintIntensity: vidClip?.colorTintIntensity,
+      scanLines: vidClip?.scanLines,
+      chromaticAberration: vidClip?.chromaticAberration,
+      interlace: vidClip?.interlace,
+      pixelate: vidClip?.pixelate,
+      jitter: vidClip?.jitter,
     });
 
     // 2) Debounced fetch of exact frames and redraw when available
@@ -384,6 +391,13 @@ export const generateTimelineThumbnailVideo = async (
           sharpness: vidClip?.sharpness,
           noise: vidClip?.noise,
           vignette: vidClip?.vignette,
+          colorTintColor: vidClip?.colorTintColor,
+          colorTintIntensity: vidClip?.colorTintIntensity,
+          scanLines: vidClip?.scanLines,
+          chromaticAberration: vidClip?.chromaticAberration,
+          interlace: vidClip?.interlace,
+          pixelate: vidClip?.pixelate,
+          jitter: vidClip?.jitter,
         };
 
         const present = () => {

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from ltx_core.model.transformer.feed_forward import FeedForward
+from src.transformer.ltx2.base2.feed_forward import FeedForward
 from diffusers.models.modeling_utils import ModelMixin
 from src.helpers.helpers import helpers as helper_registry
 from src.transformer.ltx2.base2.rope import (

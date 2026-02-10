@@ -1,0 +1,25 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-wan-stable-video-infinity
+  name: Stable Video Infinity
+  description: Wan 2.2 A14B is a 14B parameter model for stable video infinity generation.
+  tags:
+    - wan
+    - svi
+    - 14b
+    - "2.2"
+  author: Wan-AI
+  license: Apache-2.0
+  demo_path: models/wan-22-stable-video-infinity.mp4
+  categories:
+    - image-to-video
+
+variants:
+  - id: wan-2-2-a14b-stable-video-infinity
+    label: "Stable Video Infinity"
+    description: "14B parameter model that generates infinitely extending video sequences from a single reference frame. Produces temporally stable, seamless continuations without degradation over long durations."
+    manifest_ref: video/wan2.2-a14b-stable-video-infinity
+    default: true

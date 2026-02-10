@@ -828,8 +828,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       )}
 
       {hasModel && (
-        <div className={cn("absolute bottom-0 left-0 right-0  border-brand-light/5",
-           isModelDownloaded ? "bg-brand  p-5 border-t" : "py-3 px-3 "
+        <div className={cn("absolute bottom-0 left-0 right-0  border-brand-light/5 bg-brand-background p-3 ",
         )} style={{ zIndex: 50, pointerEvents: 'auto' }}>
           {isModelRunning ? (
             <button
@@ -845,7 +844,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
               <span>Stop Generating</span>
             </button>
           ) : (
-            isModelDownloaded ? (
+            (
               <button
                 onClick={handleGenerate}
                 disabled={isGenerateDisabled || isPreparingGeneration}
@@ -856,11 +855,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
                 <RiAiGenerate size={16} />
                 <span>{isPreparingGeneration ? 'Preparing…' : 'Generate'}</span>
               </button>
-            ) : (
-              <div className="w-full rounded-lg font-medium text-[11px] flex items-center justify-start gap-x-2  h-full transition-all duration-200 opacity-50 text-brand-light ">
-                <span>Download Model To Generate</span>
-              </div>
-            )
+            ) 
           )}
         </div>
       )}

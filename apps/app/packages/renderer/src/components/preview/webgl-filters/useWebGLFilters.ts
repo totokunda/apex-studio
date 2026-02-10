@@ -7,9 +7,15 @@ import { useRef, useCallback, useEffect } from "react";
 import {
   WebGLBlur,
   WebGLBrightness,
+  WebGLChromaticAberration,
+  WebGLColorTint,
   WebGLContrast,
   WebGLHueSaturation,
+  WebGLInterlace,
+  WebGLJitter,
   WebGLNoise,
+  WebGLPixelate,
+  WebGLScanLines,
   WebGLSharpness,
   WebGLVignette,
 } from "./index";
@@ -23,14 +29,29 @@ export interface FilterParams {
   noise?: number; // 0 to 100
   sharpness?: number; // 0 to 100
   vignette?: number; // 0 to 100
+  // Found Footage / Stylize
+  colorTintColor?: string; // hex color e.g. "#00ff4c"
+  colorTintIntensity?: number; // 0 to 100
+  scanLines?: number; // 0 to 100
+  chromaticAberration?: number; // 0 to 100
+  interlace?: number; // 0 to 100
+  pixelate?: number; // 0 to 100
+  jitter?: number; // 0 to 100
 }
 
 export function useWebGLFilters() {
   const webglBlurRef = useRef<WebGLBlur | null>(null);
   const webglBrightnessRef = useRef<WebGLBrightness | null>(null);
+  const webglChromaticAberrationRef =
+    useRef<WebGLChromaticAberration | null>(null);
+  const webglColorTintRef = useRef<WebGLColorTint | null>(null);
   const webglContrastRef = useRef<WebGLContrast | null>(null);
   const webglHueSaturationRef = useRef<WebGLHueSaturation | null>(null);
+  const webglInterlaceRef = useRef<WebGLInterlace | null>(null);
+  const webglJitterRef = useRef<WebGLJitter | null>(null);
   const webglNoiseRef = useRef<WebGLNoise | null>(null);
+  const webglPixelateRef = useRef<WebGLPixelate | null>(null);
+  const webglScanLinesRef = useRef<WebGLScanLines | null>(null);
   const webglSharpnessRef = useRef<WebGLSharpness | null>(null);
   const webglVignetteRef = useRef<WebGLVignette | null>(null);
 
@@ -178,6 +199,127 @@ export function useWebGLFilters() {
         ctx.scale(1, -1);
         ctx.drawImage(result, 0, -sourceCanvas.height);
         ctx.restore();
+        currentCanvas = sourceCanvas;
+      }
+
+      // Apply color tint
+      if (
+        params.colorTintIntensity &&
+        params.colorTintIntensity > 0 &&
+        params.colorTintColor
+      ) {
+        if (!webglColorTintRef.current) {
+          webglColorTintRef.current = new WebGLColorTint();
+        }
+        // Parse hex color to RGB components (0-1)
+        const hex = params.colorTintColor.replace("#", "");
+        const r = parseInt(hex.substring(0, 2), 16) / 255;
+        const g = parseInt(hex.substring(2, 4), 16) / 255;
+        const b = parseInt(hex.substring(4, 6), 16) / 255;
+        const result = webglColorTintRef.current.apply(
+          currentCanvas,
+          r,
+          g,
+          b,
+          params.colorTintIntensity,
+        );
+
+        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+        ctx.save();
+        ctx.scale(1, -1);
+        ctx.drawImage(result, 0, -sourceCanvas.height);
+        ctx.restore();
+        currentCanvas = sourceCanvas;
+      }
+
+      // Apply scan lines
+      if (params.scanLines && params.scanLines > 0) {
+        if (!webglScanLinesRef.current) {
+          webglScanLinesRef.current = new WebGLScanLines();
+        }
+        const result = webglScanLinesRef.current.apply(
+          currentCanvas,
+          params.scanLines,
+        );
+
+        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+        ctx.save();
+        ctx.scale(1, -1);
+        ctx.drawImage(result, 0, -sourceCanvas.height);
+        ctx.restore();
+        currentCanvas = sourceCanvas;
+      }
+
+      // Apply chromatic aberration
+      if (params.chromaticAberration && params.chromaticAberration > 0) {
+        if (!webglChromaticAberrationRef.current) {
+          webglChromaticAberrationRef.current = new WebGLChromaticAberration();
+        }
+        const result = webglChromaticAberrationRef.current.apply(
+          currentCanvas,
+          params.chromaticAberration,
+        );
+
+        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+        ctx.save();
+        ctx.scale(1, -1);
+        ctx.drawImage(result, 0, -sourceCanvas.height);
+        ctx.restore();
+        currentCanvas = sourceCanvas;
+      }
+
+      // Apply interlace
+      if (params.interlace && params.interlace > 0) {
+        if (!webglInterlaceRef.current) {
+          webglInterlaceRef.current = new WebGLInterlace();
+        }
+        const result = webglInterlaceRef.current.apply(
+          currentCanvas,
+          params.interlace,
+        );
+
+        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+        ctx.save();
+        ctx.scale(1, -1);
+        ctx.drawImage(result, 0, -sourceCanvas.height);
+        ctx.restore();
+        currentCanvas = sourceCanvas;
+      }
+
+      // Apply pixelate
+      if (params.pixelate && params.pixelate > 0) {
+        if (!webglPixelateRef.current) {
+          webglPixelateRef.current = new WebGLPixelate();
+        }
+        const result = webglPixelateRef.current.apply(
+          currentCanvas,
+          params.pixelate,
+        );
+
+        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+        ctx.save();
+        ctx.scale(1, -1);
+        ctx.drawImage(result, 0, -sourceCanvas.height);
+        ctx.restore();
+        currentCanvas = sourceCanvas;
+      }
+
+      // Apply jitter
+      if (params.jitter && params.jitter > 0) {
+        if (!webglJitterRef.current) {
+          webglJitterRef.current = new WebGLJitter();
+        }
+        const result = webglJitterRef.current.apply(
+          currentCanvas,
+          params.jitter,
+        );
+
+        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+        ctx.save();
+        ctx.scale(1, -1);
+        ctx.drawImage(result, 0, -sourceCanvas.height);
+        ctx.restore();
+        currentCanvas = sourceCanvas;
       }
 
       return sourceCanvas;
@@ -197,7 +339,16 @@ export function useWebGLFilters() {
       (params.blur !== undefined && params.blur > 0) ||
       (params.noise !== undefined && params.noise > 0) ||
       (params.sharpness !== undefined && params.sharpness > 0) ||
-      (params.vignette !== undefined && params.vignette > 0)
+      (params.vignette !== undefined && params.vignette > 0) ||
+      (params.colorTintIntensity !== undefined &&
+        params.colorTintIntensity > 0 &&
+        !!params.colorTintColor) ||
+      (params.scanLines !== undefined && params.scanLines > 0) ||
+      (params.chromaticAberration !== undefined &&
+        params.chromaticAberration > 0) ||
+      (params.interlace !== undefined && params.interlace > 0) ||
+      (params.pixelate !== undefined && params.pixelate > 0) ||
+      (params.jitter !== undefined && params.jitter > 0)
     );
   }, []);
 
@@ -214,6 +365,14 @@ export function useWebGLFilters() {
         webglBrightnessRef.current.dispose();
         webglBrightnessRef.current = null;
       }
+      if (webglChromaticAberrationRef.current) {
+        webglChromaticAberrationRef.current.dispose();
+        webglChromaticAberrationRef.current = null;
+      }
+      if (webglColorTintRef.current) {
+        webglColorTintRef.current.dispose();
+        webglColorTintRef.current = null;
+      }
       if (webglContrastRef.current) {
         webglContrastRef.current.dispose();
         webglContrastRef.current = null;
@@ -222,9 +381,25 @@ export function useWebGLFilters() {
         webglHueSaturationRef.current.dispose();
         webglHueSaturationRef.current = null;
       }
+      if (webglInterlaceRef.current) {
+        webglInterlaceRef.current.dispose();
+        webglInterlaceRef.current = null;
+      }
+      if (webglJitterRef.current) {
+        webglJitterRef.current.dispose();
+        webglJitterRef.current = null;
+      }
       if (webglNoiseRef.current) {
         webglNoiseRef.current.dispose();
         webglNoiseRef.current = null;
+      }
+      if (webglPixelateRef.current) {
+        webglPixelateRef.current.dispose();
+        webglPixelateRef.current = null;
+      }
+      if (webglScanLinesRef.current) {
+        webglScanLinesRef.current.dispose();
+        webglScanLinesRef.current = null;
       }
       if (webglSharpnessRef.current) {
         webglSharpnessRef.current.dispose();

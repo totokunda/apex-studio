@@ -1,0 +1,29 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-qwenimage-edit
+  name: QwenImage Edit
+  description: QwenImage Edit is a 20B parameter model for image editing with multiple input images.
+  tags:
+    - qwenimage
+    - edit
+    - multi-image
+  author: Qwen
+  license: Apache-2.0
+  demo_path: models/qwen-image-edit-2511.png
+  categories:
+    - image-edit
+
+variants:
+  - id: qwenimage-edit-2511
+    label: "QwenImage Edit 2511"
+    description: "November 2025 release with improved instruction following, better preservation of unedited regions, and enhanced multi-image understanding. Recommended for most image editing workflows."
+    manifest_ref: image/qwenimage-edit-2511
+    default: true
+
+  - id: qwenimage-edit-2509
+    label: "QwenImage Edit 2509"
+    description: "September 2025 release — the original QwenImage Edit checkpoint. Reliable and well-tested, useful as a fallback if the newer 2511 variant produces different stylistic results than expected."
+    manifest_ref: image/qwenimage-edit-2509

@@ -11,6 +11,8 @@ import {
   updateManifestLoraScale as updateManifestLoraScalePreload,
   updateManifestLoraName as updateManifestLoraNamePreload,
   deleteManifestLora as deleteManifestLoraPreload,
+  listManifestGroups as listManifestGroupsPreload,
+  getManifestGroup as getManifestGroupPreload,
 } from "@app/preload";
 import { ClipType } from "../types";
 
@@ -341,6 +343,52 @@ export type ManifestDocument = {
   downloaded: boolean;
 };
 
+// ----------------------------- Model Group Types ----------------------------- //
+
+export type ManifestGroupVariant = {
+  id: string;
+  label: string;
+  description?: string;
+  manifest_ref: string;
+  default?: boolean;
+  /** The fully resolved and enriched manifest for this variant.
+   *  Populated by the backend when the manifest_ref can be resolved.
+   *  May be null/undefined if the referenced manifest could not be loaded. */
+  manifest?: ManifestDocument | null;
+};
+
+export type ManifestGroupMetadata = {
+  id: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  author?: string;
+  license?: string;
+  demo_path?: string;
+  categories?: string[];
+};
+
+export type ManifestGroup = {
+  api_version: string;
+  kind: "ModelGroup";
+  type: string;
+  metadata: ManifestGroupMetadata;
+  variants: ManifestGroupVariant[];
+  // Top-level convenience fields (normalized by backend)
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  categories: string[];
+  author: string;
+  license: string;
+  demo_path: string;
+  group_type: string;
+  full_path: string;
+};
+
+// ----------------------------- Manifest API Functions ----------------------------- //
+
 export async function listModelTypes(): Promise<
   ConfigResponse<ModelTypeInfo[]>
 > {
@@ -448,6 +496,128 @@ export async function deleteManifestLora(
     manifestId,
     loraIndex,
   )) as ConfigResponse<any>;
+}
+
+// ----------------------------- Model Group API Functions ----------------------------- //
+
+/**
+ * List all manifest groups.
+ *
+ * Backward compatibility: if the backend does not support groups (older API
+ * versions), this gracefully returns an empty list instead of throwing, so
+ * callers can fall back to the flat manifest list.
+ */
+export async function listManifestGroups(): Promise<
+  ConfigResponse<ManifestGroup[]>
+> {
+  try {
+    const response = await listManifestGroupsPreload();
+    // Older backends may return an error shape rather than throwing
+    if (response && response.success === false) {
+      return { success: true, data: [] };
+    }
+    return response as ConfigResponse<ManifestGroup[]>;
+  } catch {
+    // Backend does not support groups endpoint – degrade gracefully
+    return { success: true, data: [] };
+  }
+}
+
+/**
+ * Get a specific manifest group by its id.
+ *
+ * Backward compatibility: returns a not-found style response when the backend
+ * does not support groups.
+ */
+export async function getManifestGroup(
+  groupId: string,
+): Promise<ConfigResponse<ManifestGroup>> {
+  try {
+    const response = await getManifestGroupPreload(groupId);
+    if (response && response.success === false) {
+      return { success: false, error: response.error ?? "Group not found" };
+    }
+    return response as ConfigResponse<ManifestGroup>;
+  } catch {
+    return { success: false, error: "Groups not supported by this API version" };
+  }
+}
+
+/**
+ * List manifest groups filtered by group type (e.g. "video", "image", "audio").
+ *
+ * This is a client-side convenience filter over listManifestGroups().
+ */
+export async function listManifestGroupsByType(
+  groupType: string,
+): Promise<ConfigResponse<ManifestGroup[]>> {
+  const response = await listManifestGroups();
+  if (!response.success || !response.data) {
+    return response;
+  }
+  const filtered = response.data.filter(
+    (g) => g.group_type === groupType || g.type === groupType,
+  );
+  return { success: true, data: filtered };
+}
+
+/**
+ * List manifest groups filtered by category (e.g. "text-to-video", "inpaint").
+ *
+ * This is a client-side convenience filter over listManifestGroups().
+ */
+export async function listManifestGroupsByCategory(
+  category: string,
+): Promise<ConfigResponse<ManifestGroup[]>> {
+  const response = await listManifestGroups();
+  if (!response.success || !response.data) {
+    return response;
+  }
+  const filtered = response.data.filter(
+    (g) => g.categories && g.categories.includes(category),
+  );
+  return { success: true, data: filtered };
+}
+
+/**
+ * Resolve a group's variant to its full manifest document.
+ *
+ * Given a group and variant id, looks up the variant's manifest_ref and
+ * returns the corresponding manifest. Falls back to the default variant
+ * if variantId is not provided.
+ *
+ * The backend pre-resolves each variant's manifest_ref into a full enriched
+ * manifest embedded in `variant.manifest`. If that data is already present
+ * we return it directly (no extra fetch). Otherwise (backward compatibility
+ * with older backends that don't resolve refs) we fall back to fetching the
+ * manifest by its ref via getManifest().
+ */
+export async function resolveGroupVariantManifest(
+  group: ManifestGroup,
+  variantId?: string,
+): Promise<ConfigResponse<ManifestDocument>> {
+  const variants = group.variants ?? [];
+  let variant: ManifestGroupVariant | undefined;
+
+  if (variantId) {
+    variant = variants.find((v) => v.id === variantId);
+  }
+  if (!variant) {
+    variant = variants.find((v) => v.default === true) ?? variants[0];
+  }
+  if (!variant) {
+    return { success: false, error: "No variants available in this group" };
+  }
+
+  // If the backend already resolved the manifest, use it directly
+  if (variant.manifest) {
+    return { success: true, data: variant.manifest as ManifestDocument };
+  }
+
+  // Fallback: fetch by manifest_ref (works with older backends that don't
+  // pre-resolve refs, or when the ref could not be resolved server-side)
+  const manifestId = variant.manifest_ref;
+  return await getManifest(manifestId);
 }
 
 

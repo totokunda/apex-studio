@@ -188,7 +188,7 @@ spec:
         flow: column
         rows:
         - - person_1_audio
-        - - person_2_audio
+          - person_2_audio
     - name: prompting
       label: Prompting
       collapsible: true
@@ -246,13 +246,13 @@ spec:
       panel: video_input
       required: true
     - id: person_1_audio
-      label: Audio
+      label: First Person Audio
       description: The audio to use for the generation.
       type: audio
       panel: audio_input
       required: true
     - id: person_2_audio
-      label: Audio
+      label: Second Person Audio
       description: The audio to use for the generation.
       type: audio
       panel: audio_input

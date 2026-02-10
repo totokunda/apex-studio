@@ -1,0 +1,23 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-hunyuanvideo-1.5-i2v
+  name: HunyuanVideo 1.5 Image to Video
+  description: HunyuanVideo 1.5 is a 8.3B parameter model for text/image-to-video generation.
+  tags:
+    - hunyuanvideo15
+    - i2v
+  author: Tencent
+  license: Apache-2.0
+  demo_path: models/hunyuan-video-15-i2v.mp4
+  categories:
+    - image-to-video
+
+variants:
+  - id: hunyuanvideo15-i2v
+    label: "Image to Video"
+    description: "8.3B parameter image-to-video model from Tencent that animates a reference image with natural motion while preserving subject identity, style, and spatial composition."
+    manifest_ref: video/hunyuanvideo-1.5-i2v
+    default: true

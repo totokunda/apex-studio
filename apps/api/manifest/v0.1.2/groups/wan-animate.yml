@@ -1,0 +1,29 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-wan-animate
+  name: Wan Animate
+  description: Wan 2.2 14B is a 14B parameter model for animate generation.
+  tags:
+    - wan
+    - animate
+    - 14b
+    - "2.2"
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/wan-animate.mp4
+  categories:
+    - control
+
+variants:
+  - id: wan-2-2-14b-animate
+    label: "Wan Animate"
+    description: "14B parameter model that brings still images to life by generating natural, physics-aware motion. Animates subjects, backgrounds, and environmental elements with realistic dynamics from a single reference frame."
+    manifest_ref: video/wan-2.2-14b-animate
+    default: true
+  - id: wan-2-2-14b-animate-replace
+    label: "Wan Animate Replace"
+    description: "14B parameter model that replaces the background and foreground of a video with a new scene. Uses a single reference frame to generate a new video with the same subject and motion."
+    manifest_ref: video/wan-2.2-14b-animate-replace

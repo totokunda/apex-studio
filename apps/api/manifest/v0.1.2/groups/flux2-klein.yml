@@ -1,0 +1,41 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-flux2-klein
+  name: Flux2 Klein
+  description: Flux2 Klein is a lightweight model family for text-to-image and image-to-image generation, available in 4B and 9B parameter sizes.
+  tags:
+    - flux2
+    - klein
+    - image-edit
+    - i2i
+  author: Black Forest Labs
+  license: Apache-2.0
+  demo_path: models/flux2-klein-9b-text-to-image-edit.png
+  categories:
+    - image-edit
+    - text-to-image
+
+variants:
+  - id: flux2-klein-9b-text-to-image-edit
+    label: "Flux2 Klein 9B"
+    description: "Fine-tuned 9B parameter model offering the best balance of quality and efficiency in the Klein family. Strong prompt adherence and detail while remaining significantly lighter than the full Flux2 Dev 32B."
+    manifest_ref: image/flux2-klein-9b-text-to-image-edit
+    default: true
+
+  - id: flux2-klein-9b-base-text-to-image-edit
+    label: "Flux2 Klein 9B Base"
+    description: "Pre-trained 9B base checkpoint without task-specific fine-tuning. Provides a neutral foundation for custom LoRA training or workflows that benefit from a less opinionated starting point."
+    manifest_ref: image/flux2-klein-9b-base-text-to-image-edit
+
+  - id: flux2-klein-4b-text-to-image-edit
+    label: "Flux2 Klein 4B"
+    description: "Fine-tuned 4B parameter model — the most compact option in the Klein family. Runs on consumer GPUs with as little as 8GB VRAM while still producing high-quality text-to-image and image editing results."
+    manifest_ref: image/flux2-klein-4b-text-to-image-edit
+
+  - id: flux2-klein-4b-base-text-to-image-edit
+    label: "Flux2 Klein 4B Base"
+    description: "Pre-trained 4B base checkpoint without task-specific fine-tuning. The lightest model in the Flux2 ecosystem, suitable for custom training, experimentation, and extremely resource-constrained environments."
+    manifest_ref: image/flux2-klein-4b-base-text-to-image-edit

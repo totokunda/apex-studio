@@ -292,6 +292,8 @@ const ComponentCard: React.FC<{
       return jobId && (getJobUpdates(jobId)?.length ?? 0) > 0;
     });
 
+  if (isScheduler) return null;
+
   return (
     <>
       <Collapsible open={expanded} onOpenChange={setExpanded}
