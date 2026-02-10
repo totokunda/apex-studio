@@ -35,6 +35,21 @@ export type ManifestSchedulerOption = {
   description?: string;
   base?: string;
   config_path?: string;
+  config_id?: string;
+  config?: Record<string, any>;
+  [key: string]: any;
+};
+
+export type ManifestSchedulerField = {
+  label?: string;
+  description?: string;
+  type?: "number" | "select" | "boolean" | "text" | string;
+  value_type?: "integer" | "float" | string;
+  min?: number;
+  max?: number;
+  step?: number;
+  default?: any;
+  options?: { name: string; value: any }[];
   [key: string]: any;
 };
 
@@ -81,6 +96,7 @@ export type ManifestComponent = {
   extra_model_paths?: (string | ManifestComponentModelPathItem)[];
   converted_model_path?: string;
   scheduler_options?: ManifestSchedulerOption[];
+  scheduler_fields?: Record<string, ManifestSchedulerField>;
   gguf_files?: { type: string; path: string }[];
   deprecated?: boolean;
   is_downloaded?: boolean;

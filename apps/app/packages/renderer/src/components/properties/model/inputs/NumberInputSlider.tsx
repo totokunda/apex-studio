@@ -21,6 +21,7 @@ interface NumberInputSliderProps {
   toFixed?: number;
   labelClass?: string;
   disabled?: boolean;
+  inputClass?: string;
 }
 
 const Slider = React.forwardRef<
@@ -58,6 +59,7 @@ const NumberInputSlider: React.FC<NumberInputSliderProps> = ({
   toFixed = 0,
   labelClass,
   disabled,
+  inputClass,
 }) => {
   const [tempValue, setTempValue] = useState(value.toFixed(toFixed));
   const [isFocused, setIsFocused] = useState(false);
@@ -168,6 +170,7 @@ const NumberInputSlider: React.FC<NumberInputSliderProps> = ({
               className={cn(
                 "w-15 h-6 px-1.5 text-center text-brand-light text-[11px] font-normal items-center border-r border-brand-light/10 p-1 rounded-l bg-brand",
                 disabled && "opacity-50 cursor-not-allowed",
+                inputClass,
               )}
               value={
                 isFocused
