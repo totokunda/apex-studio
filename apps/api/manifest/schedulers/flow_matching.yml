@@ -14,7 +14,7 @@ spec:
     num_train_timesteps:
       label: Num Train Timesteps
       description: Number of training diffusion timesteps used by the scheduler.
-      type: number
+      type: number+slider
       value_type: integer
       min: 1
       max: 10000
@@ -22,7 +22,7 @@ spec:
     shift:
       label: Shift
       description: Flow-matching time/sigma shifting parameter.
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
       max: 50.0
@@ -30,23 +30,23 @@ spec:
     sigma_max:
       label: Sigma Max
       description: Maximum sigma for the noise schedule.
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
-      max: 100.0
-      step: 0.001
+      max: 1.0
+      step: 0.000001
     sigma_min:
       label: Sigma Min
       description: Minimum sigma for the noise schedule.
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
-      max: 10.0
+      max: 1.0
       step: 0.000001
     eta:
       label: Eta
       description: Stochasticity / ancestral noise amount (0=ODE, 1=full SDE).
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
       max: 1.0
@@ -54,7 +54,7 @@ spec:
     s_noise:
       label: S-Noise
       description: Noise multiplier used by some ancestral/SDE samplers.
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
       max: 5.0
@@ -62,7 +62,7 @@ spec:
     alpha:
       label: Alpha
       description: Beta57 alpha parameter.
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
       max: 1.0
@@ -70,7 +70,7 @@ spec:
     beta:
       label: Beta
       description: Beta57 beta parameter.
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
       max: 1.0
@@ -78,7 +78,7 @@ spec:
     lms_order:
       label: LMS Order
       description: Order of the linear multistep (Adams-Bashforth) method.
-      type: number
+      type: number+slider
       value_type: integer
       min: 1
       max: 8
@@ -86,7 +86,7 @@ spec:
     deis_order:
       label: DEIS Order
       description: Polynomial order for DEIS.
-      type: number
+      type: number+slider
       value_type: integer
       min: 1
       max: 8
@@ -94,7 +94,7 @@ spec:
     max_order:
       label: Max Order
       description: Maximum multistep order used by iPNDM variants.
-      type: number
+      type: number+slider
       value_type: integer
       min: 1
       max: 8
@@ -102,7 +102,7 @@ spec:
     ge_gamma:
       label: GE Gamma
       description: Gradient-estimation correction strength.
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
       max: 10.0
@@ -110,7 +110,7 @@ spec:
     r:
       label: SEEDS r
       description: SEEDS-2 parameter r.
-      type: number
+      type: number+slider
       value_type: float
       min: 0.0
       max: 1.0
@@ -118,7 +118,7 @@ spec:
     predictor_order:
       label: Predictor Order
       description: Predictor order for SA-Solver variants.
-      type: number
+      type: number+slider
       value_type: integer
       min: 1
       max: 8
@@ -126,7 +126,7 @@ spec:
     corrector_order:
       label: Corrector Order
       description: Corrector order for SA-Solver variants.
-      type: number
+      type: number+slider
       value_type: integer
       min: 1
       max: 8
@@ -150,7 +150,7 @@ spec:
     solver_order:
       label: Solver Order
       description: UniPC solver order.
-      type: number
+      type: number+slider
       value_type: integer
       min: 1
       max: 5
@@ -160,9 +160,9 @@ spec:
       description: UniPC solver type variant.
       type: select
       options:
-        - name: bh1
+        - name: BH1
           value: bh1
-        - name: bh2
+        - name: BH2
           value: bh2
     lower_order_final:
       label: Lower Order Final
@@ -177,7 +177,7 @@ spec:
     max_stage:
       label: Max Stage
       description: Maximum stage for ER-SDE variants.
-      type: number
+      type: number+slider
       value_type: integer
       min: 1
       max: 10

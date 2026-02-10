@@ -141,7 +141,7 @@ spec:
     - name: size
       label: Size
       collapsible: true
-      default_open: false
+      default_open: true
       layout:
         flow: column
         rows:
