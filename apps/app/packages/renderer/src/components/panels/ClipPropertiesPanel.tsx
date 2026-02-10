@@ -301,11 +301,24 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         Array.isArray(comp.scheduler_options) &&
         comp.scheduler_options.length > 0
       ) {
-        const first = comp.scheduler_options[0];
+        const defaultName = String((comp as any).default || "").trim();
+        const preferred = defaultName
+          ? comp.scheduler_options.find(
+              (opt: any) => String(opt?.name || "") === defaultName,
+            )
+          : undefined;
+        const chosen = preferred || comp.scheduler_options[0];
+        const baseConfig =
+          chosen && typeof (chosen as any).config === "object" && !Array.isArray((chosen as any).config)
+            ? ({ ...(chosen as any).config } as Record<string, any>)
+            : {};
         defaults[key] = {
-          name: first.name,
-          base: (first as any).base,
-          config_path: (first as any).config_path,
+          name: (chosen as any).name,
+          base: (chosen as any).base,
+          config_path: (chosen as any).config_path,
+          config_id: (chosen as any).config_id,
+          config: baseConfig,
+          ...baseConfig,
         };
       } else if (comp.model_path) {
         const items = normalizeModelPaths(comp).filter((it) => isItemDownloaded(it));

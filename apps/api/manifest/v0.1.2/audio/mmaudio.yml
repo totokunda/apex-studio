@@ -141,17 +141,7 @@ spec:
         rows:
         - - negative_prompt
         - - audio_negative_prompt
-    - name: size
-      label: Size
-      collapsible: true
-      default_open: false
-      layout:
-        flow: column
-        rows:
-        - - resolution
-        - - aspect_ratio
-        - - height
-          - width
+    
     - name: sampling
       label: Sampling
       collapsible: true
@@ -164,15 +154,7 @@ spec:
         - - audio_guidance_scale
         - - seed
         - - shift
-    - name: chunking_profile
-      label: Chunking Profile
-      collapsible: true
-      default_open: false
-      layout:
-        flow: column
-        rows:
-        - - chunking_profile
-        - - rope_on_cpu
+
     - name: easy_cache
       label: Easy Cache
       collapsible: true
@@ -269,26 +251,7 @@ spec:
       min: 1
       max: 100
       step: 1
-    - id: height
-      label: Height
-      description: Explicit height override
-      type: number
-      value_type: integer
-      panel: size
-      default: 960
-      min: 256
-      max: 8192
-      step: 32
-    - id: width
-      label: Width
-      description: Explicit width override
-      type: number
-      value_type: integer
-      panel: size
-      default: 960
-      min: 256
-      max: 8192
-      step: 32
+    
     - id: seed
       label: Seed
       description: Random seed for reproducibility
@@ -352,25 +315,4 @@ spec:
       min: 1
       max: 100
       step: 1
-    - id: chunking_profile
-      label: Chunking Profile
-      description: Spliting tensors into smaller chunks to reduce memory usage.
-      type: select
-      panel: chunking_profile
-      default: light
-      options:
-      - name: None
-        value: none
-      - name: Light
-        value: light
-      - name: Balanced
-        value: balanced
-      - name: Aggressive
-        value: aggressive
-    - id: rope_on_cpu
-      label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
-      type: boolean
-      panel: chunking_profile
-      default: false
-      required: false
+

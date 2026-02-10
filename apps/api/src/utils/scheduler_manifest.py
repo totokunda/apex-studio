@@ -30,6 +30,33 @@ def _extract_scheduler_options(doc: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def _extract_scheduler_fields(doc: Any) -> Dict[str, Dict[str, Any]]:
+    """
+    Extract optional scheduler field metadata map.
+
+    Accepted shapes:
+    - { "fields": { ... } }
+    - { "spec": { "fields": { ... } } }
+    """
+    if not isinstance(doc, dict):
+        return {}
+
+    candidates = [
+        doc.get("fields"),
+        (doc.get("spec") or {}).get("fields")
+        if isinstance(doc.get("spec"), dict)
+        else None,
+    ]
+    for value in candidates:
+        if isinstance(value, dict):
+            return {
+                str(k): v
+                for k, v in value.items()
+                if isinstance(k, (str, int)) and isinstance(v, dict)
+            }
+    return {}
+
+
 def _resolve_manifest_ref(
     *,
     ref: str,
@@ -133,6 +160,7 @@ def expand_scheduler_manifests(
             continue
 
         catalog_options = _extract_scheduler_options(scheduler_doc)
+        catalog_fields = _extract_scheduler_fields(scheduler_doc)
         local_options = component.get("scheduler_options") or []
         local_options = [x for x in local_options if isinstance(x, dict)]
 
@@ -191,6 +219,8 @@ def expand_scheduler_manifests(
         component["scheduler_options"] = [
             merged_by_name[n] for n in order if n in merged_by_name
         ]
+        if catalog_fields:
+            component["scheduler_fields"] = catalog_fields
         components[i] = component
 
     if components_container == "spec":
@@ -202,4 +232,3 @@ def expand_scheduler_manifests(
     else:
         doc["components"] = components
     return doc
-

@@ -189,7 +189,7 @@ spec:
     - name: size
       label: Size
       collapsible: true
-      default_open: false
+      default_open: true
       layout:
         flow: column
         rows:
@@ -245,7 +245,7 @@ spec:
       required: false
     - id: last_image
       label: Last Image
-      description: Optional second image to condition the final frame.
+      description: Last image to condition the final frame.
       type: image
       panel: media
       required: false
