@@ -1,0 +1,25 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-humo
+  name: HuMo
+  description: HuMo is a unified, human-centric video generation framework designed to produce high-quality, fine-grained, and controllable human videos from multimodal inputs including text, images, and audio.
+  tags:
+    - humo
+    - audio
+    - i2v
+    - 17b
+  author: Bytedance Research
+  license: Apache-2.0
+  demo_path: models/humo-17b.mp4
+  categories:
+    - audio-to-video
+
+variants:
+  - id: humo-17b
+    label: "HuMo 17B"
+    description: "17B parameter human-centric video generation framework by ByteDance Research. Produces high-quality, controllable human videos from text, images, and audio — supporting strong prompt following, consistent subject preservation, and synchronized audio-driven motion."
+    manifest_ref: video/humo-17b
+    default: true

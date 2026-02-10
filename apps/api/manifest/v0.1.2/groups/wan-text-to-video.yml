@@ -1,0 +1,38 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-wan-text-to-video
+  name: Wan Text to Video
+  description: Wan text-to-video generation models ranging from 5B to 14B parameters.
+  tags:
+    - wan
+    - t2v
+  author: Wan-AI
+  license: Apache-2.0
+  demo_path: models/wan-2.2-text-to-video.mp4
+  categories:
+    - text-to-video
+
+variants:
+  - id: wan-2-2-a14b-text-to-video
+    label: "Wan 2.2 A14B"
+    description: "Latest generation 14B activation model with improved prompt adherence, sharper detail, and stronger temporal consistency. Recommended as the default for most text-to-video workflows."
+    manifest_ref: video/wan-2.2-a14b-text-to-video
+    default: true
+
+  - id: wan-2-2-a14b-smooth-mix-text-to-video
+    label: "Wan 2.2 A14B Smooth Mix"
+    description: "Fine-tuned 14B variant that prioritizes fluid, natural motion and seamless transitions between scenes. Best for cinematic shots requiring smooth camera movement or organic subject motion."
+    manifest_ref: video/wan-2.2-a14b-smooth-mix-text-to-video
+
+  - id: wan-2-1-14b-text-to-video
+    label: "Wan 2.1 14B"
+    description: "Previous generation 14B dense model. Well-tested and stable, with broad community support for LoRAs and workflows. A reliable fallback when 2.2 variants produce unexpected results."
+    manifest_ref: video/wan-2.1-14b-text-to-video
+
+  - id: wan-2-2-a5b-text-image-to-video
+    label: "Wan 2.2 5B"
+    description: "Compact 5B parameter model that supports both text-to-video and image-to-video in a single checkpoint. Significantly lower VRAM requirements, suitable for consumer GPUs or fast drafting."
+    manifest_ref: video/wan-2.2-5b-text-to-image-to-video

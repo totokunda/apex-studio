@@ -137,8 +137,6 @@ spec:
         flow: column
         rows:
         - - control_image
-        - - mask_image
-        - - inpaint_image
     - name: prompting
       label: Prompting
       collapsible: true
@@ -169,23 +167,6 @@ spec:
         - - control_context_scale
         - - num_inference_steps
     inputs:
-    - id: inpaint_image
-      label: Inpaint Image
-      description: The inpaint image to use for the generation.
-      type: image
-      panel: media
-      required: false
-      map_h: height
-      map_w: width
-    - id: mask_image
-      label: Mask Image
-      description: The mask image to use for the generation.
-      type: image+mask
-      map_to: inpaint_image
-      panel: media
-      required: false
-      map_h: height
-      map_w: width
     - id: control_image
       label: Control Image
       description: The control image to use for the generation.

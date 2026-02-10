@@ -42,6 +42,7 @@ const fonts: FontItem[] = [
   { value: "Impact", label: "Impact", isDownloaded: true },
   { value: "Trebuchet MS", label: "Trebuchet MS", isDownloaded: true },
   { value: "Poppins", label: "Poppins", isPremium: true, isDownloaded: true },
+  { value: "TikTok Sans", label: "TikTok Sans", isPremium: true, isDownloaded: true },
   {
     value: "Montserrat",
     label: "Montserrat",
@@ -72,6 +73,77 @@ const fonts: FontItem[] = [
     isDownloaded: true,
   },
   { value: "Nunito", label: "Nunito", isPremium: true, isDownloaded: true },
+  // Bold/Condensed Display Fonts
+  {
+    value: "Bebas Neue",
+    label: "Bebas Neue",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  { value: "Anton", label: "Anton", isPremium: true, isDownloaded: true },
+  {
+    value: "Archivo Black",
+    label: "Archivo Black",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  {
+    value: "Barlow Condensed",
+    label: "Barlow Condensed",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  // Cinematic/Dramatic Serifs
+  { value: "Cinzel", label: "Cinzel", isPremium: true, isDownloaded: true },
+  {
+    value: "Abril Fatface",
+    label: "Abril Fatface",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  {
+    value: "Libre Baskerville",
+    label: "Libre Baskerville",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  // Handwritten/Script Fonts
+  {
+    value: "Permanent Marker",
+    label: "Permanent Marker",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  { value: "Bangers", label: "Bangers", isPremium: true, isDownloaded: true },
+  {
+    value: "Dancing Script",
+    label: "Dancing Script",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  { value: "Caveat", label: "Caveat", isPremium: true, isDownloaded: true },
+  // Modern Geometric Sans-Serifs
+  { value: "Inter", label: "Inter", isPremium: true, isDownloaded: true },
+  { value: "DM Sans", label: "DM Sans", isPremium: true, isDownloaded: true },
+  {
+    value: "Space Grotesk",
+    label: "Space Grotesk",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  // Monospace Fonts
+  {
+    value: "Source Code Pro",
+    label: "Source Code Pro",
+    isPremium: true,
+    isDownloaded: true,
+  },
+  {
+    value: "JetBrains Mono",
+    label: "JetBrains Mono",
+    isPremium: true,
+    isDownloaded: true,
+  },
 ];
 
 const applyTextTransform = (text: string, textTransform: string) => {

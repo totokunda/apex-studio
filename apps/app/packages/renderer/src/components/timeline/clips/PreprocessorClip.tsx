@@ -950,6 +950,13 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
             sharpness: clip?.sharpness,
             noise: clip?.noise,
             vignette: clip?.vignette,
+            colorTintColor: clip?.colorTintColor,
+            colorTintIntensity: clip?.colorTintIntensity,
+            scanLines: clip?.scanLines,
+            chromaticAberration: clip?.chromaticAberration,
+            interlace: clip?.interlace,
+            pixelate: clip?.pixelate,
+            jitter: clip?.jitter,
           });
         }
       }
@@ -1115,6 +1122,13 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
           sharpness: clip?.sharpness,
           noise: clip?.noise,
           vignette: clip?.vignette,
+          colorTintColor: clip?.colorTintColor,
+          colorTintIntensity: clip?.colorTintIntensity,
+          scanLines: clip?.scanLines,
+          chromaticAberration: clip?.chromaticAberration,
+          interlace: clip?.interlace,
+          pixelate: clip?.pixelate,
+          jitter: clip?.jitter,
         });
       }
       preprocessorRef.current?.getLayer()?.batchDraw();
@@ -1199,6 +1213,13 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
               sharpness: clip?.sharpness,
               noise: clip?.noise,
               vignette: clip?.vignette,
+              colorTintColor: clip?.colorTintColor,
+              colorTintIntensity: clip?.colorTintIntensity,
+              scanLines: clip?.scanLines,
+              chromaticAberration: clip?.chromaticAberration,
+              interlace: clip?.interlace,
+              pixelate: clip?.pixelate,
+              jitter: clip?.jitter,
             });
           }
         } finally {

@@ -94,3 +94,4 @@ yacs==0.1.8
 yapf==0.40.2
 hf_transfer==0.1.9
 pytest==9.0.2
+torchsde==0.2.6

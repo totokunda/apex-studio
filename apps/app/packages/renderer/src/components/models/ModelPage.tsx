@@ -1,6 +1,6 @@
 import { useManifestStore } from "@/lib/manifest/store";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { LuChevronLeft, LuPlus, LuRefreshCw } from "react-icons/lu";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { LuCheck, LuChevronLeft, LuPlus, LuRefreshCw } from "react-icons/lu";
 import { ScrollArea } from "../ui/scroll-area";
 import { useControlsStore } from "@/lib/control";
 import {
@@ -19,23 +19,180 @@ import {
   getLastPathSegment,
   inferExternalFolderFromPath,
 } from "@/lib/externalAssets";
+import type { ManifestGroup, ManifestGroupVariant, ManifestDocument } from "@/lib/manifest";
 
 interface ModelPageProps {
   manifestId: string;
   scrollCache?: Map<string, number>;
   scrollKey?: string;
+  panelSize?: number;
 }
+
+const VariantTabPreview: React.FC<{
+  src: string | undefined;
+  alt: string;
+  className?: string;
+}> = ({ src, alt, className }) => {
+  const [resolvedSrc, setResolvedSrc] = useState<string | undefined>(src);
+  const triedFallbackRef = useRef(false);
+
+  useEffect(() => {
+    triedFallbackRef.current = false;
+    setResolvedSrc(src);
+  }, [src]);
+
+  const ensureFallback = async () => {
+    if (triedFallbackRef.current) return;
+    triedFallbackRef.current = true;
+    if (!src) return;
+    const folder = inferExternalFolderFromPath(src);
+    const seg = getLastPathSegment(src);
+    if (!seg) return;
+    try {
+      const url = await ensureExternalAssetUrl({ folder, filePath: seg });
+      if (url) setResolvedSrc(url);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    const raw = String(src || "").trim().toLowerCase();
+    if (!raw) return;
+    const isAlreadyResolved =
+      raw.startsWith("app://") ||
+      raw.startsWith("http://") ||
+      raw.startsWith("https://") ||
+      raw.startsWith("blob:") ||
+      raw.startsWith("data:");
+    if (!isAlreadyResolved) {
+      void ensureFallback();
+    }
+  }, [src]);
+
+  const isVideo = useMemo(() => {
+    const value = String(resolvedSrc || "").toLowerCase();
+    if (!value) return false;
+    try {
+      const url = new URL(value);
+      const ext = (url.pathname.split(".").pop() || "").toLowerCase();
+      return ["mp4", "webm", "mov", "m4v", "ogg", "m3u8"].includes(ext);
+    } catch {
+      return (
+        value.endsWith(".mp4") ||
+        value.endsWith(".webm") ||
+        value.endsWith(".mov") ||
+        value.endsWith(".m4v") ||
+        value.endsWith(".ogg") ||
+        value.endsWith(".m3u8")
+      );
+    }
+  }, [resolvedSrc]);
+
+  return (
+    <div
+      className={`shrink-0 overflow-hidden rounded-[6px] bg-brand-light/10 ${className || ""}`}
+    >
+      {resolvedSrc ? (
+        isVideo ? (
+          <video
+            src={resolvedSrc}
+            className="h-full w-full object-cover"
+            autoPlay
+            muted
+            loop
+            playsInline
+            onError={() => {
+              void ensureFallback();
+            }}
+          />
+        ) : (
+          <img
+            src={resolvedSrc}
+            alt={alt}
+            className="h-full w-full object-cover"
+            onError={() => {
+              void ensureFallback();
+            }}
+          />
+        )
+      ) : (
+        <div className="h-full w-full" />
+      )}
+    </div>
+  );
+};
 
 const ModelPage: React.FC<ModelPageProps> = ({
   manifestId,
   scrollCache,
   scrollKey,
+  panelSize = 0,
 }) => {
-  const { clearSelectedManifestId } = useManifestStore();
+  const { clearSelectedManifestId, setSelectedManifestId } = useManifestStore();
   const queryClient = useQueryClient();
   const { data: manifest, isFetching } = useManifestQuery(manifestId);
   const [isRefreshingManifest, setIsRefreshingManifest] = React.useState(false);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
+
+  // Find the parent group (if any) for the current manifest.
+  // This enables variant tabs when the manifest belongs to a multi-variant group.
+  const parentGroup: ManifestGroup | null = useMemo(() => {
+    const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
+    if (!Array.isArray(groups) || groups.length === 0) return null;
+
+    for (const group of groups) {
+      const variants = group.variants ?? [];
+      for (const variant of variants) {
+        // Match by manifest_ref id, variant id, or resolved manifest id
+        if (variant.id === manifestId) return group;
+        if (variant.manifest?.metadata?.id === manifestId) return group;
+        if (variant.manifest?.id === manifestId) return group;
+      }
+    }
+    return null;
+  }, [manifestId, queryClient]);
+
+  // Only show tabs when the group has more than one variant
+  const groupVariants: ManifestGroupVariant[] = useMemo(() => {
+    if (!parentGroup) return [];
+    return parentGroup.variants ?? [];
+  }, [parentGroup]);
+
+  const showVariantTabs = groupVariants.length > 1;
+  const [expandedDescriptions, setExpandedDescriptions] = useState<
+    Record<string, boolean>
+  >({});
+
+  // Determine which variant is currently active
+  const activeVariantId: string | null = useMemo(() => {
+    if (!showVariantTabs) return null;
+    for (const variant of groupVariants) {
+      if (variant.id === manifestId) return variant.id;
+      if (variant.manifest?.metadata?.id === manifestId) return variant.id;
+      if (variant.manifest?.id === manifestId) return variant.id;
+    }
+    return null;
+  }, [groupVariants, manifestId, showVariantTabs]);
+
+  const activeVariant = useMemo(() => {
+    if (!activeVariantId) return null;
+    return groupVariants.find((variant) => variant.id === activeVariantId) ?? null;
+  }, [activeVariantId, groupVariants]);
+
+  const resolveVariantTargetId = (variant: ManifestGroupVariant) =>
+    variant.manifest?.metadata?.id ?? variant.manifest?.id ?? variant.id;
+
+  // Enforce hard bounds for variant rows/text based on current panel width.
+  const variantRowMaxWidth = useMemo(() => {
+    if (!panelSize || panelSize <= 0) return undefined;
+    return Math.max(0, panelSize - 72);
+  }, [panelSize]);
+  const variantTextMaxWidth = useMemo(() => {
+    if (!panelSize || panelSize <= 0) return undefined;
+    return Math.max(0, panelSize - 124);
+  }, [panelSize]);
+
   if (!manifest) return null;
 
   const demoPath = manifest.metadata?.demo_path || manifest.demo_path;
@@ -129,7 +286,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
               Back
             </span>
           </div>
-          <div className="mt-4 flex flex-row gap-x-4 w-full">
+          <div className="mt-4 flex min-w-0 w-full flex-row gap-x-4 overflow-x-hidden">
             <div className="rounded-md overflow-hidden flex items-center w-44 aspect-square justify-start shrink-0">
               {isVideoDemo ? (
                 <video
@@ -154,12 +311,16 @@ const ModelPage: React.FC<ModelPageProps> = ({
                 />
               )}
             </div>
-
-            <div className="flex flex-col gap-y-1 w-full justify-start">
-              <h2 className="text-brand-light text-[18px] font-semibold text-start">
-                {manifest.metadata.name}
+            <div className="flex min-w-0 flex-1 flex-col gap-y-1 justify-start overflow-x-hidden">
+              <h2 className="text-brand-light text-[18px] font-semibold text-start wrap-break-word">
+                {parentGroup ? parentGroup.name : manifest.metadata.name}
               </h2>
-              <p className="text-brand-light/90 text-[12px] text-start">
+              {parentGroup && (
+                <p className="text-brand-light/50 text-[11px] text-start -mt-0.5">
+                  {manifest.metadata.name}
+                </p>
+              )}
+              <p className="text-brand-light/90 text-[12px] text-start wrap-break-word">
                 {manifest.metadata.description}
               </p>
 
@@ -184,11 +345,11 @@ const ModelPage: React.FC<ModelPageProps> = ({
               </div>
             </div>
           </div>
-          {manifest.downloaded ? (
-            <div className="mt-5 ">
+          {(
+            <div className="mt-4">
               <button
                 type="button"
-                className="text-[11px] font-medium w-full flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded-[6px] px-12 py-2 shrink-0 text-brand-light hover:text-brand-light/90 bg-brand-accent-two-shade hover:bg-brand-accent-two-shade/90"
+                className="text-[11px] font-medium w-full flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded-[6px] px-12 py-2.5 shrink-0 text-brand-light hover:text-brand-light/90 bg-brand-background-light hover:bg-brand/90 border border-brand-light/10"
                 title="Add clip at playhead"
                 onClick={async () => {
                   try {
@@ -248,7 +409,10 @@ const ModelPage: React.FC<ModelPageProps> = ({
                       });
                       targetTimelineId = timelineId;
                     }
-                    // Build and add clip
+                    // Build and add clip – prefer the active variant's resolved
+                    // manifest when available so the clip tracks the exact variant.
+                    const variantManifest =
+                      (activeVariant?.manifest as ManifestDocument | null | undefined) ?? manifest;
                     const newClipId = uuidv4();
                     const clipBase: any = {
                       timelineId: targetTimelineId,
@@ -260,10 +424,13 @@ const ModelPage: React.FC<ModelPageProps> = ({
                       trimEnd: -Infinity,
                       trimStart: Infinity,
                       speed: 1.0,
-                      manifest: manifest,
+                      manifest: variantManifest,
                     };
+                    if (parentGroup) {
+                      clipBase.group = parentGroup;
+                    }
                     try {
-                      const mfId = String(manifest?.metadata?.id || "").trim();
+                      const mfId = String(variantManifest?.metadata?.id || "").trim();
                       if (mfId) {
                         const defaults = await getOffloadDefaultsForManifest(mfId);
                         if (defaults) {
@@ -281,8 +448,116 @@ const ModelPage: React.FC<ModelPageProps> = ({
                 <span className="">Add Clip</span>
               </button>
             </div>
-          ) : null}
-          <div className="mt-5 ">
+          )}
+          {/* Variant selector - only rendered when the manifest belongs to a group */}
+          {showVariantTabs && (
+            <div className="mt-5 min-w-0 w-full overflow-x-hidden">
+              <div className="w-full min-w-0 max-w-full overflow-hidden">
+                <div className="text-brand-light text-[13.5px] font-semibold text-start mb-2">
+                  Variants
+                </div>
+                <div className="w-full min-w-0 max-w-full overflow-hidden rounded-[6px] gap-y-2 flex flex-col">
+                  {groupVariants.map((variant) => {
+                    const isActive = variant.id === activeVariantId;
+                    const targetId = resolveVariantTargetId(variant);
+                    const description = variant.description || "";
+                    const previewPath =
+                      variant.manifest?.metadata?.demo_path ??
+                      variant.manifest?.demo_path ??
+                      parentGroup?.metadata?.demo_path ??
+                      parentGroup?.demo_path;
+                    const isExpanded = !!expandedDescriptions[variant.id];
+                    const shouldShowToggle = description.length > 90;
+                    return (
+                      <div
+                        key={variant.id}
+                        className="flex-1 relative w-full min-w-0 max-w-full overflow-hidden  text-brand-light text-[11px] cursor-pointer bg-brand px-3 py-2 rounded-[6px] data-[state=active]:bg-brand-light/10 text-start hover:bg-brand-light/10 transition-colors duration-200 border border-brand-light/10"
+                        style={
+                          variantRowMaxWidth
+                            ? { maxWidth: `${variantRowMaxWidth}px` }
+                            : undefined
+                        }
+                        data-state={isActive ? "active" : "inactive"}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          if (!isActive && targetId) {
+                            setSelectedManifestId(targetId);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if ((e.key === "Enter" || e.key === " ") && !isActive && targetId) {
+                            e.preventDefault();
+                            setSelectedManifestId(targetId);
+                          }
+                        }}
+                      >
+
+                        <div className="flex w-full min-w-0 max-w-full items-start gap-2.5">
+                          <VariantTabPreview
+                            src={previewPath}
+                            alt={variant.label || "Variant"}
+                            className="h-12 w-12 mt-0.5"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div
+                              className="block w-full min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-medium"
+                              style={
+                                variantTextMaxWidth
+                                  ? { maxWidth: `${variantTextMaxWidth}px` }
+                                  : undefined
+                              }
+                            >
+                              {variant.label}
+                            </div>
+                            <div
+                              className="mt-0.5 w-full min-w-0 max-w-full overflow-hidden"
+                              style={
+                                variantTextMaxWidth
+                                  ? { maxWidth: `${variantTextMaxWidth}px` }
+                                  : undefined
+                              }
+                            >
+                              <div
+                                className={`block w-full min-w-0 max-w-full text-brand-light/60 text-[10px] font-medium ${
+                                  isExpanded
+                                    ? "overflow-hidden whitespace-normal wrap-break-word"
+                                    : "truncate"
+                                }`}
+                              >
+                                {description}
+                              </div>
+                              {shouldShowToggle && (
+                                <button
+                                  type="button"
+                                  className="mt-0.5 text-[10px] font-medium text-brand-light/80 underline decoration-brand-light/30 underline-offset-2 hover:text-brand-light"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setExpandedDescriptions((prev) => ({
+                                      ...prev,
+                                      [variant.id]: !prev[variant.id],
+                                    }));
+                                  }}
+                                  onKeyDown={(e) => {
+                                    e.stopPropagation();
+                                  }}
+                                >
+                                  {isExpanded ? "See less" : "See more"}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+          
+          
+          <div className="mt-3 ">
             <div className="flex items-center justify-between">
               <h3 className="text-brand-light text-[13.5px] font-semibold text-start">
                 Model Architecture

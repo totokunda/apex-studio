@@ -2,11 +2,11 @@ api_version: apex/v1
 kind: Model
 type: video
 metadata:
-  id: mova-image-to-video-audio
+  id: mova-image-to-video-audio-720p
   model: wan
-  name: MOVA Image to Video Audio
+  name: MOVA Image to Video Audio 720p
   version: 0.1.2
-  description: MOVA is a 14B parameter model for image-to-video-audio generation.
+  description: MOVA is a 14B parameter model for image-to-video-audio generation at 720p resolution.
   tags:
   - mova
   - i2v

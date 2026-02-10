@@ -1,0 +1,30 @@
+api_version: apex/v1
+kind: ModelGroup
+type: upscaler
+
+metadata:
+  id: group-flashvsr-1.1
+  name: FlashVSR 1.1
+  description: FlashVSR 1.1 is an upscaler model for video and image upscaling.
+  tags:
+    - flashvsr
+    - upscaler
+    - "1.1"
+  author: FlashVSR
+  license: Apache-2.0
+  demo_path: models/flashvsr-full.mp4
+  categories:
+    - upscale
+
+variants:
+  - id: flashvsr-1.1-full
+    label: "FlashVSR 1.1 Full"
+    description: "Full-scale upscaler using a larger VAE decoder for maximum reconstruction quality. Recovers fine detail, sharpens textures, and reduces artifacts in upscaled video and images at the cost of higher VRAM usage."
+    manifest_ref: upscalers/flashvsr-1.1-full
+    default: true
+
+  - id: flashvsr-1.1-tiny
+    label: "FlashVSR 1.1 Tiny"
+    description: "Lightweight upscaler with a compact VAE decoder that requires significantly less memory. Delivers good visual improvement with faster processing times, suitable for batch upscaling or memory-constrained systems."
+    manifest_ref: upscalers/flashvsr-1.1-tiny
+

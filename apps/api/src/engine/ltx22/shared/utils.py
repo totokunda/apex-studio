@@ -5,7 +5,7 @@ import torch
 
 
 from src.engine.ltx22.shared.protocols import DiffusionStepProtocol
-from ltx_core.types import LatentState
+from src.engine.ltx22.shared.types import LatentState
 from src.engine.ltx22.shared.constants import VIDEO_LATENT_CHANNELS, VIDEO_SCALE_FACTORS
 from src.engine.ltx22.shared.patchifiers import VideoLatentPatchifier, AudioPatchifier
 

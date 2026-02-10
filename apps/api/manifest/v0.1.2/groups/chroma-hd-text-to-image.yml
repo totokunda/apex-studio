@@ -1,0 +1,24 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-chroma-hd-text-to-image
+  name: Chroma HD
+  description: Chroma HD is a 8.9B parameter model for text-to-image generation.
+  tags:
+    - chroma
+    - hd
+    - t2i
+  author: LodestoneRock
+  license: Apache-2.0
+  demo_path: models/chroma-1-hd.png
+  categories:
+    - text-to-image
+
+variants:
+  - id: chroma-hd-text-to-image
+    label: "Chroma HD"
+    description: "8.9B parameter text-to-image model optimized for high-definition output. Delivers sharp, photorealistic images with accurate color reproduction, fine texture detail, and strong coherence at high resolutions."
+    manifest_ref: image/chroma-hd-text-to-image
+    default: true

@@ -1504,7 +1504,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
     <Droppable className="w-full" id={droppableId} accepts={["media"]}>
       <div
         ref={divRef}
-        className="flex flex-col items-start w-full gap-y-1 min-w-0   h-full"
+        className="flex flex-col items-start w-full gap-y-1 min-w-0 bg-brand rounded-[7px]  h-full"
         style={{ height: height ? `${height}px` : undefined }}
       >
         <div
@@ -1664,7 +1664,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
               value={value}
               onChange={emitSelection}
               clipId={clipId}
-          onSelectComplete={() => setIsPopoverOpen(false)}
+              onSelectComplete={() => setIsPopoverOpen(false)}
             />
           </Popover>
           <div

@@ -1,6 +1,6 @@
 api_version: apex/v1
 kind: Model
-type: video
+type: audio
 metadata:
   id: mmaudio
   model: wan
@@ -69,7 +69,6 @@ spec:
       precision: fp16
       type: safetensors
   - type: text_encoder
-    label: Text Encoder
     name: text_encoder
     label: CLIP Model
     base: CLIPModel

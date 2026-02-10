@@ -2,7 +2,7 @@ from typing import Protocol, Tuple
 
 import torch
 
-from ltx_core.types import AudioLatentShape, VideoLatentShape
+from src.engine.ltx22.shared.types import AudioLatentShape, VideoLatentShape
 
 
 class Patchifier(Protocol):

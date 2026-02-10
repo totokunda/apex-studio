@@ -1,7 +1,7 @@
 from typing import Protocol
 
-from ltx_core.tools import LatentTools
-from ltx_core.types import LatentState
+from src.engine.ltx22.shared.tools import LatentTools
+from src.engine.ltx22.shared.types import LatentState
 
 
 class ConditioningItem(Protocol):

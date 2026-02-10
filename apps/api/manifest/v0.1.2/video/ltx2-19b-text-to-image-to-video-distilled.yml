@@ -161,15 +161,22 @@ spec:
       upsample: true
   ui:
     panels:
-    - name: media
-      label: Media
+    - name: image_media
+      label: Image Media
       collapsible: true
       default_open: true
       layout:
         flow: column
         rows:
         - - image
-        - - last_image
+          - last_image
+    - name: audio_media
+      label: Audio Media
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
         - - audio
     - name: prompting
       label: Prompting

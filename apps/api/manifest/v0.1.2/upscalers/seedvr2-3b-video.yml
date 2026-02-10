@@ -2,15 +2,16 @@ api_version: apex/v1
 kind: Model
 type: upscale
 metadata:
-  id: seedvr2-3b
+  id: seedvr2-3b-video
   model: seedvr2
-  name: SeedVR2 3B
-  version: 0.1.2
-  description: SeedVR2 3B is an upscaler model for video and image upscaling that
+  name: SeedVR2 3B Video
+  version: "0.1.2"
+  description: SeedVR2 3B is an upscaler model for video upscaling that
     uses a 3B VAE.
   tags:
   - seedvr2
   - upscaler
+  - video
   - 3b
   author: SeedVR
   license: Apache-2.0
@@ -94,7 +95,6 @@ spec:
         flow: column
         rows:
         - - video
-        - - image
     - name: size
       label: Size
       collapsible: true
@@ -149,15 +149,6 @@ spec:
       label: Video
       description: The input video to upscale.
       type: video
-      panel: input
-      required: false
-      map_h: height
-      map_w: width
-      scale_by: resolution
-    - id: image
-      label: Image
-      description: The input image to upscale.
-      type: image
       panel: input
       required: false
       map_h: height

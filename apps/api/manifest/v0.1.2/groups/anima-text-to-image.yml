@@ -1,0 +1,24 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-anima-text-to-image
+  name: Anima
+  description: Anima is a 2B parameter model for anime text-to-image generation.
+  tags:
+    - anima
+    - t2i
+    - anime
+  author: Circlestone Labs
+  license: Apache-2.0
+  demo_path: models/anima-text-to-image.jpg
+  categories:
+    - text-to-image
+
+variants:
+  - id: anima-text-to-image
+    label: "Anima"
+    description: "Lightweight 2B parameter model purpose-built for anime and illustration-style image generation. Produces vivid, stylistically consistent anime artwork from text prompts with fast generation times and low resource requirements."
+    manifest_ref: image/anima-text-to-image
+    default: true
