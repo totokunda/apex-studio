@@ -1,0 +1,31 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-flux2-dev
+  name: Flux2 Dev
+  description: Flux2 is a 32B parameter model for text-to-image and image-to-image generation.
+  tags:
+    - flux2
+    - dev
+    - image-edit
+    - i2i
+  author: Black Forest Labs
+  license: Apache-2.0
+  demo_path: models/flux-dev-2-text-to-image-edit.png
+  categories:
+    - image-edit
+    - text-to-image
+
+variants:
+  - id: flux2-dev-text-to-image-edit
+    label: "Flux2 Dev Text to Image Edit"
+    description: "Full 32B parameter model delivering maximum image quality with rich detail, accurate text rendering, and strong prompt adherence. Best for final-quality renders where generation speed is secondary."
+    manifest_ref: image/flux2-dev-text-to-image-edit
+    default: true
+
+  - id: flux2-dev-text-to-image-edit-turbo
+    label: "Flux2 Dev Text to Image Edit Turbo"
+    description: "Accelerated 32B variant that achieves near-standard quality in significantly fewer inference steps. Ideal for rapid iteration, batch generation, and workflows where speed matters more than the last bit of fidelity."
+    manifest_ref: image/flux2-dev-text-to-image-edit-turbo

@@ -7,6 +7,7 @@ import React, {
 } from "react";
 import {
   type ManifestDocument,
+  type ManifestGroup,
   type ModelTypeInfo,
 } from "@/lib/manifest";
 import { cn } from "@/lib/utils";
@@ -17,16 +18,14 @@ import {
   LuArrowRight,
   LuSearch,
   LuInfo,
-  LuDownload,
-  LuLoader,
   LuPlus,
   LuRefreshCw,
-  LuCircleSlash,
+  LuSettings,
 } from "react-icons/lu";
 import { TbWorldDownload } from "react-icons/tb";
 import Draggable from "../dnd/Draggable";
 import { useManifestStore } from "@/lib/manifest/store";
-import { extractAllDownloadablePaths } from "@/lib/manifest/api";
+
 import {
   ensureExternalAssetUrl,
   getLastPathSegment,
@@ -47,10 +46,12 @@ import { v4 as uuidv4 } from "uuid";
 import { useQuery, useQueryClient} from "@tanstack/react-query";
 import {
   fetchManifestsAndPrimeCache,
+  fetchManifestGroups,
   fetchModelTypes,
+  prefetchModelMenuQueries,
   useManifestQuery,
 } from "@/lib/manifest/queries";
-import { useDownloadJobIdStore } from "@/lib/download/job-id-store";
+
 import { getOffloadDefaultsForManifest } from "@app/preload";
 
 export const ModelItem: React.FC<{
@@ -63,12 +64,17 @@ export const ModelItem: React.FC<{
   const hiddenMeasureRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [visibleTagCount, setVisibleTagCount] = useState<number | null>(null);
-  const [isStartingDownload, setIsStartingDownload] = useState(false);
   const { data: manifestData } = useManifestQuery(initialManifest.metadata?.id || "");
   const manifest = manifestData ?? initialManifest;
-  const {getSourceToJobId, getJobUpdates} = useDownloadJobIdStore();
 
-  const demoPath = manifest.metadata?.demo_path;
+  // Keep group metadata stable even when manifestData refreshes and does not
+  // carry the transient `_group` field.
+  const group =
+    ((initialManifest as any)?._group as ManifestGroup | undefined) ??
+    ((manifestData as any)?._group as ManifestGroup | undefined);
+  const displayName = group?.name ?? manifest.metadata?.name;
+  const displayTags = group?.tags ?? manifest.metadata?.tags;
+  const demoPath = group?.demo_path || manifest.metadata?.demo_path;
 
   const isVideoDemo = React.useMemo(() => {
     const value = (manifest.metadata?.demo_path || "").toLowerCase();
@@ -174,21 +180,6 @@ export const ModelItem: React.FC<{
     }
   };
 
-  const allDownloadablePaths = useMemo(() => {
-    return extractAllDownloadablePaths(manifest);
-  }, [manifest]);
-
-
-  
-  const isDownloading = allDownloadablePaths.some((path) => {
-      const jobId = getSourceToJobId(path.path);
-      return jobId && (getJobUpdates(jobId)?.length ?? 0) > 0;
-    });
-
-
-  const allDownloaded = useMemo(() => {
-    return (manifestData?.downloaded ?? manifest.downloaded) && !isDownloading;
-  }, [manifest.downloaded, isDownloading]);
 
   // Compute how many tags fit on a single line
   useLayoutEffect(() => {
@@ -231,24 +222,21 @@ export const ModelItem: React.FC<{
       ro.disconnect();
       window.removeEventListener("resize", computeVisibleTags);
     };
-  }, [manifest.metadata?.tags]);
-
-
-
-  useEffect(() => {
-    if (isDownloading) {
-      setIsStartingDownload(false);
-    }
-  }, [isDownloading]);
-
+  }, [displayTags]);
 
 
   const card = (
-    <div className="flex flex-col items-center relative w-full ">
+    <div className={cn("flex flex-col items-center relative w-full ", {
+      "rounded-md": isDragging,
+      "rounded-t-md": !isDragging,
+    })}>
       <div
         className={cn(
-          "rounded-t-md overflow-hidden  flex items-center justify-center w-full aspect-square h-28",
-          {},
+          " overflow-hidden flex items-center justify-center aspect-square relative",
+          {
+            "rounded-md": isDragging,
+            "rounded-t-md": !isDragging,
+          },
         )}
       >
         {isVideoDemo ? (
@@ -256,8 +244,8 @@ export const ModelItem: React.FC<{
             {resolvedPosterPath ? (
               <img
                 src={resolvedPosterPath}
-                alt={manifest.metadata?.name}
-                className="absolute inset-0 h-full w-full object-cover rounded-t-md"
+                alt={displayName}
+                className="w-48 h-48 object-cover rounded-t-md"
                 onError={() => {
                   void ensureDemoFallback();
                 }}
@@ -268,7 +256,7 @@ export const ModelItem: React.FC<{
               ref={videoRef}
               src={resolvedDemoPath}
               poster={resolvedPosterPath}
-              className="absolute inset-0 h-full w-full object-cover rounded-t-md"
+              className="w-48 h-48 object-cover rounded-t-md"
               preload="none"
               muted
               loop
@@ -281,40 +269,32 @@ export const ModelItem: React.FC<{
             />
           </div>
         ) : (
-          <img
-            src={resolvedDemoPath}
-            alt={manifest.metadata?.name}
-            className="h-full w-full object-cover rounded-t-md"
-            onError={() => {
-              void ensureDemoFallback();
-            }}
-          />
+          <div className="relative w-full h-full">
+            <img
+              src={resolvedDemoPath}
+              alt={displayName}
+              className="w-48 h-48 object-cover rounded-t-md"
+              onError={() => {
+                void ensureDemoFallback();
+              }}
+            />
+          </div>
         )}
+        <div
+          className="absolute inset-0 rounded-t-sm bg-linear-to-b from-black/80 via-black/30 to-transparent pointer-events-none"
+          aria-hidden
+        />
+        <div className="absolute top-1 left-1 right-0 px-3 py-2.5 pointer-events-none min-w-0 text-start">
+          <span className="block truncate text-[13px] font-semibold text-white drop-shadow-md">
+            {displayName}
+          </span>
+        </div>
       </div>
     </div>
   );
 
   const details = (
-    <div className="flex flex-col gap-y-1.5 py-3.5 pb-2 px-3 border-t border-brand-light/5 w-full ">
-      <div className="w-full truncate leading-tight font-semibold text-brand-light text-[12px] text-start">
-        {manifest.metadata?.name}
-      </div>
-      <div
-        ref={tagsContainerRef}
-        className="flex items-center gap-x-1 w-full justify-start gap-y-1 overflow-hidden"
-      >
-        {(visibleTagCount == null
-          ? manifest.metadata?.tags
-          : manifest.metadata?.tags?.slice(0, visibleTagCount)
-        )?.map((tag: string) => (
-          <span
-            key={tag}
-            className="text-[8px] text-brand-light bg-brand-background border shadow border-brand-light/10 rounded px-2 py-0.5 "
-          >
-            {tag}
-          </span>
-        ))}
-      </div>
+    <div className="flex flex-col gap-y-1.5  px-3  w-full ">
       <div
         ref={hiddenMeasureRef}
         aria-hidden
@@ -326,7 +306,7 @@ export const ModelItem: React.FC<{
         }}
         className="flex items-center gap-x-1 flex-wrap justify-start gap-y-1"
       >
-        {manifest?.metadata?.tags?.map((tag: string) => (
+        {displayTags?.map((tag: string) => (
           <span
             key={tag}
             className="text-[8px] text-brand-light bg-brand-background border shadow border-brand-light/10 rounded px-2 py-0.5 "
@@ -340,50 +320,29 @@ export const ModelItem: React.FC<{
 
   const stableId = `model-${manifest.metadata?.id}-${category}`;
 
-  return (
+  const tags = (
     <div
-      className={cn(
-        "flex flex-col transition-all font-poppins duration-200 rounded-md relative bg-brand border border-brand-light/5 shadow-md cursor-grab active:cursor-grabbing",
-        {
-          "w-60": true,
-          "opacity-[0.975]": isDragging,
-        },
-      )}
-    >
-      {isDragging ? (
-        <>
-          {card}
-          {details}
-        </>
-      ) : (
-        <Draggable
-          id={stableId}
-          data={{
-            type: "model",
-            category: category,
-            ...manifest,
-          }}
-        >
-          {card}
-          {details}
-        </Draggable>
-      )}
-      {!isDragging && (
-        <div className="flex items-center gap-x-1 w-full p-3 pt-0 justify-between">
+    ref={tagsContainerRef}
+    className="flex items-center gap-x-1 w-full overflow-hidden absolute bottom-1.5 left-1.5 right-0"
+  >
+    {(visibleTagCount == null
+      ? displayTags
+      : displayTags?.slice(0, visibleTagCount)
+    )?.map((tag: string) => (
+      <span
+        key={tag}
+        className="text-[8px] text-brand-light backdrop-blur-sm  shadow  rounded-[4px] px-2 py-0.5 bg-brand/60"
+      >
+        {tag}
+      </span>
+    ))}
+  </div>
+  );
+
+  const buttons = (
+        <div className=" w-full flex flex-row items-center rounded-b-lg shadow-lg">
+          
           <button
-            onClick={() => {
-              setSelectedManifestId(manifest.metadata?.id || "");
-            }}
-            type="button"
-            className="text-[10px] font-medium w-1/2 flex items-center transition-all duration-200 justify-center gap-x-1.5 text-brand-light  hover:text-brand-light/80 bg-brand-background hover:bg-brand-background/70 border border-brand-light/10 rounded px-2 py-1.5"
-            title="Show more info"
-          >
-            {allDownloaded ? <LuInfo className="w-3 h-3" /> : <LuDownload className="w-3 h-3" />}
-            <span>
-              {allDownloaded ? "Info" : "Download"}
-            </span>
-          </button>
-          {<button
             onClick={async () => {
               try {
                 const controls = useControlsStore.getState();
@@ -459,6 +418,9 @@ export const ModelItem: React.FC<{
                   category,
                 };
                 clipBase.manifest = manifest;
+                if (group) {
+                  clipBase.group = group;
+                }
                 try {
                   const mfId = String(manifest?.metadata?.id || "").trim();
                   if (mfId) {
@@ -474,25 +436,67 @@ export const ModelItem: React.FC<{
               } catch {}
             }}
             type="button"
-            disabled={!allDownloaded}
             className={cn(
-              "text-[10px] font-medium disabled:opacity-50 disabled:cursor-default! w-1/2 flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded px-2 py-1.5 border text-brand-light hover:text-brand-light/90 bg-brand-background hover:bg-brand-background/70 border-brand-light/10",
+              "text-[10px] w-full font-medium disabled:opacity-50 z-20 disabled:cursor-default! flex items-center transition-all duration-200 justify-center gap-x-1 rounded-bl-md px-2 py-2.5 border-0 text-brand-light hover:text-white backdrop-blur-sm bg-brand-background-light hover:bg-brand/90 border-r border-brand-light/5",
             )}
             title={
-              allDownloaded ? "Add clip at playhead" : "No Weights"  
+             "Add clip at playhead"
             }
           >
-            {allDownloaded ? (
-              <LuPlus className="w-3 h-3" />
-            ) : isStartingDownload || isDownloading ? (
-              <LuLoader className="w-3 h-3 animate-spin" />
-            ) : (
-              <LuCircleSlash className="w-3 h-3" />
-            )}
+            <LuPlus className="w-3 h-3" />
             <span>
-              {allDownloaded ? "Add Clip" : "No Weights"}
+              Add Clip
             </span>
-          </button>}
+          </button>
+          <button
+            onClick={() => {
+              setSelectedManifestId(manifest.metadata?.id || "");
+            }}
+            type="button"
+            className="text-[10px] font-medium w-full flex items-center transition-all duration-200 border-0 justify-center gap-x-1 text-brand-light hover:text-white backdrop-blur-sm bg-brand-background-light hover:bg-brand/90  border-brand-light/5 rounded-br-md px-2 py-2.5"
+            title="Show more info"
+          >
+            <LuSettings className="w-3 h-3" />
+            <span>Manage</span>
+          </button>
+        </div>
+      );
+  
+  return (
+    <div
+      className={cn(
+        "group flex flex-col transition-all font-poppins duration-200 rounded-md relative shadow-md cursor-grab active:cursor-grabbing",
+        {
+          "w-48": true,
+          "opacity-[0.975]": isDragging,
+        },
+      )}
+    >
+      {isDragging ? (
+        <div className="flex flex-col items-center relative w-full rounded-md">
+          {card}
+          {tags}
+          {details}
+        </div>
+      ) : (
+        <Draggable
+          id={stableId}
+          data={{
+            ...manifest,
+            type: "model",
+            category: category,
+            _group: group,
+          }}
+        >
+          {card}
+          {tags}
+          {details}
+        </Draggable>
+      )}
+      {!isDragging && (
+        <div className="w-full flex flex-col items-center  ">
+
+          {buttons}
         </div>
       )}
     </div>
@@ -678,17 +682,48 @@ const CategoryDetailView: React.FC<{
   );
 };
 
-const ModelMenu: React.FC = () => {
+const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const scrollCacheRef = useRef<Map<string, number>>(new Map());
   const {selectedManifestId} = useManifestStore();
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    // Ensure model data is warm even if the user jumps directly
+    // into the Models tab before global startup prefetch completes.
+    void prefetchModelMenuQueries(queryClient);
+  }, [queryClient]);
   // Keep showing the last successfully rendered data while queries refetch/error,
   // to avoid the menu ever flashing "nothing" after it has rendered once.
   const lastGoodManifestsRef = useRef<ManifestDocument[] | null>(null);
   const lastGoodModelTypesRef = useRef<ModelTypeInfo[] | null>(null);
 
+  // Groups are the PRIMARY data source for the model menu.
+  // Each group represents a model family; its default variant's manifest is
+  // displayed as the card.  The flat manifest list only runs as a fallback
+  // for backends that haven't been upgraded to support groups yet.
+  const groupsQuery = useQuery<ManifestGroup[]>({
+    queryKey: ["manifestGroups"],
+    queryFn: () => fetchManifestGroups(queryClient),
+    initialData: () =>
+      queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]),
+    placeholderData: (prev) => prev,
+    retry: true,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
+  // Derived flags: only fall back to flat manifest list when groups have
+  // settled and returned nothing (old backend or genuinely empty).
+  const groupsResolved = groupsQuery.isFetched;
+  const groupsAvailable =
+    Array.isArray(groupsQuery.data) && groupsQuery.data.length > 0;
+
+  // Flat manifest list – ONLY runs when the groups endpoint fails or returns
+  // empty.  When groups are available the per-manifest cache is already primed
+  // by fetchManifestGroups, so we skip this call entirely.
   const manifestsQuery = useQuery<ManifestDocument[]>({
     queryKey: ["manifest"],
     queryFn: () => fetchManifestsAndPrimeCache(queryClient),
@@ -699,6 +734,7 @@ const ModelMenu: React.FC = () => {
     refetchOnWindowFocus: false,
     staleTime: Infinity,
     gcTime: Infinity,
+    enabled: groupsResolved && !groupsAvailable,
   });
   
   const modelTypesQuery = useQuery<ModelTypeInfo[]>({
@@ -708,11 +744,13 @@ const ModelMenu: React.FC = () => {
     placeholderData: (prev) => prev,
     retry: true,
     refetchOnWindowFocus: false,
-    staleTime: 30000,
+    staleTime: Infinity,
+    gcTime: Infinity,
 
   });
 
   const manifestsData = manifestsQuery.data;
+  const groupsData = groupsQuery.data;
   const modelTypesData = modelTypesQuery.data;
 
   useEffect(() => {
@@ -727,7 +765,11 @@ const ModelMenu: React.FC = () => {
     }
   }, [modelTypesData]);
 
-  const backendUnavailable = manifestsQuery.isError;
+  // Backend is unavailable when groups resolved with nothing AND the fallback
+  // flat manifest query also failed.  (fetchManifestGroups never throws – it
+  // returns [] on any error – so we check the resolved data instead.)
+  const backendUnavailable =
+    groupsResolved && !groupsAvailable && manifestsQuery.isFetched && manifestsQuery.isError;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -735,6 +777,7 @@ const ModelMenu: React.FC = () => {
   const categorySectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const DOWNLOADED_CATEGORY = "Downloaded";
+  const isSearching = searchQuery.trim().length > 0;
 
   const stableModelTypes: ModelTypeInfo[] = useMemo(() => {
     if (Array.isArray(modelTypesData) && modelTypesData.length > 0) return modelTypesData;
@@ -751,27 +794,75 @@ const ModelMenu: React.FC = () => {
     return map;
   }, [stableModelTypes]);
 
+  // Groups are the ONLY models shown in the menu when available.
+  // Each group is represented by its default variant's manifest as a single card.
+  // The flat manifest list is a pure fallback for old backends without groups.
   const manifests: ManifestDocument[] = useMemo(() => {
+    // --- Primary: derive exclusively from groups ---
+    if (Array.isArray(groupsData) && groupsData.length > 0) {
+      const groupManifests: ManifestDocument[] = [];
+      const seenIds = new Set<string>();
+
+      for (const group of groupsData) {
+        const variants = group.variants ?? [];
+        const defaultVariant = variants.find((v) => v.default) ?? variants[0];
+        if (!defaultVariant) continue;
+
+        let manifest = defaultVariant.manifest as ManifestDocument | null | undefined;
+
+        // If the backend didn't resolve the ref, try the flat cache
+        if (!manifest && defaultVariant.id && Array.isArray(manifestsData)) {
+          manifest = manifestsData.find(
+            (m) => m.metadata?.id === defaultVariant.id,
+          );
+        }
+
+        if (manifest) {
+          const id = manifest.metadata?.id;
+          if (id && !seenIds.has(id)) {
+            seenIds.add(id);
+            // Carry the parent group so downstream components can read variants
+            (manifest as any)._group = group;
+            groupManifests.push(manifest);
+          }
+        }
+      }
+
+      // Groups are the authoritative source – return only what groups define
+      return groupManifests;
+    }
+
+    // --- Fallback: flat manifest list (old backend without groups) ---
     if (Array.isArray(manifestsData) && manifestsData.length > 0) return manifestsData;
     if (
-      (manifestsQuery.isFetching ||
-        manifestsQuery.isError) &&
+      (manifestsQuery.isFetching || manifestsQuery.isError) &&
       lastGoodManifestsRef.current
     ) {
       return lastGoodManifestsRef.current;
     }
     return manifestsData ?? lastGoodManifestsRef.current ?? [];
   }, [
+    groupsData,
     manifestsData,
     manifestsQuery.isFetching,
     manifestsQuery.isError,
   ]);
 
+  // Category keys should reflect both the group definition (authoritative for
+  // grouped model families) and the manifest itself (fallback/compatibility).
+  const getManifestCategoryKeys = (manifest: ManifestDocument): string[] => {
+    const groupCategories =
+      ((manifest as any)?._group as ManifestGroup | undefined)?.metadata
+        ?.categories ?? [];
+    const manifestCategories = manifest.metadata?.categories ?? [];
+    return Array.from(new Set([...groupCategories, ...manifestCategories]));
+  };
+
   const filteredManifests = useMemo(() => {
     if (!searchQuery.trim()) return manifests;
     const query = searchQuery.toLowerCase();
     return manifests.filter((m) => {
-      const categoryKeys: string[] = m.metadata?.categories || [];
+      const categoryKeys = getManifestCategoryKeys(m);
       const categoryLabels = categoryKeys.map(
         (k) => manifestCategoryKeyToLabel.get(k) || k,
       );
@@ -791,7 +882,7 @@ const ModelMenu: React.FC = () => {
   const categories = useMemo(() => {
     const set = new Set<string>();
     filteredManifests.forEach((m) => {
-      const categoryKeys: string[] = m.metadata?.categories || [];
+      const categoryKeys = getManifestCategoryKeys(m);
       categoryKeys.forEach((k) => {
         const label =
           manifestCategoryKeyToLabel.get(k) ||
@@ -950,6 +1041,7 @@ const ModelMenu: React.FC = () => {
         manifestId={selectedManifestId}
         scrollCache={scrollCacheRef.current}
         scrollKey={`modelMenu:model:${selectedManifestId}`}
+        panelSize={panelSize}
       />
     );
   }
@@ -978,7 +1070,7 @@ const ModelMenu: React.FC = () => {
           <CategoryDetailView
             category={selectedCategory}
             manifests={filteredManifests.filter((m) => {
-              const keys: string[] = m.metadata?.categories || [];
+              const keys = getManifestCategoryKeys(m);
               const labels = keys.map(
                 (k) =>
                   manifestCategoryKeyToLabel.get(k) ||
@@ -996,23 +1088,26 @@ const ModelMenu: React.FC = () => {
 
   const hasAnyManifests = manifests.length > 0;
   const hasAnyFiltered = filteredManifests.length > 0;
-  const showEmptyState = manifestsQuery.isFetched && !hasAnyFiltered;
+  // Show empty state only after the primary query (groups) has settled.
+  // When groups returned nothing, also wait for the fallback manifest query.
+  const primaryFetched = groupsAvailable || (groupsResolved && manifestsQuery.isFetched);
+  const showEmptyState = primaryFetched && !hasAnyFiltered;
 
   return (
     <>
       <style>{`
         .carousel-container::-webkit-scrollbar { display: none; }
       `}</style>
-      <div className="flex flex-col h-full w-full border-t border-brand-light/5 mt-2">
+      <div className="flex flex-col h-full w-full  mt-2">
         <div className="flex flex-1 min-h-0 w-full">
           <CategorySidebar
-            categories={categories}
+            categories={isSearching ? [] : categories}
             activeCategory={activeCategory}
             onCategoryClick={handleCategoryClick}
             title="MODELS"
             persistenceKey="sidebar:model"
             downloadedItem={
-              hasDownloaded
+              !isSearching && hasDownloaded
                 ? {
                     key: DOWNLOADED_CATEGORY,
                     label: "Downloaded",
@@ -1062,17 +1157,40 @@ const ModelMenu: React.FC = () => {
                           type="button"
                           title="Refresh models"
                           aria-label="Refresh models"
-                          disabled={manifestsQuery.isFetching}
-                          onClick={() => manifestsQuery.refetch()}
+                          disabled={groupsQuery.isFetching || manifestsQuery.isFetching}
+                          onClick={() => {
+                            // Re-trigger the primary groups query; the fallback
+                            // manifest query will auto-enable if groups returns empty.
+                            groupsQuery.refetch();
+                            if (!groupsAvailable) manifestsQuery.refetch();
+                          }}
                           className="text-[11px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
                         >
                           <LuRefreshCw
-                            className={`w-3.5 h-3.5 ${manifestsQuery.isFetching ? "animate-spin" : ""}`}
+                            className={`w-3.5 h-3.5 ${(groupsQuery.isFetching || manifestsQuery.isFetching) ? "animate-spin" : ""}`}
                           />
                           <span>Refresh</span>
                         </button>
                       ) : null}
                     </div>
+                  </div>
+                </div>
+              ) : isSearching ? (
+                <div className="px-7 pt-3 pb-28">
+                  <div
+                    className="grid gap-x-2 gap-y-3"
+                    style={{
+                      gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+                    }}
+                  >
+                    {filteredManifests.map((manifest) => (
+                      <div
+                        key={manifest.metadata?.id || ""}
+                        className="flex justify-center"
+                      >
+                        <ModelItem manifest={manifest} />
+                      </div>
+                    ))}
                   </div>
                 </div>
               ) : (
@@ -1089,7 +1207,7 @@ const ModelMenu: React.FC = () => {
                         width={Math.max(0, scrollWidth - 36)}
                         category={category}
                         manifests={filteredManifests.filter((m) => {
-                          const keys: string[] = m.metadata?.categories || [];
+                          const keys = getManifestCategoryKeys(m);
                           const labels = keys.map(
                             (k) =>
                               manifestCategoryKeyToLabel.get(k) ||

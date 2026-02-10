@@ -5,7 +5,7 @@ metadata:
   id: flashvsr-1.1-tiny
   model: wan
   name: FlashVSR 1.1 Tiny
-  version: 0.1.2
+  version: "0.1.2"
   description: FlashVSR 1.1 Tiny is an upscaler model for video and image upscaling
     that uses a tiny VAE.
   tags:
@@ -35,16 +35,13 @@ spec:
   components:
   - type: scheduler
     label: Scheduler
-    default: FlowMatchScheduler
-    scheduler_options:
-    - name: UniPCMultistepScheduler
-      label: UniPC Multistep Scheduler
-      description: The UniPC Multistep Scheduler is used for FlashVSR 1.1 Full.
-      base: src.scheduler.flow.FlowMatchScheduler
-      config:
-        shift: 5.0
-        sigma_min: 0.0
-        extra_one_step: true
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 5.0
+      sigma_max: 1.0
+      sigma_min: 0.0
   - type: vae
     name: wan/vae
     label: Wan VAE

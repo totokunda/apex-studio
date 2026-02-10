@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache, partial
 from loguru import logger
 import anyio
@@ -435,24 +436,42 @@ def _get_all_manifest_files_uncached() -> List[Dict[str, Any]]:
     """Scan manifest directory and return all enriched manifest contents (no cache).
 
     Filters out manifests that are not compatible with the current system's compute capabilities.
+    Uses parallel threads to load and enrich manifests concurrently for faster startup.
     """
-    manifests: List[Dict[str, Any]] = []
-
-    for root, dirs, files in os.walk(MANIFEST_BASE_PATH):
+    # Phase 1: Collect all candidate YAML paths (fast filesystem walk, no parsing)
+    candidate_paths: List[str] = []
+    for root, _dirs, files in os.walk(MANIFEST_BASE_PATH):
         for file in files:
             if file.endswith(".yml") and not file.startswith("shared"):
                 file_path = Path(root) / file
-                relative_path = file_path.relative_to(MANIFEST_BASE_PATH)
+                candidate_paths.append(
+                    str(file_path.relative_to(MANIFEST_BASE_PATH))
+                )
 
-                # Load and enrich each manifest directly
-                enriched = _load_and_enrich_manifest(str(relative_path))
+    if not candidate_paths:
+        return []
 
-                # Only include manifests that are compatible with the current system
-                if (
-                    enriched.get("compute_compatible", True)
-                    and enriched.get("spec", {}).get("ui", None) is not None
-                ):
-                    manifests.append(enriched)
+    # Phase 2: Load and enrich all manifests in parallel
+    manifests: List[Dict[str, Any]] = []
+    max_workers = min(len(candidate_paths), os.cpu_count() or 4, 16)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_to_path = {
+            pool.submit(_load_and_enrich_manifest, rp): rp
+            for rp in candidate_paths
+        }
+        for future in as_completed(future_to_path):
+            try:
+                enriched = future.result()
+            except Exception:
+                continue
+
+            # Only include manifests that are compatible with the current system
+            if (
+                enriched.get("compute_compatible", True)
+                and enriched.get("spec", {}).get("ui", None) is not None
+            ):
+                manifests.append(enriched)
 
     return manifests
 
@@ -814,17 +833,34 @@ def _list_all_manifests_sync(include_incompatible: bool = False):
     """Blocking implementation for list_all_manifests()."""
     try:
         if include_incompatible:
-            # Load all manifests without filtering
-            manifests: List[Dict[str, Any]] = []
+            # Collect candidate paths, then load all manifests in parallel
+            candidate_paths: List[str] = []
             for root, _dirs, files in os.walk(MANIFEST_BASE_PATH):
                 for file in files:
                     if file.endswith(".yml") and not file.startswith("shared"):
                         file_path = Path(root) / file
-                        relative_path = file_path.relative_to(MANIFEST_BASE_PATH)
-                        enriched = _load_and_enrich_manifest(str(relative_path))
+                        candidate_paths.append(
+                            str(file_path.relative_to(MANIFEST_BASE_PATH))
+                        )
+
+            if not candidate_paths:
+                return []
+
+            manifests: List[Dict[str, Any]] = []
+            max_workers = min(len(candidate_paths), os.cpu_count() or 4, 16)
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                future_to_path = {
+                    pool.submit(_load_and_enrich_manifest, rp): rp
+                    for rp in candidate_paths
+                }
+                for future in as_completed(future_to_path):
+                    try:
+                        enriched = future.result()
                         manifests.append(enriched)
+                    except Exception:
+                        continue
             return manifests
-        # Use the normal filtered list
+        # Use the normal filtered list (already parallelized)
         return get_all_manifest_files()
     except Exception as e:
         logger.error(f"Error listing manifests: {e}")
@@ -924,6 +960,232 @@ async def list_manifests_by_model_and_type(
     return await _run_blocking(
         _list_manifests_by_model_and_type_sync, model, model_type, include_incompatible
     )
+
+
+# ----------------------------- Model Groups ----------------------------- #
+
+
+def _resolve_version_prefix(relative_path: str) -> str:
+    """
+    Extract the version directory prefix from a group manifest's relative path.
+
+    For example, ``v0.1.2/groups/mmaudio.yml`` → ``v0.1.2``.
+    Falls back to the parent-of-parent directory segment when the path contains
+    at least two directory levels.
+    """
+    parts = Path(relative_path).parts
+    # Typical layout: <version>/<subfolder>/<file>.yml → parts[0] is version
+    if len(parts) >= 3:
+        return parts[0]
+    if len(parts) >= 2:
+        return parts[0]
+    return ""
+
+
+def _normalize_group_content(content: Dict[str, Any], relative_path: str) -> Dict[str, Any]:
+    """Normalize top-level convenience fields on a group manifest dict."""
+    metadata = content.get("metadata", {}) if isinstance(content.get("metadata"), dict) else {}
+    content["id"] = metadata.get("id", "")
+    content["name"] = metadata.get("name", "")
+    content["description"] = metadata.get("description", "")
+    content["tags"] = [str(t) for t in metadata.get("tags", [])]
+    content["categories"] = metadata.get("categories", [])
+    content["author"] = metadata.get("author", "")
+    content["license"] = metadata.get("license", "")
+    content["demo_path"] = metadata.get("demo_path", "")
+    content["group_type"] = content.get("type", "")
+    content["full_path"] = relative_path
+    return content
+
+
+def _load_group_manifest(relative_path: str) -> Dict[str, Any]:
+    """Load a group manifest YAML, resolve variant manifest_refs, and normalize
+    top-level convenience fields.
+
+    NOTE: When called from _get_all_group_files_sync, variant resolution is
+    handled externally in a single shared thread pool for better performance.
+    This function only resolves variants itself when called standalone (e.g.
+    from _get_group_by_id_sync).
+    """
+    file_path = MANIFEST_BASE_PATH / relative_path
+    content = load_yaml_content(file_path)
+
+    if not isinstance(content, dict) or content.get("kind") != "ModelGroup":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not a valid ModelGroup manifest: {relative_path}",
+        )
+
+    _normalize_group_content(content, relative_path)
+
+    # Resolve each variant's manifest_ref into a full enriched manifest document.
+    version_prefix = _resolve_version_prefix(relative_path)
+    variants = content.get("variants")
+    if isinstance(variants, list):
+        variant_tasks: List[tuple[int, str, str]] = []
+        for idx, variant in enumerate(variants):
+            if not isinstance(variant, dict):
+                continue
+            manifest_ref = variant.get("manifest_ref")
+            if not isinstance(manifest_ref, str) or not manifest_ref.strip():
+                continue
+            ref_relative = (
+                f"{version_prefix}/{manifest_ref}.yml"
+                if version_prefix
+                else f"{manifest_ref}.yml"
+            )
+            variant_tasks.append((idx, manifest_ref, ref_relative))
+
+        if variant_tasks:
+            max_workers = min(len(variant_tasks), os.cpu_count() or 4, 16)
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                future_to_info = {
+                    pool.submit(_load_and_enrich_manifest, ref_rel): (vi, mref)
+                    for vi, mref, ref_rel in variant_tasks
+                }
+                for future in as_completed(future_to_info):
+                    vi, mref = future_to_info[future]
+                    try:
+                        enriched = future.result()
+                        variants[vi]["manifest"] = enriched
+                    except (HTTPException, Exception) as exc:
+                        logger.warning(
+                            f"Failed to resolve manifest_ref '{mref}' "
+                            f"for group '{content.get('id')}': {exc}"
+                        )
+                        variants[vi]["manifest"] = None
+
+    return content
+
+
+def _get_all_group_files_sync() -> List[Dict[str, Any]]:
+    """Scan the manifest directory for ModelGroup YAMLs and return them.
+
+    Optimised approach:
+      1. Target only ``*/groups/*.yml`` paths (groups live in known directories,
+         no need to walk the entire manifest tree).
+      2. Parse the small group YAMLs sequentially (they're ~25-40 lines each).
+      3. Collect ALL variant manifest_refs across every group and resolve them
+         in a single shared thread pool (avoids nested pool overhead).
+    """
+    # --- Step 1: Find group YAML files directly via glob (instant) ----------
+    group_paths: List[str] = []
+    for file_path in MANIFEST_BASE_PATH.glob("*/groups/*.yml"):
+        if file_path.name.startswith("shared"):
+            continue
+        group_paths.append(str(file_path.relative_to(MANIFEST_BASE_PATH)))
+
+    if not group_paths:
+        return []
+
+    # --- Step 2: Parse all group YAMLs (small files, fast) ------------------
+    raw_groups: List[tuple[str, Dict[str, Any]]] = []
+    for rp in group_paths:
+        try:
+            content = load_yaml_content(MANIFEST_BASE_PATH / rp)
+            if isinstance(content, dict) and content.get("kind") == "ModelGroup":
+                raw_groups.append((rp, content))
+        except (HTTPException, Exception):
+            continue
+
+    if not raw_groups:
+        return []
+
+    # --- Step 3: Collect ALL variant tasks across ALL groups -----------------
+    # Each task: (group_index, variant_index, manifest_ref_label, ref_relative_path)
+    VariantTask = tuple[int, int, str, str]
+    all_variant_tasks: List[VariantTask] = []
+
+    for g_idx, (rp, content) in enumerate(raw_groups):
+        version_prefix = _resolve_version_prefix(rp)
+        variants = content.get("variants")
+        if not isinstance(variants, list):
+            continue
+        for v_idx, variant in enumerate(variants):
+            if not isinstance(variant, dict):
+                continue
+            manifest_ref = variant.get("manifest_ref")
+            if not isinstance(manifest_ref, str) or not manifest_ref.strip():
+                continue
+            ref_relative = (
+                f"{version_prefix}/{manifest_ref}.yml"
+                if version_prefix
+                else f"{manifest_ref}.yml"
+            )
+            all_variant_tasks.append((g_idx, v_idx, manifest_ref, ref_relative))
+
+    # --- Step 4: Resolve all variant manifests in ONE thread pool ------------
+    if all_variant_tasks:
+        max_workers = min(len(all_variant_tasks), os.cpu_count() or 4, 16)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_to_info = {
+                pool.submit(_load_and_enrich_manifest, ref_rel): (g_idx, v_idx, mref)
+                for g_idx, v_idx, mref, ref_rel in all_variant_tasks
+            }
+            for future in as_completed(future_to_info):
+                g_idx, v_idx, mref = future_to_info[future]
+                _, content = raw_groups[g_idx]
+                try:
+                    enriched = future.result()
+                    content["variants"][v_idx]["manifest"] = enriched
+                except (HTTPException, Exception) as exc:
+                    logger.warning(
+                        f"Failed to resolve manifest_ref '{mref}' "
+                        f"for group '{content.get('metadata', {}).get('id', '?')}': {exc}"
+                    )
+                    content["variants"][v_idx]["manifest"] = None
+
+    # --- Step 5: Normalize convenience fields & return ----------------------
+    groups: List[Dict[str, Any]] = []
+    for rp, content in raw_groups:
+        _normalize_group_content(content, rp)
+        groups.append(content)
+
+    return groups
+
+
+@lru_cache(maxsize=1)
+def _get_all_group_files_cached(cache_key: str) -> List[Dict[str, Any]]:
+    """Cached wrapper – cache_key is only used to differentiate entries."""
+    return _get_all_group_files_sync()
+
+
+def get_all_group_files() -> List[Dict[str, Any]]:
+    """Return all enriched group manifests, optionally cached.
+
+    Caching is controlled by the same env flags as the flat manifest list:
+    - APEX_MANIFEST_CACHE / APEX_MANIFEST_CACHE_ENABLED
+    - APEX_MANIFEST_CACHE_BUSTER
+    """
+    enabled = _env_truthy(
+        os.getenv("APEX_MANIFEST_CACHE", os.getenv("APEX_MANIFEST_CACHE_ENABLED", "0"))
+    )
+    if not enabled:
+        return _get_all_group_files_sync()
+    buster = os.getenv("APEX_MANIFEST_CACHE_BUSTER", "")
+    cache_key = f"groups-v1:{buster}"
+    return _get_all_group_files_cached(cache_key)
+
+
+def _get_group_by_id_sync(group_id: str) -> Dict[str, Any]:
+    """Find and return a single group manifest by its metadata id."""
+    groups = get_all_group_files()
+    for g in groups:
+        if g.get("id") == group_id:
+            return g
+    raise HTTPException(status_code=404, detail=f"Group not found: {group_id}")
+
+
+@router.get("/groups")
+async def list_manifest_groups():
+    """List all ModelGroup manifests."""
+    return await _run_blocking(get_all_group_files)
+
+
+@router.get("/groups/{group_id}")
+async def get_manifest_group(group_id: str):
+    """Get a specific ModelGroup by its metadata.id."""
+    return await _run_blocking(_get_group_by_id_sync, group_id)
 
 
 @router.get("/{manifest_id}")

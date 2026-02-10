@@ -875,6 +875,14 @@ export interface ImageClipProps {
   noise?: number;
   sharpness?: number;
   vignette?: number;
+  // found footage / stylize
+  colorTintColor?: string;
+  colorTintIntensity?: number;
+  scanLines?: number;
+  chromaticAberration?: number;
+  interlace?: number;
+  pixelate?: number;
+  jitter?: number;
   // masks
   masks?: Array<MaskClipProps>;
   // timing
@@ -907,6 +915,14 @@ export interface VideoClipProps {
   noise?: number;
   sharpness?: number;
   vignette?: number;
+  // found footage / stylize
+  colorTintColor?: string;
+  colorTintIntensity?: number;
+  scanLines?: number;
+  chromaticAberration?: number;
+  interlace?: number;
+  pixelate?: number;
+  jitter?: number;
   masks?: Array<MaskClipProps>;
   // timing
   startFrame?: number;
@@ -1042,6 +1058,13 @@ export async function blitVideo(
       noise: clip.noise,
       sharpness: clip.sharpness,
       vignette: clip.vignette,
+      colorTintColor: clip.colorTintColor,
+      colorTintIntensity: clip.colorTintIntensity,
+      scanLines: clip.scanLines,
+      chromaticAberration: clip.chromaticAberration,
+      interlace: clip.interlace,
+      pixelate: clip.pixelate,
+      jitter: clip.jitter,
     });
 
     // Apply applicators to content canvas before compositing
@@ -1250,6 +1273,13 @@ export async function blitImage(
         noise: clip.noise,
         sharpness: clip.sharpness,
         vignette: clip.vignette,
+      colorTintColor: clip.colorTintColor,
+      colorTintIntensity: clip.colorTintIntensity,
+      scanLines: clip.scanLines,
+      chromaticAberration: clip.chromaticAberration,
+      interlace: clip.interlace,
+      pixelate: clip.pixelate,
+      jitter: clip.jitter,
       });
 
       // Apply applicators to content canvas before compositing

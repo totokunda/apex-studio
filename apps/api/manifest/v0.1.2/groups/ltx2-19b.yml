@@ -1,0 +1,46 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-ltx2-19b
+  name: LTX2 19B
+  description: LTX2 19B is a 19B parameter model for text-to-video with audio generation.
+  tags:
+    - ltx2
+    - t2v
+    - i2v
+    - 19b
+  author: Lightricks
+  license: Custom License
+  demo_path: models/ltx2-19b-text-to-image-to-video.mp4
+  categories:
+    - text-to-video
+    - image-to-video
+
+variants:
+  - id: ltx2-19b-text-to-image-to-video
+    label: "LTX 2 Full"
+    description: "Full-quality 19B model using a two-stage pipeline with 20 inference steps. Produces the highest fidelity video and audio output with fine-grained detail and temporal coherence."
+    manifest_ref: video/ltx2-19b-text-to-image-to-video
+    default: true
+
+  - id: ltx2-19b-text-to-image-to-video-distilled
+    label: "LTX 2 Distilled"
+    description: "Distilled 19B variant optimized for speed, generating comparable results in just 8 inference steps. Ideal for rapid iteration and previewing before committing to a full-quality render."
+    manifest_ref: video/ltx2-19b-text-to-image-to-video-distilled
+  
+  - id: ltx2-19b-text-to-image-to-video-canny-control
+    label: "LTX 2 Canny Control"
+    description: "Canny control 19B variant optimized for speed, generating comparable results in just 8 inference steps. Ideal for rapid iteration and previewing before committing to a full-quality render."
+    manifest_ref: video/ltx2-19b-text-to-image-to-video-canny-control
+
+  - id: ltx2-19b-text-to-image-to-video-depth-control
+    label: "LTX 2 Depth Control"
+    description: "Depth control 19B variant optimized for speed, generating comparable results in just 8 inference steps. Ideal for rapid iteration and previewing before committing to a full-quality render."
+    manifest_ref: video/ltx2-19b-text-to-image-to-video-depth-control
+  
+  - id: ltx2-19b-text-to-image-to-video-pose-control
+    label: "LTX 2 Pose Control"
+    description: "Pose control 19B variant optimized for speed, generating comparable results in just 8 inference steps. Ideal for rapid iteration and previewing before committing to a full-quality render."
+    manifest_ref: video/ltx2-19b-text-to-image-to-video-pose-control

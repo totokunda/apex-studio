@@ -100,6 +100,13 @@ export const generateTimelineThumbnailImage = async (
         sharpness: imgClip?.sharpness,
         noise: imgClip?.noise,
         vignette: imgClip?.vignette,
+        colorTintColor: imgClip?.colorTintColor,
+        colorTintIntensity: imgClip?.colorTintIntensity,
+        scanLines: imgClip?.scanLines,
+        chromaticAberration: imgClip?.chromaticAberration,
+        interlace: imgClip?.interlace,
+        pixelate: imgClip?.pixelate,
+        jitter: imgClip?.jitter,
       });
     }
   }

@@ -1,0 +1,42 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-zimage
+  name: ZImage
+  description: ZImage is a 6B parameter model family for efficient text-to-image generation with optional control support.
+  tags:
+    - zimage
+    - t2i
+    - control
+    - inpaint
+  author: Tongy-MAI
+  license: Apache-2.0
+  demo_path: models/zimage.png
+  categories:
+    - text-to-image
+    - control
+    - inpaint
+
+variants:
+  - id: zimage
+    label: "Standard"
+    description: "Full-quality 6B text-to-image model with the highest fidelity output. Uses more inference steps for maximum detail and prompt accuracy in final-quality renders."
+    manifest_ref: image/zimage
+    default: true
+
+  - id: zimage-turbo
+    label: "Turbo"
+    description: "Accelerated 6B variant optimized for fewer inference steps while maintaining strong image quality. Generates images significantly faster, ideal for rapid prototyping and batch workflows."
+    manifest_ref: image/zimage-turbo
+
+  - id: zimage-turbo-control
+    label: "Turbo Control"
+    description: "Turbo-speed variant with integrated ControlNet conditioning. Accepts structural inputs like depth maps, edge maps, or poses to guide composition while retaining the fast generation speed of the Turbo model."
+    manifest_ref: image/zimage-turbo-control
+  
+  - id: zimage-turbo-inpaint
+    label: "Turbo Inpaint"
+    description: "Turbo-speed variant optimized for image inpainting. Generates images significantly faster, ideal for rapid prototyping and batch workflows."
+    manifest_ref: image/zimage-turbo-inpaint

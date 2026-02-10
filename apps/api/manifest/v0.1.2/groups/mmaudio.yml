@@ -1,0 +1,22 @@
+api_version: apex/v1
+kind: ModelGroup
+type: audio
+
+metadata:
+  id: group-mmaudio
+  name: MMAudio
+  description: MMAudio is a model for generating audio from video and text prompts.
+  tags:
+    - mmaudio
+    - video-to-audio
+  author: Tencent
+  license: Tencent Hunyuan Community License Agreement
+  categories:
+    - video-to-audio
+
+variants:
+  - id: mmaudio
+    label: "MMAudio"
+    description: "Multimodal audio generation model that synthesizes synchronized 44kHz audio from video and text prompts."
+    manifest_ref: audio/mmaudio
+    default: true

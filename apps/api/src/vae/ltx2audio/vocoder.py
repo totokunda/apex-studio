@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from ltx_core.model.audio_vae.resnet import LRELU_SLOPE, ResBlock1, ResBlock2
+from src.vae.ltx2audio.resnet import LRELU_SLOPE, ResBlock1, ResBlock2
 
 
 class Vocoder(torch.nn.Module):

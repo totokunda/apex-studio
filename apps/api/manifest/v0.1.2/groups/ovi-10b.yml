@@ -1,0 +1,31 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-ovi-10b
+  name: Ovi 10B
+  description: Ovi 10B is a 10B parameter model for text-to-video and image-to-video generation.
+  tags:
+    - ovi
+    - t2v
+    - i2v
+    - 10b
+  author: Character AI
+  license: Apache-2.0
+  demo_path: models/ovi-10s.mp4
+  categories:
+    - text-to-video
+    - image-to-video
+
+variants:
+  - id: ovi-10b-10s
+    label: "Ovi 10B 10s"
+    description: "Extended-duration variant capable of generating up to 10 seconds of coherent video. Better suited for scenes requiring sustained motion, longer narrative arcs, or establishing shots with gradual camera movement."
+    manifest_ref: video/ovi-10b-10s
+    default: true
+
+  - id: ovi-10b-5s
+    label: "Ovi 10B 5s"
+    description: "Standard-duration variant generating up to 5 seconds of video. Faster to generate and requires less memory, well suited for short clips, social media content, and rapid creative experimentation."
+    manifest_ref: video/ovi-10b-5s

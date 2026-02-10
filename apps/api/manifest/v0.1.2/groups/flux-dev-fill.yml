@@ -1,0 +1,24 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-flux-dev-fill
+  name: Flux Dev Fill
+  description: Flux fill is a 12B parameter model for image inpainting/outpainting.
+  tags:
+    - flux
+    - dev
+    - fill
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/flux-dev-fill.png
+  categories:
+    - inpaint
+
+variants:
+  - id: flux-dev-fill
+    label: "Flux Dev Fill"
+    description: "12B parameter model specialized for image inpainting and outpainting. Seamlessly fills masked regions or extends image boundaries with context-aware content that matches lighting, style, and perspective of the surrounding image."
+    manifest_ref: image/flux-dev-fill
+    default: true

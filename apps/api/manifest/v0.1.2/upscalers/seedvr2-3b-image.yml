@@ -2,19 +2,20 @@ api_version: apex/v1
 kind: Model
 type: upscale
 metadata:
-  id: seedvr2-7b
+  id: seedvr2-3b-image
   model: seedvr2
-  name: SeedVR2 7B
-  version: 0.1.2
-  description: SeedVR2 7B is an upscaler model for video and image upscaling that
-    uses a 7B VAE.
+  name: SeedVR2 3B Image
+  version: "0.1.2"
+  description: SeedVR2 3B is an upscaler model for video and image upscaling that
+    uses a 3B VAE.
   tags:
   - seedvr2
   - upscaler
-  - 7b
+  - image
+  - 3b
   author: SeedVR
   license: Apache-2.0
-  demo_path: models/seedvr2-7b.png
+  demo_path: models/seedvr2-3b.png
   categories:
   - upscale
 spec:
@@ -39,42 +40,45 @@ spec:
     name: seedvr2/vae
     label: SeedVR2 VAE
     base: seedvr
-    config_id: SeedVR2-7B/vae
+    block_modules:
+      - encoder
+      - decoder
+    config_id: SeedVR2-3B/vae
     model_path:
-    - path: totoku/apex-models/SeedVR2-7B/vae/vae-bf16.safetensors
+    - path: totoku/apex-models/SeedVR2-3B/vae/vae-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
+    
   - type: transformer
-    base: seedvr.base
+    base: seedvr.base_v2
     label: SeedVR2 Transformer
-    config_id: SeedVR2-7B/transformer
+    config_id: SeedVR2-3B/transformer
     model_path:
-    - path: totoku/apex-models/SeedVR2-7B/transformer/transformer-bf16.safetensors
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
-    - path: totoku/apex-models/SeedVR2-7B/transformer/transformer-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/SeedVR2-7B/transformer/transformer-q8_0.gguf
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: totoku/apex-models/SeedVR2-7B/transformer/transformer-q6_k.gguf
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-    - path: totoku/apex-models/SeedVR2-7B/transformer/transformer-q4_k_m.gguf
+    - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-    
   defaults:
     run:
       num_inference_steps: 1
-      cfg_scale: 1
+      guidance_scale: 1
       cond_noise_scale: 0.1
       return_latents: false
       timesteps_as_indices: true
@@ -90,7 +94,6 @@ spec:
       layout:
         flow: column
         rows:
-        - - video
         - - image
     - name: size
       label: Size
@@ -142,15 +145,6 @@ spec:
         - - chunk_frames
         - - chunk_overlap
     inputs:
-    - id: video
-      label: Video
-      description: The input video to upscale.
-      type: video
-      panel: input
-      required: false
-      map_h: height
-      map_w: width
-      scale_by: resolution
     - id: image
       label: Image
       description: The input image to upscale.

@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
-
-from ltx_core.model.audio_vae.causality_axis import CausalityAxis
+from src.vae.ltx2audio.causality_axis import CausalityAxis
 
 
 class CausalConv2d(torch.nn.Module):

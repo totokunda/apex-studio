@@ -107,6 +107,16 @@ async function deleteManifestLora(
   });
 }
 
+async function listManifestGroups(): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke("manifest:groups");
+}
+
+async function getManifestGroup(
+  groupId: string,
+): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke("manifest:group", groupId);
+}
+
 export {
   listManifestModelTypes,
   listManifests,
@@ -120,6 +130,8 @@ export {
   updateManifestLoraScale,
   updateManifestLoraName,
   deleteManifestLora,
+  listManifestGroups,
+  getManifestGroup,
 };
 
 

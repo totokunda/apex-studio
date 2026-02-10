@@ -2,7 +2,7 @@ from enum import Enum
 
 import torch
 
-from ltx_core.model.common.normalization import NormType, build_normalization_layer
+from src.vae.ltx2audio.normalization import NormType, build_normalization_layer
 
 
 class AttentionType(Enum):

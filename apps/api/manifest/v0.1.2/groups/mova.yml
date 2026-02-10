@@ -1,0 +1,30 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-mova
+  name: MoVA
+  description: MOVA is a 14B parameter model for image-to-video-audio generation.
+  tags:
+    - mova
+    - i2v
+    - audio
+    - 14b
+  author: MOSI
+  license: Apache-2.0
+  demo_path: models/mova-image-to-video-audio.mp4
+  categories:
+    - image-to-video
+
+variants:
+  - id: mova-image-to-video-audio-720p
+    label: "MoVA 720p"
+    description: "High-resolution 720p output with synchronized audio generation. Produces detailed video and matching sound from a single reference image, suitable for final-quality renders and presentations."
+    manifest_ref: video/mova-720p-image-to-video-audio
+    default: true
+
+  - id: mova-image-to-video-audio-360p
+    label: "MoVA 360p"
+    description: "Lower-resolution 360p output with synchronized audio generation. Requires less VRAM and generates faster, making it ideal for quick previews, storyboarding, and iterating on creative direction."
+    manifest_ref: video/mova-360p-image-to-video-audio

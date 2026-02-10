@@ -1,8 +1,14 @@
 import { WebGLBlur } from "../../../renderer/src/components/preview/webgl-filters/blur";
 import { WebGLBrightness } from "../../../renderer/src/components/preview/webgl-filters/brightness";
+import { WebGLChromaticAberration } from "../../../renderer/src/components/preview/webgl-filters/chromatic-aberration";
+import { WebGLColorTint } from "../../../renderer/src/components/preview/webgl-filters/color-tint";
 import { WebGLContrast } from "../../../renderer/src/components/preview/webgl-filters/contrast";
 import { WebGLHueSaturation } from "../../../renderer/src/components/preview/webgl-filters/hue-saturation";
+import { WebGLInterlace } from "../../../renderer/src/components/preview/webgl-filters/interlace";
+import { WebGLJitter } from "../../../renderer/src/components/preview/webgl-filters/jitter";
 import { WebGLNoise } from "../../../renderer/src/components/preview/webgl-filters/noise";
+import { WebGLPixelate } from "../../../renderer/src/components/preview/webgl-filters/pixelate";
+import { WebGLScanLines } from "../../../renderer/src/components/preview/webgl-filters/scan-lines";
 import { WebGLSharpness } from "../../../renderer/src/components/preview/webgl-filters/sharpness";
 import { WebGLVignette } from "../../../renderer/src/components/preview/webgl-filters/vignette";
 
@@ -15,6 +21,14 @@ export interface FilterParams {
   noise?: number; // 0 to 100
   sharpness?: number; // 0 to 100
   vignette?: number; // 0 to 100
+  // Found Footage / Stylize
+  colorTintColor?: string; // hex color e.g. "#00ff4c"
+  colorTintIntensity?: number; // 0 to 100
+  scanLines?: number; // 0 to 100
+  chromaticAberration?: number; // 0 to 100
+  interlace?: number; // 0 to 100
+  pixelate?: number; // 0 to 100
+  jitter?: number; // 0 to 100
 }
 
 export function applyWebGLFilters(
@@ -121,6 +135,98 @@ export function applyWebGLFilters(
       const filter = new WebGLVignette();
       disposeFns.push(() => filter.dispose());
       const result = filter.apply(currentCanvas, params.vignette);
+      ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+      ctx.save();
+      ctx.scale(1, -1);
+      ctx.drawImage(result, 0, -sourceCanvas.height);
+      ctx.restore();
+      currentCanvas = sourceCanvas;
+    }
+
+    // Color Tint
+    if (
+      params.colorTintIntensity &&
+      params.colorTintIntensity > 0 &&
+      params.colorTintColor
+    ) {
+      const filter = new WebGLColorTint();
+      disposeFns.push(() => filter.dispose());
+      const hex = params.colorTintColor.replace("#", "");
+      const r = parseInt(hex.substring(0, 2), 16) / 255;
+      const g = parseInt(hex.substring(2, 4), 16) / 255;
+      const b = parseInt(hex.substring(4, 6), 16) / 255;
+      const result = filter.apply(
+        currentCanvas,
+        r,
+        g,
+        b,
+        params.colorTintIntensity,
+      );
+      ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+      ctx.save();
+      ctx.scale(1, -1);
+      ctx.drawImage(result, 0, -sourceCanvas.height);
+      ctx.restore();
+      currentCanvas = sourceCanvas;
+    }
+
+    // Scan Lines
+    if (params.scanLines && params.scanLines > 0) {
+      const filter = new WebGLScanLines();
+      disposeFns.push(() => filter.dispose());
+      const result = filter.apply(currentCanvas, params.scanLines);
+      ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+      ctx.save();
+      ctx.scale(1, -1);
+      ctx.drawImage(result, 0, -sourceCanvas.height);
+      ctx.restore();
+      currentCanvas = sourceCanvas;
+    }
+
+    // Chromatic Aberration
+    if (params.chromaticAberration && params.chromaticAberration > 0) {
+      const filter = new WebGLChromaticAberration();
+      disposeFns.push(() => filter.dispose());
+      const result = filter.apply(currentCanvas, params.chromaticAberration);
+      ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+      ctx.save();
+      ctx.scale(1, -1);
+      ctx.drawImage(result, 0, -sourceCanvas.height);
+      ctx.restore();
+      currentCanvas = sourceCanvas;
+    }
+
+    // Interlace
+    if (params.interlace && params.interlace > 0) {
+      const filter = new WebGLInterlace();
+      disposeFns.push(() => filter.dispose());
+      const result = filter.apply(currentCanvas, params.interlace);
+      ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+      ctx.save();
+      ctx.scale(1, -1);
+      ctx.drawImage(result, 0, -sourceCanvas.height);
+      ctx.restore();
+      currentCanvas = sourceCanvas;
+    }
+
+    // Pixelate
+    if (params.pixelate && params.pixelate > 0) {
+      const filter = new WebGLPixelate();
+      disposeFns.push(() => filter.dispose());
+      const result = filter.apply(currentCanvas, params.pixelate);
+      ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+      ctx.save();
+      ctx.scale(1, -1);
+      ctx.drawImage(result, 0, -sourceCanvas.height);
+      ctx.restore();
+      currentCanvas = sourceCanvas;
+    }
+
+    // Jitter
+    if (params.jitter && params.jitter > 0) {
+      const filter = new WebGLJitter();
+      disposeFns.push(() => filter.dispose());
+      const result = filter.apply(currentCanvas, params.jitter);
       ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
       ctx.save();
       ctx.scale(1, -1);

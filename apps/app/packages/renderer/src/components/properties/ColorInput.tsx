@@ -13,6 +13,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
+import { LuInfo } from "react-icons/lu";
 import Color from "color";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +30,7 @@ interface ColorInputProps {
   label?: string;
   labelClass?: string;
   size?: "small" | "medium";
+  tooltip?: string;
 }
 
 const ColorInput: React.FC<ColorInputProps> = ({
@@ -34,6 +41,7 @@ const ColorInput: React.FC<ColorInputProps> = ({
   setPercentValue,
   labelClass,
   size = "small",
+  tooltip,
 }) => {
   const [tempColorValue, setTempColorValue] = useState(value);
   const [tempPercentValue, setTempPercentValue] = useState(
@@ -192,14 +200,35 @@ const ColorInput: React.FC<ColorInputProps> = ({
   return (
     <div className="flex flex-col items-start w-full gap-y-1 min-w-0">
       {label && (
-        <label
-          className={cn(
-            `text-brand-light text-[10.5px] font-medium w-full text-start mb-0.5`,
-            labelClass,
+        <div className="flex flex-row items-center gap-x-1 mb-0.5">
+          <label
+            className={cn(
+              `text-brand-light text-[10.5px] font-medium text-start`,
+              labelClass,
+            )}
+          >
+            {label}
+          </label>
+          {tooltip && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="text-brand-light/70 hover:text-brand-light focus:outline-none"
+                  aria-label={`Info about ${label}`}
+                >
+                  <LuInfo className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent
+                sideOffset={6}
+                className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+              >
+                {tooltip}
+              </TooltipContent>
+            </Tooltip>
           )}
-        >
-          {label}
-        </label>
+        </div>
       )}
       <div className="flex flex-row relative w-full">
         <Popover>
