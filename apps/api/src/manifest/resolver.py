@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 
 import yaml
 from loguru import logger
+from src.manifest.paths import iter_manifest_relative_paths, resolve_manifest_path
 
 # Ensure the dummy !include is registered on FullLoader so exploratory loads don't fail
 from src.utils.yaml import _dummy_include  # type: ignore  # noqa: F401
@@ -13,21 +14,13 @@ from src.utils.yaml import _dummy_include  # type: ignore  # noqa: F401
 _INDEX_CACHE: Dict[str, str] | None = None
 _LATEST_MAP: Dict[str, Tuple[int, int, int, str]] | None = None
 
-
-def _project_root() -> Path:
-    # src/manifest/resolver.py → apex/src/manifest → apex
-    return Path(__file__).resolve().parents[2]
-
-
-def _manifest_dir() -> Path:
-    return _project_root() / "manifest"
-
-
 def _iter_manifest_files() -> List[Path]:
-    base = _manifest_dir()
-    if not base.exists():
-        return []
-    return [p for p in base.rglob("*.yml") if p.is_file()]
+    files: List[Path] = []
+    for relative_path in iter_manifest_relative_paths(suffixes=(".yml", ".yaml")):
+        p = resolve_manifest_path(relative_path)
+        if p.is_file():
+            files.append(p)
+    return files
 
 
 def _slugify(text: str) -> str:

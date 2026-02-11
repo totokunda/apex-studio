@@ -745,14 +745,14 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
               align="end"
               sideOffset={2}
               style={{ width: menuWidth, maxWidth: menuWidth }}
-              className="dark mt-1 flex flex-col text-brand-light bg-brand-background"
+              className="dark mt-1 flex flex-col text-brand-light bg-brand-background font-poppins"
             >
               <DropdownMenuItem
                 onClick={() => handleUpload(false)}
                 className="w-full cursor-pointer py-2"
               >
                 <TbFileUpload className="w-[18px] h-[18px] cursor-pointer stroke-2" />
-                <span className="flex flex-row gap-x-2.5 items-center justify-center text-[12px] font-medium">
+                <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11.5px] font-medium">
                   Upload File
                 </span>
               </DropdownMenuItem>
@@ -761,7 +761,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
                 className="w-full cursor-pointer py-2"
               >
                 <TbFolderUp className="w-[18px] h-[18px] cursor-pointer stroke-2" />
-                <span className="flex flex-row gap-x-2.5 items-center justify-center text-[12px] font-medium">
+                <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11.5px] font-medium">
                   Upload Directory
                 </span>
               </DropdownMenuItem>

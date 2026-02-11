@@ -29,6 +29,7 @@ from src.utils.defaults import (
     get_preprocessor_results_path,
     get_postprocessor_results_path,
 )
+from src.manifest.startup_migration import run_startup_manifest_migration_safe
 import errno
 
 _ray_ready: bool = False
@@ -129,6 +130,9 @@ async def _start_background_services() -> None:
 async def lifespan(app: FastAPI):
 
     _start_parent_watchdog()
+    # Startup-only migration: preserve compatibility for users with legacy
+    # downloaded weights by mapping v0.1.0 paths into v0.1.2 local manifests.
+    run_startup_manifest_migration_safe()
     # Startup: initialize Ray and related services in the background (non-blocking)
     startup_task = asyncio.create_task(_start_background_services())
 

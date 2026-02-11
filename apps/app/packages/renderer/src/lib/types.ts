@@ -353,6 +353,9 @@ export type GenerationModelClipProps = {
   modelStatus: "pending" | "running" | "complete" | "failed";
   assetId: string;
   createdAt: number;
+  // Manifest/variant identity used to recreate the exact generation context.
+  manifestId?: string;
+  variantId?: string;
   selectedComponents?: Record<string, any>;
   values?: Record<string, any>;
   src?: string;
@@ -379,6 +382,9 @@ export type ModelClipProps = ClipProps & {
   // Persist only per-clip UI input values here; the manifest JSON
   // saved to disk remains free of user-specific `value` fields.
   modelInputValues?: Record<string, any>;
+  // Variant-scoped snapshots used when switching between manifest variants.
+  modelInputValuesByVariant?: Record<string, Record<string, any>>;
+  selectedComponentsByVariant?: Record<string, Record<string, any>>;
   speed?: number;
   modelStatus?: "pending" | "running" | "complete" | "failed";
   // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)

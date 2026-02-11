@@ -142,7 +142,11 @@ class LTX2TI2VEngine(LTX2Shared):
         )
 
         def first_stage_denoising_loop(
-            sigmas: torch.Tensor, video_state: LatentState, audio_state: LatentState, stepper: DiffusionStepProtocol
+            sigmas: torch.Tensor,
+            video_state: LatentState,
+            audio_state: LatentState,
+            stepper: DiffusionStepProtocol,
+            denoise_progress_callback=None,
         ) -> tuple[LatentState, LatentState]:
             return euler_denoising_loop(
                 sigmas=sigmas,
@@ -162,6 +166,7 @@ class LTX2TI2VEngine(LTX2Shared):
                     a_context=a_context_p,
                     transformer=self.transformer,  # noqa: F821
                 ),
+                denoise_progress_callback=denoise_progress_callback,
             )
 
         stage_1_output_shape = VideoPixelShape(

@@ -128,6 +128,7 @@ class LoaderMixin(DownloadMixin):
         config_save_path: str = DEFAULT_CONFIG_SAVE_PATH,
         return_path: bool = False,
         config_id: str = None,
+        progress_callback: Callable[[int, int | None, str | None], None] | None = None,
     ):
         # Prefer config_id (local registry) over config_path (remote download)
         if config_id:
@@ -152,7 +153,11 @@ class LoaderMixin(DownloadMixin):
 
         # Fallback: download from remote (legacy config_path behavior)
         if config_path:
-            path = self._download(config_path, config_save_path)
+            path = self._download(
+                config_path,
+                config_save_path,
+                progress_callback=progress_callback,
+            )
             if return_path:
                 return path
             else:
@@ -964,10 +969,10 @@ class LoaderMixin(DownloadMixin):
         try:
             from src.utils.scheduler_manifest import expand_scheduler_manifests
 
-            # Reuse the same heuristic used in src.utils.yaml: find nearest "manifest" dir
+            # Reuse the same heuristic used in src.utils.yaml: find nearest manifest root dir
             manifest_root = None
             for parent in file_path.parents:
-                if parent.name == "manifest":
+                if parent.name in {"manifest", ".local_manifest"}:
                     manifest_root = parent
                     break
             loaded = expand_scheduler_manifests(

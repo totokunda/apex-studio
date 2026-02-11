@@ -321,7 +321,7 @@ const getManifestRefForModelClip = (clip: AnyClipProps): string | undefined => {
   const model = clip as ModelClipProps;
   const manifest = model.manifest;
   if (!manifest) return undefined;
-  const id = manifest.id ?? manifest.name;
+  const id = manifest.metadata?.id ?? manifest.id ?? manifest.name;
   if (id == null) return undefined;
   return String(id);
 };
@@ -340,6 +340,20 @@ const getManifestVersionForModelClip = (
         ? ((manifest as any).metadata.version as string)
         : undefined;
   return version && version.trim().length > 0 ? version.trim() : undefined;
+};
+
+const getGroupForModelClip = (
+  clip: AnyClipProps,
+): ManifestGroup | undefined => {
+  if (clip.type !== "model") return undefined;
+  const model = clip as ModelClipProps;
+  const directGroup = model.group as ManifestGroup | undefined;
+  if (directGroup && typeof directGroup === "object") return directGroup;
+  const manifestGroup = (model.manifest as any)?._group as
+    | ManifestGroup
+    | undefined;
+  if (manifestGroup && typeof manifestGroup === "object") return manifestGroup;
+  return undefined;
 };
 
 /**
@@ -402,6 +416,11 @@ const extractModelInputValuesFromManifest = (
 type ModelInputClipRef = {
   __kind: "timelineClipRef";
   clipId: string;
+  /**
+   * Original parsed input payload (selection/range/etc.) so refresh can
+   * restore the exact model input data, not just the referenced clip id.
+   */
+  value?: any;
 };
 
 const isClipLikeModelInputValue = (value: any): value is { clipId: string } => {
@@ -468,6 +487,10 @@ const encodeModelInputClipRefsForJson = (
           const ref: ModelInputClipRef = {
             __kind: "timelineClipRef",
             clipId,
+            value:
+              parsed && typeof parsed === "object"
+                ? parsed
+                : undefined,
           };
           return ref;
         }
@@ -569,6 +592,42 @@ const buildProjectJsonSnapshot = (
     const localManifests: Record<string, ManifestDocument> = {};
     const localPreprocessors: Record<string, Preprocessor> = {};
     const localGroups: Record<string, ManifestGroup> = {};
+    const cacheManifestForJson = (
+      manifest: ManifestDocument | null | undefined,
+      hintId?: string,
+    ): void => {
+      if (!manifest || typeof manifest !== "object") return;
+      const resolvedId = String(
+        manifest.id ??
+          manifest.metadata?.id ??
+          manifest.name ??
+          hintId ??
+          "",
+      ).trim();
+      if (!resolvedId) return;
+      const manifestVersion =
+        typeof (manifest as any).version === "string"
+          ? String((manifest as any).version).trim()
+          : typeof (manifest as any)?.metadata?.version === "string"
+            ? String((manifest as any).metadata.version).trim()
+            : undefined;
+      const sanitized = stripModelInputValuesFromManifest(
+        manifest as ManifestDocument,
+      );
+      const versionedKey = makeManifestCacheKey(resolvedId, manifestVersion);
+      if (!localManifests[versionedKey]) {
+        localManifests[versionedKey] = sanitized;
+      }
+      if (!localManifests[resolvedId]) {
+        localManifests[resolvedId] = sanitized;
+      }
+      if (hintId) {
+        const hintKey = String(hintId).trim();
+        if (hintKey && !localManifests[hintKey]) {
+          localManifests[hintKey] = sanitized;
+        }
+      }
+    };
 
     for (const orig of allClips) {
       if (!orig) continue;
@@ -619,30 +678,23 @@ const buildProjectJsonSnapshot = (
       if (origClip.type === "model") {
         const model = origClip as ModelClipProps;
         const manifest = model.manifest;
-        if (manifest) {
-          const id = manifest.id ?? manifest.name;
-          if (id != null) {
-            const key = String(id);
-            const manifestVersion = getManifestVersionForModelClip(origClip);
-            const versionedKey = makeManifestCacheKey(key, manifestVersion);
-            if (!localManifests[versionedKey]) {
-              // Store a sanitized manifest without UI input values so that
-              // the on-disk manifest JSON remains generic and not
-              // user-specific. Per-clip values are stored on the clip
-              // itself (see modelInputValues below).
-              // `_group` is stripped inside stripModelInputValuesFromManifest
-              // to avoid circular references.
-              localManifests[versionedKey] =
-                stripModelInputValuesFromManifest(manifest as ManifestDocument);
-            }
-          }
-        }
+        cacheManifestForJson(manifest as ManifestDocument | undefined);
         // Capture the parent group so variant selection can be restored.
         // Strip resolved `manifest` from each variant to avoid circular
         // references (variant.manifest._group -> group -> variants).
         // The individual manifests are already stored in localManifests.
-        const grp = model.group;
+        const grp = getGroupForModelClip(origClip);
         if (grp) {
+          for (const variant of grp.variants ?? []) {
+            const variantManifestRef =
+              (variant as any)?.manifest_ref ?? (variant as any)?.manifestRef;
+            cacheManifestForJson(
+              (variant as any)?.manifest as ManifestDocument | null | undefined,
+              variantManifestRef
+                ? String(variantManifestRef)
+                : undefined,
+            );
+          }
           const gid = grp.id ?? grp.metadata?.id;
           if (gid != null && !localGroups[String(gid)]) {
             const safeVariants = (grp.variants ?? []).map((v) => {
@@ -671,7 +723,7 @@ const buildProjectJsonSnapshot = (
       // Extract group reference for model clips
       let groupRef: string | undefined;
       if (origClip.type === "model") {
-        const grp = (origClip as ModelClipProps).group;
+        const grp = getGroupForModelClip(origClip);
         const gid = grp?.id ?? grp?.metadata?.id;
         if (gid != null) groupRef = String(gid);
       }
@@ -1449,7 +1501,7 @@ const hydrateStoresFromProjectJson = async (
             const savedGroup = groupsMap[groupId];
             const hydratedVariants = (savedGroup.variants ?? []).map((v: any) => {
               if (v.manifest) return v; // already resolved
-              const vid = v.manifest_ref ?? v.id;
+              const vid = v.manifest_ref ?? v.manifestRef ?? v.id;
               const resolved = vid && manifestsMap
                 ? (manifestsMap[vid] ?? Object.values(manifestsMap).find(
                     (m: any) => m?.metadata?.id === vid || m?.id === vid,
@@ -1537,7 +1589,11 @@ const hydrateStoresFromProjectJson = async (
               // object. This keeps `modelInputValues` consistent with the
               // original manifest UI values (which are strings).
               try {
-                return JSON.stringify({ clipId });
+                const payload =
+                  (raw as any).value && typeof (raw as any).value === "object"
+                    ? { ...(raw as any).value, clipId }
+                    : { clipId };
+                return JSON.stringify(payload);
               } catch {
                 // If JSON serialization fails for some reason, fall back
                 // to the original raw value rather than a clip object.
@@ -2283,5 +2339,3 @@ export const withJsonProjectPersistence =
     }
     return base;
   };
-
-

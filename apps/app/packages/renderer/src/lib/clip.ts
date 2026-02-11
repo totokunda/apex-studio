@@ -185,6 +185,23 @@ const calculateTotalClipDuration = (clips: AnyClipProps[]): number => {
   return maxEndFrame;
 };
 
+const getManifestVariantStorageKey = (manifest: ManifestWithType | any): string => {
+  const fromMeta = String((manifest as any)?.metadata?.id || "").trim();
+  if (fromMeta) return fromMeta;
+  const fromId = String((manifest as any)?.id || "").trim();
+  if (fromId) return fromId;
+  return "__default__";
+};
+
+const getModelInputValuesFromInputs = (inputs: UIInput[]): Record<string, any> => {
+  const values: Record<string, any> = {};
+  for (const inp of inputs) {
+    if (!inp || typeof inp.id !== "string") continue;
+    values[inp.id] = inp.value;
+  }
+  return values;
+};
+
 const rescaleFrame = (frame: any, oldFps: number, newFps: number): number | undefined => {
   if (frame == null) return undefined;
   const f = Number(frame);
@@ -1722,9 +1739,18 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         return { clips: state.clips };
       }
 
+      const variantKey = getManifestVariantStorageKey(updatedManifest);
+      const activeVariantValues = getModelInputValuesFromInputs(inputs);
+      const nextByVariant = {
+        ...(clip.modelInputValuesByVariant || {}),
+        [variantKey]: activeVariantValues,
+      };
+
       newClips[clipIndex] = {
         ...clip,
         manifest: updatedManifest,
+        modelInputValues: activeVariantValues,
+        modelInputValuesByVariant: nextByVariant,
       } as AnyClipProps;
 
       const resolvedClips = resolveOverlaps(newClips);

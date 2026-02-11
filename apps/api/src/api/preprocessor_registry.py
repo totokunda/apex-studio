@@ -3,39 +3,50 @@ Enhanced preprocessor registry with detailed parameter information
 """
 
 from typing import Dict, Any, List
-import os
 from pathlib import Path
 from functools import lru_cache
+from src.manifest.paths import local_manifest_base_path, source_manifest_base_path
 from src.utils.yaml import load_yaml as load_yaml_file
 
-PREPROCESSOR_PATH = Path(__file__).parent.parent.parent / "manifest" / "preprocessor"
-PREPROCESSOR_PATH = Path(__file__).parent.parent.parent / "manifest" / "preprocessor"
+PREPROCESSOR_PATHS = (
+    local_manifest_base_path() / "preprocessor",
+    source_manifest_base_path() / "preprocessor",
+)
+
+
+def _resolve_preprocessor_manifest_path(preprocessor_name: str) -> Path | None:
+    for base_path in PREPROCESSOR_PATHS:
+        file_path_yml = base_path / f"{preprocessor_name}.yml"
+        if file_path_yml.exists():
+            return file_path_yml
+        file_path_yaml = base_path / f"{preprocessor_name}.yaml"
+        if file_path_yaml.exists():
+            return file_path_yaml
+    return None
 
 
 @lru_cache(maxsize=None)
 def _available_preprocessor_names() -> List[str]:
-    if not PREPROCESSOR_PATH.exists():
-        return []
     names: List[str] = []
-    for entry in PREPROCESSOR_PATH.iterdir():
-        if (
-            entry.is_file()
-            and entry.suffix in {".yml", ".yaml"}
-            and not entry.name.startswith("shared")
-        ):
-            names.append(entry.stem)
+    seen: set[str] = set()
+    for base_path in PREPROCESSOR_PATHS:
+        if not base_path.exists():
+            continue
+        for entry in base_path.iterdir():
+            if (
+                entry.is_file()
+                and entry.suffix in {".yml", ".yaml"}
+                and not entry.name.startswith("shared")
+                and entry.stem not in seen
+            ):
+                seen.add(entry.stem)
+                names.append(entry.stem)
     return sorted(names)
 
 
 @lru_cache(maxsize=None)
 def _load_preprocessor_yaml(preprocessor_name: str) -> Dict[str, Any]:
-    file_path_yml = PREPROCESSOR_PATH / f"{preprocessor_name}.yml"
-    file_path_yaml = PREPROCESSOR_PATH / f"{preprocessor_name}.yaml"
-    file_path = (
-        file_path_yml
-        if file_path_yml.exists()
-        else (file_path_yaml if file_path_yaml.exists() else None)
-    )
+    file_path = _resolve_preprocessor_manifest_path(preprocessor_name)
     if file_path is None:
         available = _available_preprocessor_names()
         raise ValueError(

@@ -193,6 +193,7 @@ export const ModelInputsPanel: React.FC<{
     return comps.filter((c: any) => String(c?.type) === "scheduler");
   }, [clip]);
 
+
   // Only render scheduler selector when this panel is named 'scheduler'
   const shouldShowScheduler = useMemo(() => {
     if (!schedulerComponents || schedulerComponents.length === 0) return false;

@@ -154,7 +154,7 @@ spec:
       type: text
       panel: advanced_prompting
       required: false
-      default: ' '
+      default: worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia
     - id: resolution
       label: Resolution
       description: Select the resolution of the output image
@@ -201,7 +201,7 @@ spec:
       type: number+slider
       value_type: integer
       panel: sampling
-      default: 4
+      default: 30
       min: 1
       max: 100
       step: 1
@@ -235,13 +235,14 @@ spec:
       value_type: integer
       panel: sampling
       required: false
-    - id: true_cfg_scale
-      label: True CFG Scale
+    - id: guidance_scale
+      label: Guidance Scale
+      description: Guidance scale for classifier-free guidance
       type: number+slider
       value_type: float
       panel: sampling
       required: false
-      default: 1.0
-      min: 1.0
+      default: 4.0
+      min: 0.0
       max: 15.0
-      step: 0.5
+      step: 0.1
