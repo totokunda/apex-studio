@@ -983,6 +983,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
           (newClip as ModelClipProps).group = (manifest as any)._group;
         }
         addClip(newClip as AnyClipProps);
+        controlStore.toggleClipSelection((newClip as AnyClipProps).clipId);
 
         // Best-effort: hydrate global offload defaults for this manifest id.
         // Do this *after* addClip so we can safely update the stored clip without

@@ -30,6 +30,26 @@ class HFHubCompatAsyncTqdm(async_tqdm):
         kwargs.pop("name", None)
         super().__init__(*args, **kwargs)
 
+    def update(self, n=1):
+        """
+        In non-interactive runtimes HF may create tqdm with `disable=True`.
+        In that mode tqdm doesn't reliably advance `self.n`, which can make
+        huggingface_hub progress callbacks report only zeros.
+        """
+        try:
+            if getattr(self, "disable", False):
+                inc = 1 if n is None else n
+                try:
+                    inc = float(inc)
+                except Exception:
+                    inc = 0.0
+                if inc:
+                    self.n = getattr(self, "n", 0.0) + inc
+                return None
+        except Exception:
+            pass
+        return super().update(n)
+
 def _progress_tqdm(desc: str) -> Tuple[tqdm, ProgressCb]:
     """
     Create a tqdm bar and a progress callback matching DownloadMixin signature:
@@ -1038,8 +1058,6 @@ class DownloadMixin:
     ):
         """Downloads a repository from the Hugging Face Hub."""
         try:
-            
-
             if hasattr(self, "logger"):
                 self.logger.info(f"Downloading from Hugging Face Hub: {repo_id}")
 

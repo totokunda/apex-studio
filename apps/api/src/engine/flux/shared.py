@@ -132,7 +132,7 @@ class FluxShared(TextualInversionLoaderMixin, BaseEngine):
     ):
 
         if image is not None:
-            image_latents = self.vae_encode(image, offload=offload)
+            image_latents = self.vae_encode(image.contiguous(), offload=offload)
             image_latent_height, image_latent_width = image_latents.shape[2:]
             if timestep is None:
                 image_latents = self._pack_latents(

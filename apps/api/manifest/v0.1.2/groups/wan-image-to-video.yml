@@ -37,3 +37,8 @@ variants:
     label: "Wan 2.2 5B Text to Image to Video"
     description: "Compact 5B parameter model that supports both text-to-video and image-to-video in a single checkpoint. Significantly lower VRAM requirements, suitable for consumer GPUs or fast drafting."
     manifest_ref: video/wan-2.2-5b-text-to-image-to-video
+
+  - id: wan-2-2-a14b-smooth-mix-image-to-video
+    label: "Wan 2.2 A14B Smooth Mix Image to Video"
+    description: "Fine-tuned 14B variant that prioritizes fluid, natural motion and seamless transitions between scenes. Best for cinematic shots requiring smooth camera movement or organic subject motion."
+    manifest_ref: video/wan2.2-a14b-smooth-mix-image-to-video

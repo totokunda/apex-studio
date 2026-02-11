@@ -246,6 +246,7 @@ class DenoisingLoopFunc(Protocol):
         video_state (LatentState): The current latent state for video.
         audio_state (LatentState): The current latent state for audio.
         stepper (DiffusionStepProtocol): The diffusion step protocol to use.
+        denoise_progress_callback: Optional callable(progress, message) for step progress.
     Returns:
         tuple[LatentState, LatentState]: The denoised video and audio latent states.
     """
@@ -256,4 +257,5 @@ class DenoisingLoopFunc(Protocol):
         video_state: LatentState,
         audio_state: LatentState,
         stepper,
+        denoise_progress_callback=None,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...

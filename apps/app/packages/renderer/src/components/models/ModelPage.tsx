@@ -130,6 +130,9 @@ const ModelPage: React.FC<ModelPageProps> = ({
   panelSize = 0,
 }) => {
   const { clearSelectedManifestId, setSelectedManifestId } = useManifestStore();
+  const ctrlToggleClipSelection = useControlsStore(
+    (s) => s.toggleClipSelection,
+  );
   const queryClient = useQueryClient();
   const { data: manifest, isFetching } = useManifestQuery(manifestId);
   const [isRefreshingManifest, setIsRefreshingManifest] = React.useState(false);
@@ -140,6 +143,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
   const parentGroup: ManifestGroup | null = useMemo(() => {
     const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
     if (!Array.isArray(groups) || groups.length === 0) return null;
+    
 
     for (const group of groups) {
       const variants = group.variants ?? [];
@@ -152,6 +156,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
     }
     return null;
   }, [manifestId, queryClient]);
+
 
   // Only show tabs when the group has more than one variant
   const groupVariants: ManifestGroupVariant[] = useMemo(() => {
@@ -217,6 +222,8 @@ const ModelPage: React.FC<ModelPageProps> = ({
     const url = await ensureExternalAssetUrl({ folder, filePath: seg });
     if (url) setResolvedDemoPath(url);
   };
+
+
 
   
 
@@ -441,6 +448,9 @@ const ModelPage: React.FC<ModelPageProps> = ({
                       // ignore; defaults are best-effort
                     }
                     addClip(clipBase);
+                    //setselected 
+                    ctrlToggleClipSelection(newClipId);
+                    
                   } catch {}
                 }}
               >

@@ -1,4 +1,5 @@
 import React, {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -66,6 +67,9 @@ export const ModelItem: React.FC<{
   const [visibleTagCount, setVisibleTagCount] = useState<number | null>(null);
   const { data: manifestData } = useManifestQuery(initialManifest.metadata?.id || "");
   const manifest = manifestData ?? initialManifest;
+  const ctrlToggleClipSelection = useControlsStore(
+    (s) => s.toggleClipSelection,
+  );
 
   // Keep group metadata stable even when manifestData refreshes and does not
   // carry the transient `_group` field.
@@ -433,6 +437,7 @@ export const ModelItem: React.FC<{
                   // ignore; defaults are best-effort
                 }
                 useClipStore.getState().addClip(clipBase);
+                ctrlToggleClipSelection(newClipId);
               } catch {}
             }}
             type="button"
@@ -893,9 +898,22 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
     return Array.from(set);
   }, [filteredManifests, manifestCategoryKeyToLabel]);
 
+  const isManifestOrGroupDownloaded = useCallback(
+    (manifest: ManifestDocument): boolean => {
+      if (manifest.downloaded) return true;
+      const group =
+        ((manifest as any)?._group as ManifestGroup | undefined) ?? undefined;
+      if (!group?.variants?.length) return false;
+      return group.variants.some(
+        (variant) => !!(variant?.manifest as ManifestDocument | null)?.downloaded,
+      );
+    },
+    [],
+  );
+
   const hasDownloaded = useMemo(() => {
-    return filteredManifests.some((m) => !!m.downloaded);
-  }, [filteredManifests]);
+    return filteredManifests.some((m) => isManifestOrGroupDownloaded(m));
+  }, [filteredManifests, isManifestOrGroupDownloaded]);
 
   // Keep a sensible active category when data arrives/changes.
   useEffect(() => {
@@ -1055,7 +1073,9 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
           `}</style>
           <CategoryDetailView
             category={DOWNLOADED_CATEGORY}
-            manifests={filteredManifests.filter((m) => m.downloaded)}
+            manifests={filteredManifests.filter((m) =>
+              isManifestOrGroupDownloaded(m),
+            )}
             onBack={() => setSelectedCategory(null)}
             scrollCache={scrollCacheRef.current}
           />

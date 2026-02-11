@@ -25,7 +25,7 @@ class FluxKontextEngine(FluxShared):
         height: int = 1024,
         width: int = 1024,
         num_inference_steps: int = 30,
-        resize_to_preferred_resolution: bool = True,
+        resize_to_preferred_resolution: bool = False,
         num_images: int = 1,
         seed: int | None = None,
         true_cfg_scale: float = 1.0,
@@ -117,6 +117,7 @@ class FluxKontextEngine(FluxShared):
             device=self.device,
             generator=generator,
         )
+        
         safe_emit_progress(progress_callback, 0.36, "Prepared latents")
 
         if image_ids is not None:
@@ -139,6 +140,7 @@ class FluxKontextEngine(FluxShared):
 
         image_seq_len = latents.shape[1]
         safe_emit_progress(progress_callback, 0.41, "Configuring scheduler")
+        
         mu = self.calculate_shift(
             image_seq_len,
             self.scheduler.config.get("base_image_seq_len", 256),
@@ -146,6 +148,7 @@ class FluxKontextEngine(FluxShared):
             self.scheduler.config.get("base_shift", 0.5),
             self.scheduler.config.get("max_shift", 1.15),
         )
+        
         safe_emit_progress(progress_callback, 0.43, "Computing timesteps")
         timesteps, num_inference_steps = self._get_timesteps(
             self.scheduler,

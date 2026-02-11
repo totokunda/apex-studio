@@ -32,6 +32,7 @@ export interface ProjectJsonV1 {
   };
   manifests?: Record<string, unknown>;
   preprocessors?: Record<string, unknown>;
+  groups?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -87,6 +88,11 @@ export function ensureProjectJson(
       : ([] as any[]),
   };
 
+  const groups =
+    raw?.groups && typeof raw.groups === "object"
+      ? (raw.groups as Record<string, unknown>)
+      : undefined;
+
   const inputControls = {
     selectedRangeByInputId: raw?.inputControls?.selectedRangeByInputId ?? {},
     selectedInputClipIdByInputId: raw?.inputControls?.selectedInputClipIdByInputId ?? {},
@@ -114,6 +120,7 @@ export function ensureProjectJson(
     editorState,
     assets,
     timeline,
+    ...(groups ? { groups } : {}),
     inputControls,
   };
 }
@@ -1451,5 +1458,4 @@ export function jsonPersistenceModule(
 ) {
   return new JSONPersistenceModule(...args);
 }
-
 

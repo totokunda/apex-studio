@@ -1,5 +1,5 @@
 from src.engine.ltx22.shared.engine import LTX2Shared
-from typing import Union, List, Optional, Tuple
+from typing import Union, List, Optional, Tuple, Callable
 import torch
 from src.helpers.ltx2.upsampler import upsample_video
 from src.types import InputImage, InputAudio
@@ -40,10 +40,10 @@ class LTX2TI2VEngine(LTX2Shared):
         images: List[Tuple[InputImage, int, float]] | None = None,
         audio_strength: float = 1.0,
         offload: bool = True,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
         **kwargs,
         ):
-        
-
+        safe_emit_progress(progress_callback, 0.0, "Starting distilled text-to-image-to-video pipeline")
         height = round(height / (self.vae_spatial_compression_ratio * 2) * (self.vae_spatial_compression_ratio * 2))
         width = round(width / (self.vae_spatial_compression_ratio * 2) * (self.vae_spatial_compression_ratio * 2))
         
@@ -63,7 +63,7 @@ class LTX2TI2VEngine(LTX2Shared):
         
         if not getattr(self, "scheduler", None):
             self.load_component_by_type("scheduler")
-        
+        safe_emit_progress(progress_callback, 0.05, "Encoding text")
         if images is None:
             images = []
         
@@ -86,12 +86,14 @@ class LTX2TI2VEngine(LTX2Shared):
         if new_height != height or new_width != width:
             height = new_height
             width = new_width
+        
+        print(images[0][0].size)
             
         
         text_encoder_results = self._encode_text([prompt], offload=offload)
+        safe_emit_progress(progress_callback, 0.12, "Text encoded")
         context_p = text_encoder_results[0]
         v_context_p, a_context_p, _ = context_p
-
 
         stage_1_sigmas = torch.Tensor(DISTILLED_SIGMA_VALUES).to(self.device)
         configure_scheduler_sigmas(self.scheduler, stage_1_sigmas)
@@ -104,7 +106,11 @@ class LTX2TI2VEngine(LTX2Shared):
         )
 
         def first_stage_denoising_loop(
-            sigmas: torch.Tensor, video_state: LatentState, audio_state: LatentState, stepper: DiffusionStepProtocol
+            sigmas: torch.Tensor,
+            video_state: LatentState,
+            audio_state: LatentState,
+            stepper: DiffusionStepProtocol,
+            denoise_progress_callback=None,
         ) -> tuple[LatentState, LatentState]:
             return euler_denoising_loop(
                 sigmas=sigmas,
@@ -116,6 +122,7 @@ class LTX2TI2VEngine(LTX2Shared):
                     audio_context=a_context_p,
                     transformer=self.transformer,  # noqa: F821
                 ),
+                denoise_progress_callback=denoise_progress_callback,
             )
 
         stage_1_output_shape = VideoPixelShape(
@@ -126,16 +133,16 @@ class LTX2TI2VEngine(LTX2Shared):
             fps=fps,
         )
         
+        safe_emit_progress(progress_callback, 0.15, "Preparing stage 1")
         if not getattr(self, "video_vae", None):
             self.load_component_by_name("video_vae")
         self.to_device(self.video_vae)
-        
-        
         if audio is not None:
+            safe_emit_progress(progress_callback, 0.18, "Encoding audio")
             audio_conditionings = self._encode_audio(audio, device=self.device, strength=audio_strength, fps=fps, num_frames=num_frames, offload=offload)
         else:
             audio_conditionings = []
-        
+        safe_emit_progress(progress_callback, 0.20, "Building image conditionings")
         stage_1_conditionings = image_conditionings_by_replacing_latent(
             images=images,
             height=stage_1_output_shape.height,
@@ -152,8 +159,7 @@ class LTX2TI2VEngine(LTX2Shared):
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
         dtype = self.component_dtypes["transformer"]
-        
-        
+        stage_1_denoise_progress = make_mapped_progress(progress_callback, 0.25, 0.42)
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_1_output_shape,
             conditionings=stage_1_conditionings,
@@ -165,10 +171,16 @@ class LTX2TI2VEngine(LTX2Shared):
             components=pipeline_components,
             dtype=dtype,
             device=self.device,
+            denoise_progress_callback=stage_1_denoise_progress,
         )
         
+        safe_emit_progress(progress_callback, 0.42, "Stage 1 complete, upsampling latents")
         latent_upsampler = self.helpers["latent_upsampler"]
         self.to_device(latent_upsampler)
+        
+        if not getattr(self, "video_vae", None):
+            self.load_component_by_name("video_vae")
+        self.to_device(self.video_vae)
         
         upscaled_video_latent = upsample_video(
             video_state.latent[:1],
@@ -179,14 +191,18 @@ class LTX2TI2VEngine(LTX2Shared):
         if offload:
             del latent_upsampler
             self._offload("latent_upsampler")
-            
-        
+            self._offload("video_vae")
+        safe_emit_progress(progress_callback, 0.48, "Preparing stage 2")
         distilled_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
         configure_scheduler_sigmas(self.scheduler, distilled_sigmas)
         stepper = SchedulerDiffusionStep(self.scheduler)
         
         def second_stage_denoising_loop(
-            sigmas: torch.Tensor, video_state: LatentState, audio_state: LatentState, stepper: DiffusionStepProtocol
+            sigmas: torch.Tensor,
+            video_state: LatentState,
+            audio_state: LatentState,
+            stepper: DiffusionStepProtocol,
+            denoise_progress_callback=None,
         ) -> tuple[LatentState, LatentState]:
             return euler_denoising_loop(
                 sigmas=sigmas,
@@ -198,6 +214,7 @@ class LTX2TI2VEngine(LTX2Shared):
                     audio_context=a_context_p,
                     transformer=self.transformer,  # noqa: F821
                 ),
+                denoise_progress_callback=denoise_progress_callback,
             )
 
         stage_2_output_shape = VideoPixelShape(batch=1, frames=num_frames, width=width, height=height, fps=fps)
@@ -217,7 +234,14 @@ class LTX2TI2VEngine(LTX2Shared):
         
         if offload:
             self._offload("video_vae")
-
+            
+            
+        
+        if not self.transformer:
+            self.load_component_by_type("transformer")
+        self.to_device(self.transformer)
+        
+        stage_2_denoise_progress = make_mapped_progress(progress_callback, 0.52, 0.88)
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_2_output_shape,
             conditionings=stage_2_conditionings,
@@ -232,11 +256,11 @@ class LTX2TI2VEngine(LTX2Shared):
             noise_scale=distilled_sigmas[0],
             initial_video_latent=upscaled_video_latent,
             initial_audio_latent=audio_state.latent,
+            denoise_progress_callback=stage_2_denoise_progress,
         )
-        
         if offload:
             self._offload("transformer")
-        
+        safe_emit_progress(progress_callback, 0.88, "Decoding video")
         if not getattr(self, "video_vae", None):
             self.load_component_by_name("video_vae")
         self.to_device(self.video_vae)
@@ -248,10 +272,9 @@ class LTX2TI2VEngine(LTX2Shared):
         
         if offload:
             self._offload("video_vae")
-        
+        safe_emit_progress(progress_callback, 0.94, "Decoding audio")
         vocoder = self.helpers["vocoder"]
         self.to_device(vocoder)
-        
         if not getattr(self, "audio_vae", None):
             self.load_component_by_name("audio_vae")
         self.to_device(self.audio_vae)
@@ -264,5 +287,5 @@ class LTX2TI2VEngine(LTX2Shared):
             self._offload("audio_vae")
             del vocoder
             self._offload("vocoder")
-        
+        safe_emit_progress(progress_callback, 1.0, "Completed distilled text-to-image-to-video pipeline")
         return decoded_video, decoded_audio

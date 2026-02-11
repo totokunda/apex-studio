@@ -212,6 +212,8 @@ python-api-bundle/**
 test_model_qwen.py
 test_model.py
 apps/api/runs/**
+apps/api/.local_manifest/*
+!apps/api/.local_manifest/.gitkeep
 apps/api/ptlflow_logs
 apps/api/apex-test-suite
 apps/api/pytorch

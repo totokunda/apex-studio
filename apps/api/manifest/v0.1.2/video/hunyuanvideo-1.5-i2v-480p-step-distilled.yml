@@ -2,22 +2,23 @@ api_version: apex/v1
 kind: Model
 type: video
 metadata:
-  id: hunyuanvideo15-t2v
+  id: hunyuanvideo15-i2v-480p-step-distilled
   model: hunyuanvideo15
-  name: HunyuanVideo 1.5 Text-to-Video
+  name: HunyuanVideo 1.5 Image-to-Video 480p Step Distilled
   version: 0.1.2
-  description: HunyuanVideo 1.5 is a 8.3B parameter model for text-to-video generation.
+  description: HunyuanVideo 1.5 is a 8.3B parameter model for text/image-to-video
+    generation at 480p resolution with step distilled model.
   tags:
   - hunyuanvideo15
-  - t2v
+  - i2v
   author: Tencent
   license: Apache-2.0
-  demo_path: models/hunyuan-video-1.5-t2v.mp4
+  demo_path: models/hunyuan-video-15-i2v-480p-step-distilled.mp4
   categories:
-  - text-to-video
+  - image-to-video
 spec:
   engine: hunyuanvideo15
-  model_type: t2v
+  model_type: i2v
   engine_type: torch
   default_duration_secs: 5.0
   fps: 24
@@ -34,6 +35,7 @@ spec:
   - flash3
   - metal_flash
   - efficient_dot_product_attention
+  
   components:
   - type: scheduler
     label: Scheduler
@@ -41,7 +43,7 @@ spec:
     scheduler_manifest: schedulers/flow_matching.yml
     scheduler_config_defaults:
       num_train_timesteps: 1000
-      shift: 9.0
+      shift: 7.0
       sigma_max: 1.0
       sigma_min: 0.002994011976047904
   - type: vae
@@ -55,32 +57,7 @@ spec:
       type: safetensors
     config:
       light_vae_path: totoku/apex-models/HunyuanVideo-1.5/vae/lightvae-bf16.safetensors
-  - type: transformer
-    label: HunyuanVideo Transformer
-    base: hunyuanvideo15.base
-    config_id: HunyuanVideo-1.5-T2V/transformer
-    model_path:
-    - path: totoku/apex-models/HunyuanVideo-1.5-T2V/transformer/transformer-bf16.safetensors
-      variant: default
-      precision: bf16
-      type: safetensors
-    - path: totoku/apex-models/HunyuanVideo-1.5-T2V/transformer/transformer-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
-      precision: fp8_e4m3fn
-      type: safetensors
-    - path: totoku/apex-models/HunyuanVideo-1.5-T2V/transformer/transformer-q8_0.gguf
-      variant: GGUF_Q8_0
-      precision: q8_0
-      type: gguf
-    - path: totoku/apex-models/HunyuanVideo-1.5-T2V/transformer/transformer-q6_k.gguf
-      variant: GGUF_Q6_K
-      precision: q6_k
-      type: gguf
-    - path: totoku/apex-models/HunyuanVideo-1.5-T2V/transformer/transformer-q4_k_m.gguf
-      variant: GGUF_Q4_K_M
-      precision: q4_k_m
-      type: gguf
-    
+
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration
@@ -104,7 +81,48 @@ spec:
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
       subfolder: Qwen-Image/tokenizer
-    
+  - type: transformer
+    label: HunyuanVideo Transformer
+    base: hunyuanvideo15.base
+    config_id: HunyuanVideo-1.5-I2V/transformer
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_480p_step_distilled/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_480p_step_distilled/transformer-fp8_e4m3fn.safetensors
+      variant: FP8_E4M3FN
+      precision: fp8_e4m3fn
+      type: safetensors
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_480p_step_distilled/transformer-q8_0.gguf
+      variant: GGUF_Q8_0
+      precision: q8_0
+      type: gguf
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_480p_step_distilled/transformer-q6_k.gguf
+      variant: GGUF_Q6_K
+      precision: q6_k
+      type: gguf
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_480p_step_distilled/transformer-q4_k_m.gguf
+      variant: GGUF_Q4_K_M
+      precision: q4_k_m
+      type: gguf
+  - type: helper
+    label: HunyuanVideo Image Encoder
+    base: SiglipVisionModel
+    module: transformers
+    name: image_encoder
+    config_id: HunyuanVideo-1.5/image_encoder
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-1.5/image_encoder/model.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+  - type: helper
+    label: HunyuanVideo Image Feature Extractor
+    base: SiglipImageProcessor
+    module: transformers
+    name: feature_extractor
+    config_id: HunyuanVideo-1.5-I2V/feature_extractor
   - type: text_encoder
     label: HunyuanVideo ByT5 Encoder
     base: T5EncoderModel
@@ -123,13 +141,20 @@ spec:
     run:
       num_inference_steps: 50
       return_latents: false
-      resolution: 720p
       guidance_scale: 1.0
       attention_kwargs: {}
       chunking_profile: light
       rope_on_cpu: false
   ui:
     panels:
+    - name: image
+      label: Image
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
     - name: prompting
       label: Prompting
       collapsible: true
@@ -177,6 +202,22 @@ spec:
       type: text
       panel: prompting
       required: true
+    - id: image
+      label: Image
+      description: The image for image-to-video generation.
+      type: image
+      panel: image
+      required: true
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 30
+      min: 1
+      max: 100
+      step: 1
     - id: seed
       label: Seed
       description: Random seed for reproducibility
@@ -212,7 +253,7 @@ spec:
       description: Select the resolution of the output image
       panel: size
       type: select
-      default: 720
+      default: 480
       options:
       - name: SD
         value: 480

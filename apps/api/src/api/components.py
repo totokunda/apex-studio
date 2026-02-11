@@ -8,6 +8,7 @@ from pathlib import Path
 import ray
 from loguru import logger
 from src.utils.defaults import get_components_path
+from .manifest import invalidate_manifest_caches
 from .ws_manager import get_ray_ws_bridge
 from .job_store import submit_tracked_job, job_store as unified_job_store
 
@@ -88,11 +89,41 @@ def delete_component(request: DeleteRequest):
     if not target.exists():
         raise HTTPException(status_code=404, detail="Path not found")
 
+    # Best-effort: build HF cache purge plan before local delete so we can
+    # infer cache revisions by inode/symlink relationship.
+    hf_delete_strategy = None
+    hf_revision_count = 0
+    try:
+        from .download import _collect_hf_cache_strategy_for_delete
+
+        hf_delete_strategy, hf_revision_count = _collect_hf_cache_strategy_for_delete(
+            None, target
+        )
+    except Exception:
+        hf_delete_strategy = None
+        hf_revision_count = 0
+
     try:
         if target.is_dir():
             shutil.rmtree(target)
         else:
             target.unlink()
+
+        try:
+            if hf_delete_strategy is not None:
+                hf_delete_strategy.execute()
+                logger.info(
+                    f"Purged Hugging Face cache revisions after legacy components delete: {hf_revision_count} revision(s) for path={target}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to purge Hugging Face cache after legacy components delete {target}: {e}"
+            )
+
+        try:
+            invalidate_manifest_caches()
+        except Exception:
+            pass
         return {"status": "deleted", "path": str(target)}
     except Exception as e:
         logger.error(f"Failed to delete: {e}")

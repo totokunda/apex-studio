@@ -2,7 +2,7 @@ from src.engine.base_engine import BaseEngine
 from typing import Union, List, Optional, Callable, Dict, Any
 import numpy as np
 import torch
-from src.utils.progress import safe_emit_progress
+from src.utils.progress import safe_emit_progress, make_mapped_progress
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.image_processor import VaeImageProcessor
 
@@ -448,6 +448,9 @@ class AnimaT2IEngine(BaseEngine):
             
         
         # 3. Encode input prompt
+        encode_progress_callback = make_mapped_progress(
+            progress_callback, 0.02, 0.18
+        )
         (
             prompt_embeds,
             negative_prompt_embeds,
@@ -459,8 +462,13 @@ class AnimaT2IEngine(BaseEngine):
             negative_prompt_embeds=negative_prompt_embeds,
             device=device,
             max_sequence_length=max_sequence_length,
+            progress_callback=encode_progress_callback,
             offload=offload,
         )
+        safe_emit_progress(progress_callback, 0.18, "Prompts ready")
+
+        if offload:
+            safe_emit_progress(progress_callback, 0.20, "Text encoder offloaded")
 
         if num_images_per_prompt and num_images_per_prompt > 1:
             prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
@@ -470,9 +478,18 @@ class AnimaT2IEngine(BaseEngine):
                 )
         
         # 4. Prepare timesteps
+        if not self.transformer:
+            safe_emit_progress(progress_callback, 0.21, "Loading transformer")
+            self.load_component_by_type("transformer")
+            safe_emit_progress(progress_callback, 0.23, "Transformer loaded")
+            safe_emit_progress(progress_callback, 0.24, "Moving transformer to device")
+        self.to_device(self.transformer)
+        safe_emit_progress(progress_callback, 0.25, "Transformer ready")
+
         if not self.scheduler:
             self.load_component_by_type("scheduler")
         self.to_device(self.scheduler)
+        safe_emit_progress(progress_callback, 0.36, "Scheduler ready")
 
         # Custom `timesteps` takes precedence over `sigmas`.
         custom_timesteps = timesteps
@@ -553,6 +570,7 @@ class AnimaT2IEngine(BaseEngine):
             generator,
             latents,
         )
+        safe_emit_progress(progress_callback, 0.32, "Initialized latent noise")
 
         transformer_dtype = self.component_dtypes["transformer"]
         prompt_embeds = prompt_embeds.to(device=device, dtype=transformer_dtype)
@@ -564,10 +582,11 @@ class AnimaT2IEngine(BaseEngine):
         # 6. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         self._num_timesteps = len(timesteps)
-        
-        if not self.transformer:
-            self.load_component_by_type("transformer")
-        self.to_device(self.transformer)
+        safe_emit_progress(
+            progress_callback, 0.40, "Timesteps computed; starting denoise"
+        )
+
+        denoise_progress_callback = make_mapped_progress(progress_callback, 0.40, 0.92)
 
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -615,6 +634,21 @@ class AnimaT2IEngine(BaseEngine):
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
+
+                if denoise_progress_callback is not None and len(timesteps) > 0:
+                    try:
+                        denoise_progress_callback(
+                            min((i + 1) / len(timesteps), 1.0),
+                            f"Denoising step {i + 1}/{len(timesteps)}",
+                        )
+                    except Exception:
+                        pass
+
+        safe_emit_progress(progress_callback, 0.92, "Denoising complete")
+
+        if offload:
+            self._offload("transformer")
+            safe_emit_progress(progress_callback, 0.94, "Transformer offloaded")
 
         self._current_timestep = None
 

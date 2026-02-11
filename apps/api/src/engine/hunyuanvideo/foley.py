@@ -1,9 +1,10 @@
 from __future__ import annotations
-from typing import List
+from typing import Callable, List, Optional
 import numpy as np
 import torch
 from src.engine.base_engine import BaseEngine
 from src.types import InputVideo
+from src.utils.progress import safe_emit_progress, make_mapped_progress
 from torchvision import transforms
 from torchvision.transforms import v2
 from einops import rearrange
@@ -193,9 +194,11 @@ class HunyuanFoleyEngine(BaseEngine):
         duration: str | int = 15,
         use_video_duration: bool = True,
         offload: bool = True,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
         **kwargs,
     ):
         
+        safe_emit_progress(progress_callback, 0.0, "Starting video-to-audio (foley) pipeline")
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
         else:
@@ -203,6 +206,7 @@ class HunyuanFoleyEngine(BaseEngine):
         
         batch_size = 1
         
+        safe_emit_progress(progress_callback, 0.05, "Extracting video features")
         syncformer_features, audio_length_s = self.extract_syncformer_features(video)
         siglip_features = self.extract_siglip_features(video)
         
@@ -219,11 +223,13 @@ class HunyuanFoleyEngine(BaseEngine):
         if offload:
             self._offload("siglip_model")
             self._offload("syncformer_model")
-            
+        
+        safe_emit_progress(progress_callback, 0.15, "Encoding text")
         prompts = [negative_prompt, prompt]
         
         text_feat, uncond_text_feat = self.extract_text_features(prompts, offload=offload)
 
+        safe_emit_progress(progress_callback, 0.20, "Preparing denoising")
         if not self.scheduler:
             self.load_component_by_type("scheduler")
         self.to_device(self.scheduler)
@@ -251,7 +257,7 @@ class HunyuanFoleyEngine(BaseEngine):
         text_feat = text_feat.to(dtype=transformer_dtype)
         uncond_text_feat = uncond_text_feat.to(dtype=transformer_dtype)
         
-        
+        denoise_progress_callback = make_mapped_progress(progress_callback, 0.25, 0.88)
         with self._progress_bar(total=len(timesteps), desc="Denoising steps") as progress_bar:
             for i, t in enumerate(timesteps):
   
@@ -311,10 +317,20 @@ class HunyuanFoleyEngine(BaseEngine):
 
                 if i == len(timesteps) - 1 or (i + 1) % self.scheduler.order == 0:
                     progress_bar.update()
+                if denoise_progress_callback is not None and len(timesteps) > 0:
+                    try:
+                        denoise_progress_callback(
+                            min((i + 1) / len(timesteps), 1.0),
+                            f"Denoising step {i + 1}/{len(timesteps)}",
+                        )
+                    except Exception:
+                        pass
 
+        safe_emit_progress(progress_callback, 0.88, "Denoising complete")
         if offload:
             self._offload("transformer")
-            
+        
+        safe_emit_progress(progress_callback, 0.92, "Decoding audio")
         if not self.vae:
             self.load_component_by_type("vae")
         self.to_device(self.vae)
@@ -326,6 +342,7 @@ class HunyuanFoleyEngine(BaseEngine):
         
         if offload:
             self._offload("vae")
-            
+        
+        safe_emit_progress(progress_callback, 1.0, "Completed video-to-audio (foley) pipeline")
         audio = audio[:, :int(audio_length_s * self.audio_frame_rate)]
         return audio.unbind(0)

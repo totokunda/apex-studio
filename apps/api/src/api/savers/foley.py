@@ -5,8 +5,8 @@ from typing import Any, Optional
 
 from loguru import logger as _default_logger
 
+from src.api.savers.audio_video import _write_wav_wave
 from src.api.savers.ffmpeg_mux import mux_audio_files_into_video_in_place
-from src.utils.save_audio_video import _write_wav_wave
 
 
 def mux_foley_audio_onto_input_video(
@@ -84,4 +84,3 @@ def mux_foley_audio_onto_input_video(
 
     logger.warning("Foley audio mux failed; returning video-only output.")
     return output_video_path
-
