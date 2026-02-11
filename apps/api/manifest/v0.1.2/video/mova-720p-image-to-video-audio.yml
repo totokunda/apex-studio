@@ -317,7 +317,7 @@ spec:
       type: number
       value_type: integer
       panel: size
-      default: 360
+      default: 720
       min: 256
       max: 8192
       step: 16
@@ -327,7 +327,7 @@ spec:
       type: number
       value_type: integer
       panel: size
-      default: 640
+      default: 1280
       min: 256
       max: 8192
       step: 16

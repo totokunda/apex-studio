@@ -24,7 +24,7 @@ spec:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
     - cuda
-    - mps
+    - metal
     - cpu
   defaults:
     guidance_scale: 4.5
@@ -53,19 +53,19 @@ spec:
       precision: bf16
       type: safetensors
     - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-fp8_e4m3fn.safetensors
-      variant: fp8
-      precision: fp8_e4m3fn
+      variant: FP8_E4M3FN
+      precision: fp8
       type: safetensors
     - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q8_0.gguf
-      variant: gguf_q8_0
+      variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
     - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q6_k.gguf
-      variant: gguf_q6_k
+      variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
     - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q4_k_m.gguf
-      variant: gguf_q4_k_m
+      variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
   - type: vae
@@ -146,14 +146,6 @@ spec:
         - - num_inference_steps
         - - guidance_scale
         - - seed
-    - name: performance
-      label: Performance
-      collapsible: true
-      default_open: false
-      layout:
-        flow: column
-        rows:
-        - - offload
     inputs:
     - id: video
       label: Video

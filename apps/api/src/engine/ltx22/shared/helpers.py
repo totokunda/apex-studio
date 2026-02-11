@@ -33,6 +33,7 @@ from src.engine.ltx22.shared.types import (
     DenoisingLoopFunc,
     PipelineComponents,
 )
+from src.utils.progress import safe_emit_progress
 
 
 import PIL.Image
@@ -97,6 +98,7 @@ def euler_denoising_loop(
     audio_state: LatentState,
     stepper: DiffusionStepProtocol,
     denoise_fn: DenoisingFunc,
+    denoise_progress_callback=None,
 ) -> tuple[LatentState, LatentState]:
     """
     Perform the joint audio-video denoising loop over a diffusion schedule.
@@ -124,12 +126,18 @@ def euler_denoising_loop(
         ``denoise_fn(video_state, audio_state, sigmas, step_index)`` and must
         return a tuple ``(denoised_video, denoised_audio)``, where each element
         is a tensor with the same shape as the corresponding latent.
+    denoise_progress_callback:
+        Optional callable(progress: float, message: str) invoked each step with
+        progress in [0, 1] and a status message.
     ### Returns
     tuple[LatentState, LatentState]
         A pair ``(video_state, audio_state)`` containing the final video and
         audio latent states after completing the denoising loop.
     """
-    for step_idx, _ in enumerate(tqdm(sigmas[:-1])):
+    steps = sigmas[:-1]
+    n_steps = len(steps)
+    for step_idx, _ in enumerate(tqdm(steps)):
+        
         denoised_video, denoised_audio = denoise_fn(video_state, audio_state, sigmas, step_idx)
 
         denoised_video = post_process_latent(denoised_video, video_state.denoise_mask, video_state.clean_latent)
@@ -137,6 +145,12 @@ def euler_denoising_loop(
 
         video_state = replace(video_state, latent=stepper.step(video_state.latent, denoised_video, sigmas, step_idx))
         audio_state = replace(audio_state, latent=stepper.step(audio_state.latent, denoised_audio, sigmas, step_idx))
+        
+        safe_emit_progress(
+            denoise_progress_callback,
+            (step_idx + 1) / n_steps if n_steps else 1.0,
+            f"Denoised step {step_idx + 1}/{n_steps}",
+        )
 
     return (video_state, audio_state)
 
@@ -543,6 +557,7 @@ def denoise_audio_video(  # noqa: PLR0913
     noise_scale: float = 1.0,
     initial_video_latent: torch.Tensor | None = None,
     initial_audio_latent: torch.Tensor | None = None,
+    denoise_progress_callback=None,
 ) -> tuple[LatentState, LatentState]:
     
     video_state, video_tools = noise_video_state(
@@ -572,6 +587,7 @@ def denoise_audio_video(  # noqa: PLR0913
         video_state,
         audio_state,
         stepper,
+        denoise_progress_callback=denoise_progress_callback,
     )
 
     video_state = video_tools.clear_conditioning(video_state)

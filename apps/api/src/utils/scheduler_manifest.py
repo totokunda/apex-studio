@@ -6,6 +6,82 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 
+_LEGACY_FLOW_SCHEDULER_NAME_MAP: Dict[str, str] = {
+    "FlowMatchEulerDiscreteScheduler": "EulerFlowScheduler",
+    "FlowMatchDiscreteScheduler": "EulerFlowScheduler",
+    "FlowMatchDiscreteScheduler720p": "EulerFlowScheduler",
+    "FlowMatchScheduler": "EulerFlowScheduler",
+    "UniPCMultistepScheduler": "UniPCMultistepSchedulerBH2",
+    "DPMSolverMultistepScheduler": "DPMpp2MFlowScheduler",
+}
+
+_LEGACY_FLOW_SCHEDULER_BASE_MARKERS = (
+    "diffusers.flowmatcheulerdiscretescheduler",
+    "diffusers.schedulers.flowmatcheulerdiscretescheduler",
+    "diffusers.unipcmultistepscheduler",
+    "diffusers.dpmsolvermultistepscheduler",
+    "src.scheduler.unipc.unipcmultistepscheduler",
+)
+
+
+def _map_legacy_flow_scheduler_name(name: Any) -> Optional[str]:
+    if not isinstance(name, str):
+        return None
+    clean = name.strip()
+    if not clean:
+        return None
+    return _LEGACY_FLOW_SCHEDULER_NAME_MAP.get(clean, clean)
+
+
+def _looks_like_legacy_flow_scheduler_component(component: Dict[str, Any]) -> bool:
+    local_options = component.get("scheduler_options") or []
+    local_options = [x for x in local_options if isinstance(x, dict)]
+
+    default_name = component.get("default")
+    mapped_default = _map_legacy_flow_scheduler_name(default_name)
+    if (
+        isinstance(default_name, str)
+        and default_name.strip()
+        and mapped_default is not None
+        and mapped_default != default_name.strip()
+    ):
+        return True
+
+    for opt in local_options:
+        mapped_name = _map_legacy_flow_scheduler_name(opt.get("name"))
+        if mapped_name is None:
+            continue
+        original_name = str(opt.get("name") or "").strip()
+        if original_name and mapped_name != original_name:
+            return True
+
+        base = str(opt.get("base") or "").strip().lower()
+        if any(marker in base for marker in _LEGACY_FLOW_SCHEDULER_BASE_MARKERS):
+            return True
+
+    return False
+
+
+def _resolve_scheduler_manifest_ref_for_component(
+    component: Dict[str, Any],
+) -> tuple[Optional[str], bool]:
+    """
+    Return (manifest_ref, inferred_legacy_flow_catalog).
+
+    Legacy manifests (v0.1.0 / .local_manifest legacy copies) often embed old
+    diffusers scheduler options directly without `scheduler_manifest`. For those,
+    auto-upgrade to the shared flow catalog so UI always shows the modern list.
+    """
+    scheduler_manifest_ref = component.get("scheduler_manifest")
+    if isinstance(scheduler_manifest_ref, str) and scheduler_manifest_ref.strip():
+        return scheduler_manifest_ref.strip(), False
+
+    if _looks_like_legacy_flow_scheduler_component(component):
+        return "schedulers/flow_matching.yml", True
+
+    return None, False
+
+
 def _extract_scheduler_options(doc: Any) -> List[Dict[str, Any]]:
     """
     Accept a few shapes to keep the scheduler catalog flexible:
@@ -90,6 +166,22 @@ def _resolve_manifest_ref(
             except Exception:
                 pass
 
+            # Overlay-aware fallback:
+            # If manifest_root is ".local_manifest", shared scheduler catalogs may
+            # still live in the sibling "manifest" tree (and vice versa).
+            try:
+                sibling_root: Optional[Path] = None
+                if manifest_root.name == ".local_manifest":
+                    sibling_root = manifest_root.parent / "manifest"
+                elif manifest_root.name == "manifest":
+                    sibling_root = manifest_root.parent / ".local_manifest"
+                if sibling_root is not None:
+                    candidates.append((sibling_root / p).resolve())
+                    if len(p.parts) == 1:
+                        candidates.append((sibling_root / "schedulers" / p).resolve())
+            except Exception:
+                pass
+
     return next((c for c in candidates if c.exists()), None)
 
 
@@ -141,8 +233,10 @@ def expand_scheduler_manifests(
             scheduler_config_overrides if isinstance(scheduler_config_overrides, dict) else {}
         )
 
-        scheduler_manifest_ref = component.get("scheduler_manifest")
-        if not isinstance(scheduler_manifest_ref, str) or not scheduler_manifest_ref.strip():
+        scheduler_manifest_ref, inferred_legacy_flow_catalog = (
+            _resolve_scheduler_manifest_ref_for_component(component)
+        )
+        if not scheduler_manifest_ref:
             continue
 
         resolved = _resolve_manifest_ref(
@@ -153,6 +247,8 @@ def expand_scheduler_manifests(
         if resolved is None:
             # Best-effort: if it's missing, leave the manifest untouched.
             continue
+        
+
 
         try:
             scheduler_doc = yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
@@ -163,6 +259,35 @@ def expand_scheduler_manifests(
         catalog_fields = _extract_scheduler_fields(scheduler_doc)
         local_options = component.get("scheduler_options") or []
         local_options = [x for x in local_options if isinstance(x, dict)]
+
+        # For legacy manifests auto-upgraded to a shared catalog, keep only
+        # local options that map to known catalog entries and only as config/label
+        # overrides. This avoids leaking legacy `base` / config path values.
+        if inferred_legacy_flow_catalog and catalog_options:
+            catalog_names = {
+                str(opt.get("name")).strip()
+                for opt in catalog_options
+                if isinstance(opt, dict) and isinstance(opt.get("name"), str)
+            }
+            filtered_local_options: List[Dict[str, Any]] = []
+            for opt in local_options:
+                mapped_name = _map_legacy_flow_scheduler_name(opt.get("name"))
+                if not mapped_name or mapped_name not in catalog_names:
+                    continue
+                normalized = dict(opt)
+                normalized["name"] = mapped_name
+                normalized.pop("base", None)
+                normalized.pop("config_path", None)
+                normalized.pop("config_id", None)
+                filtered_local_options.append(normalized)
+            local_options = filtered_local_options
+
+            default_name = component.get("default")
+            mapped_default = _map_legacy_flow_scheduler_name(default_name)
+            if mapped_default and mapped_default in catalog_names:
+                component["default"] = mapped_default
+            elif "EulerFlowScheduler" in catalog_names:
+                component["default"] = "EulerFlowScheduler"
 
         if not catalog_options and not local_options:
             continue

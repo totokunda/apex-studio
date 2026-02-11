@@ -16,6 +16,7 @@ metadata:
   categories:
     - control
     - inpaint
+    - reference-image-to-video
 
 variants:
   - id: wan-2.1-14b-vace-control

@@ -1,13 +1,16 @@
 import * as React from "react";
+import { v4 as uuidv4 } from "uuid";
 import { pathToFileURLString } from "@app/preload";
-import { useClipStore } from "@/lib/clip";
+import { getTimelineHeightForClip, useClipStore } from "@/lib/clip";
 import { getMediaInfoCached } from "@/lib/media/utils";
 import { BASE_LONG_SIDE } from "@/lib/settings";
 import { useViewportStore } from "@/lib/viewport";
 import type {
+  AudioClipProps,
   ClipTransform,
   GenerationModelClipProps,
   ModelClipProps,
+  TimelineProps,
 } from "@/lib/types";
 import {
   connectJobWebSocket,
@@ -31,6 +34,98 @@ type JobLike = {
   } | null;
 };
 
+const rangesOverlap = (aStart: number, aEnd: number, bStart: number, bEnd: number) => {
+  const as = Math.min(aStart, aEnd);
+  const ae = Math.max(aStart, aEnd);
+  const bs = Math.min(bStart, bEnd);
+  const be = Math.max(bStart, bEnd);
+  return Math.max(as, bs) < Math.min(ae, be);
+};
+
+const extractResultPath = (job: any): string | undefined => {
+  const meta = (job?.latest?.metadata || {}) as any;
+  const direct =
+    meta?.output_path ||
+    meta?.outputPath ||
+    meta?.result_path ||
+    meta?.resultPath ||
+    meta?.preview_path ||
+    meta?.previewPath ||
+    job?.output_path ||
+    job?.outputPath ||
+    job?.result_path ||
+    job?.resultPath ||
+    job?.preview_path ||
+    job?.previewPath ||
+    job?.result?.output_path ||
+    job?.result?.outputPath ||
+    job?.result?.result_path ||
+    job?.result?.resultPath ||
+    job?.result?.preview_path ||
+    job?.result?.previewPath;
+  return typeof direct === "string" && direct.length > 0 ? direct : undefined;
+};
+
+const getLowercaseExt = (value?: string): string => {
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    const pathname = parsed.pathname || "";
+    const idx = pathname.lastIndexOf(".");
+    return idx >= 0 ? pathname.slice(idx).toLowerCase() : "";
+  } catch {
+    const cleaned = value.split("#")[0]?.split("?")[0] || value;
+    const idx = cleaned.lastIndexOf(".");
+    return idx >= 0 ? cleaned.slice(idx).toLowerCase() : "";
+  }
+};
+
+const ensureAudioTimelineAbove = (modelClip: ModelClipProps): string | undefined => {
+  const state = useClipStore.getState();
+  const timelines = state.timelines || [];
+  const clips = state.clips || [];
+  const modelTimelineId = modelClip.timelineId;
+  if (!modelTimelineId) return undefined;
+  const modelTimelineIndex = timelines.findIndex((t) => t.timelineId === modelTimelineId);
+  if (modelTimelineIndex < 0) return undefined;
+
+  const startFrame = Math.round(modelClip.startFrame ?? 0);
+  const endFrame = Math.round(modelClip.endFrame ?? startFrame + 1);
+
+  for (let i = modelTimelineIndex - 1; i >= 0; i--) {
+    const timeline = timelines[i];
+    if (!timeline || timeline.type !== "audio") continue;
+    const hasOverlap = clips.some((c) => {
+      if (!c || (c as any).hidden) return false;
+      if ((c as any).timelineId !== timeline.timelineId) return false;
+      return rangesOverlap(
+        startFrame,
+        endFrame,
+        Math.round((c as any).startFrame ?? 0),
+        Math.round((c as any).endFrame ?? 0),
+      );
+    });
+    if (!hasOverlap) return timeline.timelineId;
+  }
+
+  const newTimelineId = uuidv4();
+  const modelTimeline = timelines[modelTimelineIndex] as TimelineProps | undefined;
+  const lastTimeline = timelines[timelines.length - 1] as TimelineProps | undefined;
+  state.addTimeline(
+    {
+      timelineId: newTimelineId,
+      type: "audio",
+      timelineHeight: getTimelineHeightForClip("audio"),
+      timelineWidth: modelTimeline?.timelineWidth ?? lastTimeline?.timelineWidth ?? 0,
+      timelinePadding: modelTimeline?.timelinePadding ?? lastTimeline?.timelinePadding ?? 24,
+      muted: false,
+      hidden: false,
+    },
+    modelTimelineIndex - 1,
+  );
+  return newTimelineId;
+};
+
 export function useEngineJobClipSync<TJob extends JobLike>(params: {
   jobsById: Record<string, TJob>;
   setJobsById: React.Dispatch<React.SetStateAction<Record<string, TJob>>>;
@@ -45,6 +140,8 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
   const subscribedRef = React.useRef<Map<string, () => void>>(new Map());
   const orphanHandledByJobIdRef = React.useRef<Set<string>>(new Set());
   const orphanHandlingByJobIdRef = React.useRef<Set<string>>(new Set());
+  const audioResultHandledByJobIdRef = React.useRef<Set<string>>(new Set());
+  const audioResultHandlingByJobIdRef = React.useRef<Set<string>>(new Set());
 
   // Sync jobs to clip store + manage WS subscriptions for active engine jobs
   React.useEffect(() => {
@@ -77,14 +174,14 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
           // the result applied OR the result has been handled as an orphan.
           if (s === "complete" || s === "completed") {
             if (orphanHandledByJobIdRef.current.has(j.job_id)) return false;
-            const meta = (j.latest?.metadata || {}) as any;
-            const previewPath = meta.preview_path;
-            const fileUrl = previewPath
-              ? pathToFileURLString(previewPath)
-              : undefined;
+            if (audioResultHandledByJobIdRef.current.has(j.job_id)) return false;
+            const resultPath = extractResultPath(j);
+            const fileUrl = resultPath ? pathToFileURLString(resultPath) : undefined;
+            const isMp3Result = getLowercaseExt(resultPath || fileUrl) === ".mp3";
             const clip = clips.find(
               (c) => c.type === "model" && (c as ModelClipProps).activeJobId === j.job_id,
             ) as ModelClipProps | undefined;
+            if (isMp3Result) return false;
             const hasAppliedResult = !!(
               clip &&
               fileUrl &&
@@ -204,7 +301,6 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
       const clip = clips.find(
         (c) => c.type === "model" && (c as ModelClipProps).activeJobId === job.job_id,
       ) as ModelClipProps | undefined;
-
       const status = (job.status || "").toLowerCase();
       let newStatus: "pending" | "running" | "complete" | "failed" | undefined;
 
@@ -214,9 +310,9 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
       else if (status === "complete" || status === "completed") newStatus = "complete";
       else if (status === "error" || status === "failed") newStatus = "failed";
 
-      const meta = job.latest?.metadata || {};
-      const previewPath = meta.preview_path;
-      const fileUrl = previewPath ? pathToFileURLString(previewPath) : undefined;
+      const resultPath = extractResultPath(job);
+      const fileUrl = resultPath ? pathToFileURLString(resultPath) : undefined;
+      const isMp3Result = getLowercaseExt(resultPath || fileUrl) === ".mp3";
 
 
       // If the originating clip was deleted (or no longer references this job),
@@ -295,13 +391,65 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
       let shouldFinalizeComplete = false;
 
       let resolvedAssetId: string | undefined;
-      if (fileUrl && (clip.previewPath !== fileUrl || !clip.assetId)) {
+      const isEngineComplete = status === "complete" || status === "completed";
+      if (isMp3Result && fileUrl && isEngineComplete) {
+        if (audioResultHandledByJobIdRef.current.has(job.job_id)) {
+          resolvedAssetId = clip.assetId;
+        } else if (!audioResultHandlingByJobIdRef.current.has(job.job_id)) {
+          try {
+            audioResultHandlingByJobIdRef.current.add(job.job_id);
+            const asset = await addAssetAsync({ path: fileUrl }, "apex-cache");
+            resolvedAssetId = asset?.id as string | undefined;
+            if (resolvedAssetId) {
+              const mediaInfo = asset?.path ? getMediaInfoCached(asset.path) : undefined;
+              const clipStart = Math.round(clip.startFrame ?? 0);
+              const clipEndFromAsset =
+                typeof mediaInfo?.duration === "number" && mediaInfo.duration > 0
+                  ? Math.max(clipStart + 1, Math.round(clipStart + mediaInfo.duration * fps))
+                  : Math.round(clip.endFrame ?? clipStart + 1);
+              const timelineId = ensureAudioTimelineAbove(clip);
+              if (timelineId) {
+                const existing = useClipStore
+                  .getState()
+                  .clips.find(
+                    (c) =>
+                      c.type === "audio" &&
+                      (c as AudioClipProps).assetId === resolvedAssetId &&
+                      (c as any).timelineId === timelineId &&
+                      Math.round((c as any).startFrame ?? 0) === clipStart &&
+                      Math.round((c as any).endFrame ?? 0) === clipEndFromAsset,
+                  ) as AudioClipProps | undefined;
+                if (!existing) {
+                  const audioClip: AudioClipProps = {
+                    type: "audio",
+                    clipId: uuidv4(),
+                    timelineId,
+                    startFrame: clipStart,
+                    endFrame: clipEndFromAsset,
+                    trimStart: 0,
+                    trimEnd: 0,
+                    assetId: resolvedAssetId,
+                    volume: 1,
+                    fadeIn: 0,
+                    fadeOut: 0,
+                    speed: 1,
+                  };
+                  useClipStore.getState().addClip(audioClip);
+                }
+                audioResultHandledByJobIdRef.current.add(job.job_id);
+              }
+            }
+          } catch (e) {
+            console.warn("Failed to place engine mp3 result on audio timeline", e);
+          } finally {
+            audioResultHandlingByJobIdRef.current.delete(job.job_id);
+          }
+        }
+      } else if (fileUrl && (clip.previewPath !== fileUrl || !clip.assetId)) {
         try {
           patch.previewPath = fileUrl;
           needsUpdate = true;
-
           const asset = await addAssetAsync({ path: fileUrl }, "apex-cache");
-
           resolvedAssetId = asset?.id;
           if (resolvedAssetId) {
             patch.assetId = resolvedAssetId;
@@ -328,7 +476,9 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
 
       const effectivePreviewPath = patch.previewPath ?? clip.previewPath;
       const effectiveAssetId = patch.assetId ?? clip.assetId;
-      const hasUsableResult = !!(fileUrl && effectivePreviewPath === fileUrl && effectiveAssetId);
+      const hasUsableResult = isMp3Result
+        ? !!(resolvedAssetId || audioResultHandledByJobIdRef.current.has(job.job_id))
+        : !!(fileUrl && effectivePreviewPath === fileUrl && effectiveAssetId);
 
       if (newStatus === "complete") {
         if (hasUsableResult) {
@@ -370,7 +520,10 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
 
       if (shouldFinalizeComplete && newGen) {
         newGen.modelStatus = "complete";
-        newGen.assetId = (patch.assetId ?? clip.assetId ?? "") as any;
+        const finalizedAssetId = resolvedAssetId ?? patch.assetId ?? clip.assetId;
+        if (finalizedAssetId) {
+          newGen.assetId = finalizedAssetId as any;
+        }
         needsUpdate = true;
         genUpdate = true;
         window.dispatchEvent(
@@ -514,5 +667,3 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
     };
   }, []);
 }
-
-

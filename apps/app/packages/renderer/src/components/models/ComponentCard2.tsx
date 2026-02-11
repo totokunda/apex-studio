@@ -732,7 +732,6 @@ const ModelPathItem: React.FC<{
       addJobIdToManifestId(data.job_id, manifestId);
     },
   });
-
   
   const jobId = getSourceToJobId(path.path);
   const jobUpdates = getJobUpdates(jobId);
@@ -741,7 +740,6 @@ const ModelPathItem: React.FC<{
   const width = ref.current?.clientWidth ?? 0;
   const [startDownloading, setStartDownloading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-
 
   const onClearJobId = useCallback(async (e: Event) => {
     const event = e as CustomEvent<{ jobId: string }>;
@@ -761,6 +759,7 @@ const ModelPathItem: React.FC<{
       ]);
     } catch {}
   }, [clearDownloadTracking, componentIndex, jobId, manifestId, path.path, queryClient]);
+
 
   useEffect(() => {
     window.addEventListener("clear-job-id", onClearJobId as EventListener);
@@ -782,9 +781,8 @@ const ModelPathItem: React.FC<{
     }
   }, []);
 
-
   return (
-    <div className="w-full bg-brand-background rounded-md p-3" ref={ref}>
+    <div className="w-full bg-brand-background rounded-md p-3 mb-2" ref={ref}>
      {(path.variant || path.custom) && (
               <div className="flex flex-row justify-between items-center mb-2.5">
                 <div className="flex items-center gap-x-1.5">

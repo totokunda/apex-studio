@@ -243,7 +243,7 @@ const ModelComponentsProperties = ({
   return (
     <div className="flex flex-col p-4 justify-start items-stretch w-full">
       <div className="flex flex-col gap-3 w-full">
-        {components.map((comp, index) => {
+        {components.filter((comp) => comp.type !== "scheduler").map((comp, index) => {
           if (comp.model_path) {
             return (
               <div key={`${comp.type}-${index}`} className="w-full">

@@ -17,6 +17,7 @@ import shutil
 from src.api.savers.audio_video import save_video_ovi, save_video_ltx2
 from src.api.savers.engine_results import save_engine_output
 from src.api.savers.foley import mux_foley_audio_onto_input_video
+from src.api.savers.mmaudio import save_mmaudio_output
 from src.api.savers.mp4 import optimize_mp4_for_editor_in_place
 from src.api.savers.preview_url import make_preview_url
 from src.api.savers.postprocessors import save_frames_with_source_audio
@@ -35,7 +36,8 @@ from src.utils.defaults import (
     get_cache_path,
 )
 from src.utils.config_store import read_json_dict
-from src.api.manifest import get_manifest, MANIFEST_BASE_PATH
+from src.api.manifest import get_manifest, invalidate_manifest_caches
+from src.manifest.paths import ensure_local_manifest_path
 import gc
 import ctypes
 import ctypes.util
@@ -744,6 +746,7 @@ def _save_manifest_yaml(yaml_path: Path, doc: Dict[str, Any]) -> None:
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
         yaml_text = yaml.safe_dump(doc, sort_keys=False)
         yaml_path.write_text(yaml_text, encoding="utf-8")
+        invalidate_manifest_caches()
     except Exception as e:
         logger.error(f"Failed to write updated manifest YAML {yaml_path}: {e}")
 
@@ -805,7 +808,10 @@ def _remove_lora_from_manifest(
         if not lora_name:
             return False
         manifest = get_manifest(manifest_id)
-        manifest_path = MANIFEST_BASE_PATH / Path(manifest.get("full_path"))
+        relative_path = manifest.get("full_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            return False
+        manifest_path = ensure_local_manifest_path(relative_path)
         doc = _load_manifest_yaml(manifest_path)
         if doc is None:
             return False
@@ -1102,7 +1108,10 @@ def _ensure_lora_registered_in_manifests(
     """
     try:
         manifest = get_manifest(manifest_id)
-        manifest_path = MANIFEST_BASE_PATH / Path(manifest.get("full_path"))
+        relative_path = manifest.get("full_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            return None
+        manifest_path = ensure_local_manifest_path(relative_path)
         doc = _load_manifest_yaml(manifest_path)
         if doc is None:
             return
@@ -1253,7 +1262,10 @@ def _mark_lora_verified_in_manifests(
     """
     try:
         manifest = get_manifest(manifest_id)
-        manifest_path = MANIFEST_BASE_PATH / Path(manifest.get("full_path"))
+        relative_path = manifest.get("full_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            return None
+        manifest_path = ensure_local_manifest_path(relative_path)
         doc = _load_manifest_yaml(manifest_path)
         if doc is None:
             return None
@@ -1837,6 +1849,10 @@ def download_unified(
                     "message": "LoRA downloaded and initialized",
                     "local_paths": lora_item.local_paths,
                 }
+                try:
+                    invalidate_manifest_caches()
+                except Exception:
+                    pass
                 if verified is not None:
                     result["verified"] = bool(verified)
                 return result
@@ -2044,6 +2060,11 @@ def download_unified(
         except Exception:
             pass
         has_error = any(r.get("status") == "error" for r in results)
+        if norm_type in {"component", "lora"}:
+            try:
+                invalidate_manifest_caches()
+            except Exception:
+                pass
         return {
             "job_id": job_id,
             "status": "error" if has_error else "complete",
@@ -2146,6 +2167,10 @@ def download_components(
 
         has_error = any(r.get("status") == "error" for r in results)
         final_status = "error" if has_error else "complete"
+        try:
+            invalidate_manifest_caches()
+        except Exception:
+            pass
         send_progress(
             1.0,
             "Complete" if final_status == "complete" else "Completed with errors",
@@ -2576,6 +2601,120 @@ def _run_engine_from_manifest_impl(
         if attention_type:
             input_kwargs["attention_type"] = attention_type
 
+        # Forward model-weight download progress (during engine construction) to frontend.
+        _weights_dl_state: Dict[str, Any] = {
+            "last_emit_ts": 0.0,
+            "last_percent_step": -1,
+            "last_downloaded_emitted": 0,
+            "last_label": "",
+        }
+
+        def _format_bytes(value: int) -> str:
+            try:
+                n = float(max(0, int(value)))
+            except Exception:
+                n = 0.0
+            units = ["B", "KB", "MB", "GB", "TB"]
+            idx = 0
+            while n >= 1024.0 and idx < len(units) - 1:
+                n /= 1024.0
+                idx += 1
+            if idx == 0:
+                return f"{int(n)} {units[idx]}"
+            return f"{n:.1f} {units[idx]}"
+
+        def _engine_weights_download_progress(
+            downloaded: int, total: Optional[int], label: Optional[str] = None
+        ) -> None:
+            try:
+                now_ts = time.time()
+                total_i = int(total) if isinstance(total, (int, float)) else None
+                downloaded_i = (
+                    int(downloaded) if isinstance(downloaded, (int, float)) else 0
+                )
+                if total_i is not None and total_i > 0:
+                    if downloaded_i < 0:
+                        downloaded_i = 0
+                    if downloaded_i > total_i:
+                        downloaded_i = total_i
+                    fraction = float(downloaded_i) / float(total_i)
+                else:
+                    fraction = None
+
+                # Throttle noisy downloader callbacks while preserving useful milestones.
+                label_str = str(label).strip() if isinstance(label, str) else ""
+                # Emit at coarse milestones only:
+                # - every 5% when total is known
+                # - every 250MB when total is unknown
+                # - heartbeat every 10s
+                percent_step = (
+                    int((fraction or 0.0) * 100.0) // 5 if fraction is not None else -1
+                )
+                label_changed = label_str != str(_weights_dl_state.get("last_label") or "")
+                if label_changed:
+                    _weights_dl_state["last_percent_step"] = -1
+                    _weights_dl_state["last_downloaded_emitted"] = 0
+
+                should_emit = False
+                last_ts = float(_weights_dl_state.get("last_emit_ts") or 0.0)
+                if fraction in {0.0, 1.0}:
+                    should_emit = True
+                elif label_changed:
+                    should_emit = True
+                elif fraction is not None and percent_step != int(
+                    _weights_dl_state.get("last_percent_step", -1)
+                ):
+                    should_emit = True
+                elif fraction is None and (
+                    downloaded_i
+                    - int(_weights_dl_state.get("last_downloaded_emitted") or 0)
+                ) >= (250 * 1024 * 1024):
+                    should_emit = True
+                elif (now_ts - last_ts) >= 10.0:
+                    should_emit = True
+                if not should_emit:
+                    return
+                _weights_dl_state["last_emit_ts"] = now_ts
+                _weights_dl_state["last_percent_step"] = percent_step
+                _weights_dl_state["last_downloaded_emitted"] = downloaded_i
+                _weights_dl_state["last_label"] = label_str
+
+                progress_bits: List[str] = []
+                if fraction is not None:
+                    progress_bits.append(f"{fraction * 100.0:.1f}%")
+                if total_i is not None and total_i > 0:
+                    progress_bits.append(
+                        f"{_format_bytes(downloaded_i)} / {_format_bytes(total_i)}"
+                    )
+                elif downloaded_i > 0:
+                    progress_bits.append(_format_bytes(downloaded_i))
+
+                progress_text = (
+                    f" ({' | '.join(progress_bits)})" if progress_bits else ""
+                )
+                if label_str:
+                    msg = f"Downloading model weights: {label_str}{progress_text}"
+                else:
+                    msg = f"Downloading model weights{progress_text}"
+
+                meta: Dict[str, Any] = {
+                    "status": "processing",
+                    "stage": "weights_download",
+                }
+                if total_i is not None:
+                    meta["total"] = total_i
+                meta["downloaded"] = downloaded_i
+                if fraction is not None:
+                    meta["fraction"] = max(0.0, min(1.0, float(fraction)))
+                if label_str:
+                    meta["filename"] = label_str
+                # Use engine progress bar during weight download when a total is known.
+                send_progress(fraction if fraction is not None else None, msg, meta)
+            except Exception:
+                return
+
+        input_kwargs["download_progress_callback"] = _engine_weights_download_progress
+
         engine_pool_key = _engine_pool_key(
             manifest_path=manifest_path,
             engine_type=engine_type,
@@ -2596,12 +2735,27 @@ def _run_engine_from_manifest_impl(
         # This allows a previous warmup (or a previous run) to reuse the already-loaded engine.
         allow_pool = not _warm_weights_disabled()
         try:
+            send_progress(
+                None,
+                "Preparing model weights",
+                {"status": "processing", "stage": "weights_download"},
+            )
             engine, engine_pooled = _get_engine_warm_pool().acquire(
                 engine_pool_key, _factory, allow_pool=allow_pool
+            )
+            send_progress(
+                None,
+                "Model weights ready",
+                {"status": "processing", "stage": "weights_download"},
             )
         except Exception:
             engine = _factory()
             engine_pooled = False
+            send_progress(
+                None,
+                "Model weights ready",
+                {"status": "processing", "stage": "weights_download"},
+            )
 
         # Compute FPS once so we don't capture the full engine/config inside callbacks.
         fps_for_video: int = 16
@@ -2688,6 +2842,12 @@ def _run_engine_from_manifest_impl(
         )
         model_type_lc = (
             str(model_type).strip().lower() if model_type is not None else ""
+        )
+        is_ovi_model = model_type_lc == "ovi"
+        is_foley_model = model_type_lc == "foley"
+        is_ltx_audio_video_engine = engine_name_lc in {"ltx2", "ltx22"}
+        is_mmaudio_engine = (
+            engine_name_lc == "mmaudio" or model_type_lc in {"mmaudio", "tv2a"}
         )
         is_upscaler_engine = (
             engine_name_lc in {"seedvr", "flashvsr"} or model_type_lc == "upscale"
@@ -2819,9 +2979,6 @@ def _run_engine_from_manifest_impl(
                         f"Failed to resolve audio input '{audio_key}' for saving: {e}"
                     )
 
-        engine_stage_start = len(preprocessor_jobs) / total_steps
-        engine_stage_span = 1.0 / total_steps
-
         # Render-on-step callback that writes previews
         step_counter = {"i": 0}
         # Optional: limit how many *preview* saves we do per run (final result always saves).
@@ -2898,15 +3055,22 @@ def _run_engine_from_manifest_impl(
             output_obj: Tuple[np.ndarray, np.ndarray],
             is_result: bool = False,
         ):
+            if not (isinstance(output_obj, (tuple, list)) and len(output_obj) >= 2):
+                raise ValueError(
+                    "Expected audio+video output tuple shaped like (video, audio)."
+                )
             idx = step_counter["i"]
             step_counter["i"] = idx + 1
             # Enforce preview-save limit (do not block final outputs).
             if not is_result and _max_preview_saves > 0 and idx >= _max_preview_saves:
                 return None, None
+            video_shape = getattr(output_obj[0], "shape", None)
+            audio_shape = getattr(output_obj[1], "shape", None)
             logger.info(
-                f"Saving audio video output at step {idx} with output object {output_obj[0].shape} and {output_obj[1].shape}"
+                f"Saving audio video output at step {idx} with "
+                f"video_shape={video_shape} audio_shape={audio_shape}"
             )
-            if model_type.lower() == "ovi":
+            if is_ovi_model:
                 save_func = save_video_ovi
             else:
                 save_func = save_video_ltx2
@@ -2949,27 +3113,73 @@ def _run_engine_from_manifest_impl(
                     f"Failed sending preview websocket update at step {idx}: {se}"
                 )
             return result_path, media_type
+        
+        def render_on_step_callback_audio(
+            output_obj: np.ndarray,
+            is_result: bool = True,
+        ):
+            # HunyuanVideo-Foley returns an audio waveform; return the *original input video*
+        # with the generated audio muxed in (best-effort) using ffmpeg.
+            result_path = None
+            media_type = None
+            if is_foley_model:
+                video_val = (prepared_inputs or {}).get("video")
+                input_video_path, _ = _coerce_media_input(video_val)
+                if not input_video_path:
+                    raise RuntimeError(
+                        "Foley model requires an input `video` path to mux audio into."
+                    )
+
+                output_video_path = str(job_dir / "result.mp4")
+                result_path = mux_foley_audio_onto_input_video(
+                    input_video_path=input_video_path,
+                    audio_output=output_obj,
+                    job_dir=job_dir,
+                    output_video_path=output_video_path,
+                    logger=logger,
+                )
+                media_type = "video"
+            elif is_mmaudio_engine:
+                video_val = (prepared_inputs or {}).get("video")
+                input_video_path, _ = _coerce_media_input(video_val)
+                result_path, media_type = save_mmaudio_output(
+                    audio_output=output,
+                    job_dir=job_dir,
+                    filename_prefix="result",
+                    input_video_path=input_video_path,
+                    logger=logger,
+                )
+            
+            send_progress(
+                1.0,
+                f"Preview result",
+                {
+                    "status": "complete",
+                    "preview_path": result_path,
+                    "type": media_type,
+                },
+            )
+            return result_path, media_type
+            # save
 
         # Progress callback forwarded into the engine
         def progress_callback(
             progress: float, message: str, metadata: Optional[Dict] = None
         ):
             logger.info(f"Progress callback: {progress}, {message}, {metadata}")
+            merged_meta = dict(metadata or {})
+            merged_meta.setdefault("stage", "engine")
+            if merged_meta.get("status") == "complete":
+                merged_meta["status"] = "processing"
             if progress is None:
-                send_progress(None, message, metadata)
+                send_progress(None, message, merged_meta)
                 return
             bounded = max(0.0, min(1.0, progress))
-            send_progress(
-                engine_stage_start + bounded * engine_stage_span, message, metadata
-            )
+            send_progress(bounded, message, merged_meta)
 
         # Persist a snapshot of the invocation into the structured `runs` directory
 
-        render_func = (
-            render_on_step_callback_audio_video
-            if model_type.lower() == "ovi" or engine_type.lower() == "ltx2"
-            else render_on_step_callback
-        )
+        render_func = render_on_step_callback_audio_video if is_ovi_model or is_ltx_audio_video_engine else render_on_step_callback_audio if is_foley_model or is_mmaudio_engine else render_on_step_callback
 
         if _bool_env("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
             _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
@@ -2983,6 +3193,9 @@ def _run_engine_from_manifest_impl(
             render_on_step = (
                 _bool_env("ENABLE_IMAGE_RENDER_STEP", "false") == "true"
             )
+
+        # Reset progress timeline when the actual engine run begins.
+        send_progress(0.0, "Starting engine run", {"status": "processing", "stage": "engine"})
 
         output = engine.run(
             **(prepared_inputs or {}),
@@ -3005,37 +3218,20 @@ def _run_engine_from_manifest_impl(
 
         # OVI models return a tuple of (video_tensor, audio_numpy). Use a dedicated
         # saver so we correctly embed the generated audio into the MP4 output.
-        if (
-            isinstance(model_type, str)
-            and model_type.lower() == "ovi"
-            or model_type.lower() == "ti2v"
-        ):
+        if is_ovi_model or is_ltx_audio_video_engine:
             result_path, media_type = render_func(
                 output,
                 is_result=True,
             )
-        # HunyuanVideo-Foley returns an audio waveform; return the *original input video*
-        # with the generated audio muxed in (best-effort) using ffmpeg.
-        elif isinstance(model_type, str) and model_type.lower() == "foley":
-            video_val = (prepared_inputs or {}).get("video")
-            input_video_path, _ = _coerce_media_input(video_val)
-            if not input_video_path:
-                raise RuntimeError(
-                    "Foley model requires an input `video` path to mux audio into."
-                )
-
-            output_video_path = str(job_dir / "result.mp4")
-            result_path = mux_foley_audio_onto_input_video(
-                input_video_path=input_video_path,
-                audio_output=output,
-                job_dir=job_dir,
-                output_video_path=output_video_path,
-                logger=logger,
-            )
-            media_type = "video"
-        else:
+        elif is_foley_model or is_mmaudio_engine:
             result_path, media_type = render_func(
-                output[0],
+                output,
+            )
+        
+        else:
+            save_obj = output[0] if isinstance(output, (list, tuple)) else output
+            result_path, media_type = render_func(
+                save_obj,
                 is_result=True,
                 audio_inputs=audio_input_paths or None,
             )
@@ -3118,6 +3314,12 @@ def _run_engine_from_manifest_impl(
             output = None
         except Exception as cleanup_err:
             logger.warning(f"run_engine_from_manifest cleanup failed: {cleanup_err}")
+        try:
+            # Engine initialization may have downloaded model/config assets; always
+            # bump manifest cache buster so UI readiness reflects current disk state.
+            invalidate_manifest_caches()
+        except Exception:
+            pass
         _aggressive_ram_cleanup(
             clear_torch_cache=(not bool(engine_pooled))
             or _warm_weights_disabled()

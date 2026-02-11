@@ -16,7 +16,7 @@ metadata:
   license: Apache-2.0
   demo_path: models/wan-lynx-14b.mp4
   categories:
-  - reference-image-to-video
+  - reference-to-video
 spec:
   engine: wan
   model_type: lynx

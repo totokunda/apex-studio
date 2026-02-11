@@ -2582,6 +2582,25 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             postprocessors_path = get_postprocessor_path()
 
         os.makedirs(save_path, exist_ok=True)
+        download_progress_callback = getattr(self, "download_progress_callback", None)
+
+        def _emit_download_progress(
+            downloaded: int,
+            total: Optional[int],
+            label: Optional[str] = None,
+        ) -> None:
+            if not callable(download_progress_callback):
+                return
+            try:
+                download_progress_callback(downloaded, total, label)
+            except TypeError:
+                # Backward compatibility with older two-arg callbacks.
+                try:
+                    download_progress_callback(downloaded, total)
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
         components_cfg = self.config.get("components", [])
         if not isinstance(components_cfg, list):
@@ -2661,7 +2680,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             # Download or resolve local path.
             local_path = self.is_downloaded(selected_source, components_path)
             if local_path is None:
-                local_path = self._download(selected_source, components_path)
+                local_path = self._download(
+                    selected_source,
+                    components_path,
+                    progress_callback=_emit_download_progress,
+                )
             if not local_path:
                 continue
 
@@ -2734,7 +2757,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     )
             elif config_path:
                 downloaded_config_path = self.fetch_config(
-                    config_path, return_path=True, config_save_path=components_path
+                    config_path,
+                    return_path=True,
+                    config_save_path=components_path,
+                    progress_callback=_emit_download_progress,
                 )
                 if downloaded_config_path:
                     component["config_path"] = downloaded_config_path
@@ -2759,14 +2785,37 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 # - {"name": "...", "config": {...}} (preferred)
                 # - "SchedulerName" (shorthand)
                 selected_name = None
-                selected_overrides = {}
+                selected_runtime_config: Dict[str, Any] = {}
                 if isinstance(selected_scheduler_spec, str):
                     selected_name = selected_scheduler_spec
                 elif isinstance(selected_scheduler_spec, dict):
                     selected_name = selected_scheduler_spec.get("name")
-                    selected_overrides = {
-                        k: v for k, v in selected_scheduler_spec.items() if k != "name"
+                    # Important: never allow stale persisted scheduler metadata
+                    # (e.g. base/config_path from legacy manifests) to override
+                    # the selected scheduler option from the active catalog.
+                    explicit_config = selected_scheduler_spec.get("config")
+                    if isinstance(explicit_config, dict):
+                        selected_runtime_config.update(explicit_config)
+
+                    # Back-compat: older payloads can flatten config keys onto
+                    # the selected scheduler object. Keep only non-structural keys.
+                    reserved_keys = {
+                        "name",
+                        "label",
+                        "description",
+                        "type",
+                        "base",
+                        "config",
+                        "config_id",
+                        "config_path",
+                        "scheduler_manifest",
+                        "scheduler_options",
+                        "default",
                     }
+                    for k, v in selected_scheduler_spec.items():
+                        if k in reserved_keys:
+                            continue
+                        selected_runtime_config[k] = v
 
                 if not selected_name:
                     # Prefer manifest default (if present), else take the first option.
@@ -2776,45 +2825,59 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     else:
                         selected_name = scheduler_options[0].get("name")
 
-                match_found = False
-                for scheduler_option in scheduler_options:
-                    if selected_name == scheduler_option.get("name"):
-                        current_component = component.copy()
-                        del current_component["scheduler_options"]
-                        merged = dict(current_component)
-                        merged.update(scheduler_option)
-                        component = merged
-                        match_found = True
-                        break
-                if not match_found:
-                    # Use default if possible, else first scheduler option
-                    fallback = None
-                    if isinstance(selected_name, str) and selected_name:
-                        fallback = next(
-                            (o for o in scheduler_options if o.get("name") == selected_name),
+                selected_option = next(
+                    (
+                        o
+                        for o in scheduler_options
+                        if isinstance(o, dict) and selected_name == o.get("name")
+                    ),
+                    None,
+                )
+                if selected_option is None:
+                    if isinstance(selected_name, str) and selected_name.strip():
+                        self.logger.warning(
+                            "Unknown scheduler selection "
+                            f"'{selected_name}' for component "
+                            f"'{component_name or component_type}'. "
+                            "Falling back to manifest defaults."
+                        )
+                    default_name = component.get("default")
+                    selected_option = (
+                        next(
+                            (
+                                o
+                                for o in scheduler_options
+                                if isinstance(o, dict) and o.get("name") == default_name
+                            ),
                             None,
                         )
-                    if fallback is None:
-                        fallback = scheduler_options[0]
-                    current_component = component.copy()
-                    del current_component["scheduler_options"]
-                    merged = dict(current_component)
-                    merged.update(fallback)
-                    component = merged
-                    match_found = True
+                        if isinstance(default_name, str) and default_name.strip()
+                        else None
+                    )
+                if selected_option is None:
+                    selected_option = next(
+                        (o for o in scheduler_options if isinstance(o, dict)), None
+                    )
+                if selected_option is None:
+                    new_components_cfg.append(component)
+                    continue
+
+                current_component = component.copy()
+                current_component.pop("scheduler_options", None)
+                merged = dict(current_component)
+                merged.update(selected_option)
+                component = merged
 
                 # Apply any runtime overrides *after* selecting the option.
-                # For config dicts, merge instead of replacing.
-                if isinstance(selected_overrides, dict) and selected_overrides:
-                    for k, v in selected_overrides.items():
-                        if k == "config" and isinstance(v, dict) and isinstance(
-                            component.get("config"), dict
-                        ):
-                            merged_cfg = dict(component.get("config") or {})
-                            merged_cfg.update(v)
-                            component["config"] = merged_cfg
-                        else:
-                            component[k] = v
+                # Keep this strictly to scheduler `config` to prevent legacy
+                # fields in persisted clip state from forcing old schedulers.
+                if selected_runtime_config:
+                    base_cfg = component.get("config")
+                    if not isinstance(base_cfg, dict):
+                        base_cfg = {}
+                    merged_cfg = dict(base_cfg)
+                    merged_cfg.update(selected_runtime_config)
+                    component["config"] = merged_cfg
 
                 if component_name:
                     component["name"] = component_name
@@ -2834,6 +2897,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         sched_config_path,
                         return_path=True,
                         config_save_path=components_path,
+                        progress_callback=_emit_download_progress,
                     )
                     if downloaded_config_path:
                         component["config_path"] = downloaded_config_path
@@ -2875,13 +2939,19 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
                     if path is None:
                         component["model_path"] = self._download(
-                            component["model_path"], components_path
+                            component["model_path"],
+                            components_path,
+                            progress_callback=_emit_download_progress,
                         )
                     else:
                         component["model_path"] = path
 
                 elif isinstance(model_path, str):
-                    downloaded_model_path = self._download(model_path, components_path)
+                    downloaded_model_path = self._download(
+                        model_path,
+                        components_path,
+                        progress_callback=_emit_download_progress,
+                    )
                     if downloaded_model_path:
                         component["model_path"] = downloaded_model_path
 
@@ -2889,11 +2959,15 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 for m_index, extra_model_path in enumerate(extra_model_paths):
                     if isinstance(extra_model_path, dict):
                         downloaded_extra_model_path = self._download(
-                            extra_model_path["path"], components_path
+                            extra_model_path["path"],
+                            components_path,
+                            progress_callback=_emit_download_progress,
                         )
                     else:
                         downloaded_extra_model_path = self._download(
-                            extra_model_path, components_path
+                            extra_model_path,
+                            components_path,
+                            progress_callback=_emit_download_progress,
                         )
                     if downloaded_extra_model_path:
                         component["extra_model_paths"][

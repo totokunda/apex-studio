@@ -38,6 +38,21 @@ spec:
   - metal_flash
   - efficient_dot_product_attention
   - xformers
+  loras:
+  - source: Lightricks/LTX-2-19b-IC-LoRA-Detailer/ltx-2-19b-ic-lora-detailer.safetensors
+    name: ic_lora_detailer
+    label: LTX2 19B Detailer LoRA 384
+    scale: 1.0
+    verified: true
+    component: transformer
+    required: true
+  - source: Lightricks/LTX-2-19b-IC-LoRA-Pose/ltx-2-19b-ic-lora-pose-control.safetensors
+    name: ic_lora_pose_control
+    label: LTX2 19B Pose Control LoRA 384
+    scale: 1.0
+    verified: true
+    required: true
+    component: transformer
   components:
   - type: scheduler
     label: Scheduler

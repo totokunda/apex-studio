@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, Union, Tuple
+from typing import Any, Dict, List, Optional, Union, Tuple, Set
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, validator
 import uuid
@@ -20,6 +20,7 @@ from .preprocessor_registry import check_preprocessor_downloaded
 from .ray_resources import get_ray_resources
 from .ray_resources import get_best_gpu
 from .engine_resource_guard import maybe_release_warm_engine_for_non_engine_request
+from .manifest import invalidate_manifest_caches
 
 router = APIRouter(prefix="/download", tags=["download"])
 
@@ -27,6 +28,190 @@ router = APIRouter(prefix="/download", tags=["download"])
 # NOTE: This is *not* used to dedupe or reuse job ids; it only helps `/download/resolve`
 # return the last-seen job id for a given request signature.
 _request_key_to_job_id: Dict[str, str] = {}
+
+
+def _get_hf_hub_cache_dir() -> Optional[Path]:
+    """
+    Best-effort resolution of Hugging Face Hub cache directory.
+    """
+    try:
+        env_cache = os.environ.get("HF_HUB_CACHE") or os.environ.get(
+            "HUGGINGFACE_HUB_CACHE"
+        )
+        if env_cache:
+            return Path(env_cache).expanduser().resolve()
+    except Exception:
+        pass
+
+    try:
+        from huggingface_hub import constants as hf_constants
+
+        const_cache = getattr(hf_constants, "HF_HUB_CACHE", None)
+        if const_cache:
+            return Path(str(const_cache)).expanduser().resolve()
+    except Exception:
+        pass
+
+    try:
+        hf_home = os.environ.get("HF_HOME")
+        if hf_home:
+            return (Path(hf_home).expanduser().resolve() / "hub").resolve()
+    except Exception:
+        pass
+
+    return None
+
+
+def _repo_hints_from_source(
+    source: Optional[Union[str, List[str]]],
+) -> Set[Tuple[str, str]]:
+    """
+    Parse probable HF repo hints from source values.
+    Returns tuples of (repo_id, repo_type).
+    """
+    hints: Set[Tuple[str, str]] = set()
+    if source is None:
+        return hints
+
+    values = [source] if isinstance(source, str) else list(source)
+    for raw in values:
+        try:
+            s = str(raw).strip()
+            if not s:
+                continue
+            if "://" in s or os.path.isabs(s) or s.startswith("."):
+                continue
+            parts = [p for p in s.split("/") if p]
+            if len(parts) < 2:
+                continue
+
+            repo_type = "model"
+            repo_id: Optional[str] = None
+
+            if parts[0] == "datasets" and len(parts) >= 3:
+                repo_type = "dataset"
+                repo_id = f"{parts[1]}/{parts[2]}"
+            elif parts[0] == "spaces" and len(parts) >= 3:
+                repo_type = "space"
+                repo_id = f"{parts[1]}/{parts[2]}"
+            else:
+                repo_id = f"{parts[0]}/{parts[1]}"
+
+            if repo_id:
+                hints.add((repo_id, repo_type))
+        except Exception:
+            continue
+
+    return hints
+
+
+def _candidate_local_files_for_inode_match(
+    target: Path, max_files: int = 5000
+) -> List[Path]:
+    files: List[Path] = []
+    try:
+        if target.is_file():
+            return [target]
+        if not target.is_dir():
+            return files
+        for p in target.rglob("*"):
+            if len(files) >= max_files:
+                break
+            try:
+                if p.is_file():
+                    files.append(p)
+            except Exception:
+                continue
+    except Exception:
+        return []
+    return files
+
+
+def _collect_hf_cache_strategy_for_delete(
+    source: Optional[Union[str, List[str]]], target: Path
+):
+    """
+    Build a HF cache deletion strategy for a deletion request.
+
+    Strategy sources:
+    - explicit source repo ids (delete all cached revisions for those repos)
+    - inode matches between local files being deleted and HF cache blobs/snapshots
+      (delete matched revisions even when source is omitted)
+    """
+    try:
+        from huggingface_hub import scan_cache_dir
+        from huggingface_hub.errors import CacheNotFound
+    except Exception:
+        return None, 0
+
+    cache_dir = _get_hf_hub_cache_dir()
+    if not cache_dir:
+        return None, 0
+
+    try:
+        cache_info = scan_cache_dir(cache_dir=str(cache_dir))
+    except CacheNotFound:
+        return None, 0
+    except Exception:
+        return None, 0
+
+    repo_hints = _repo_hints_from_source(source)
+    revision_hashes: Set[str] = set()
+
+    # Infer revision hashes from files that point to / hardlink with HF cache blobs.
+    try:
+        local_files = _candidate_local_files_for_inode_match(target)
+        local_inode_keys: Set[Tuple[int, int]] = set()
+        for fp in local_files:
+            try:
+                st = os.stat(fp, follow_symlinks=True)
+                local_inode_keys.add((int(st.st_dev), int(st.st_ino)))
+            except Exception:
+                continue
+
+        if local_inode_keys:
+            blob_inode_cache: Dict[str, Optional[Tuple[int, int]]] = {}
+            for repo in cache_info.repos:
+                repo_key = (repo.repo_id, repo.repo_type)
+                for revision in repo.revisions:
+                    matched_this_revision = False
+                    for cached_file in revision.files:
+                        blob_path_str = str(cached_file.blob_path)
+                        if blob_path_str in blob_inode_cache:
+                            inode_key = blob_inode_cache[blob_path_str]
+                        else:
+                            try:
+                                st_blob = os.stat(cached_file.blob_path)
+                                inode_key = (int(st_blob.st_dev), int(st_blob.st_ino))
+                            except Exception:
+                                inode_key = None
+                            blob_inode_cache[blob_path_str] = inode_key
+
+                        if inode_key is not None and inode_key in local_inode_keys:
+                            revision_hashes.add(revision.commit_hash)
+                            repo_hints.add(repo_key)
+                            matched_this_revision = True
+                            break
+                    if matched_this_revision:
+                        continue
+    except Exception:
+        pass
+
+    # For explicit source repos, drop all revisions from those repos.
+    if repo_hints:
+        for repo in cache_info.repos:
+            if (repo.repo_id, repo.repo_type) in repo_hints:
+                for revision in repo.revisions:
+                    revision_hashes.add(revision.commit_hash)
+
+    if not revision_hashes:
+        return None, 0
+
+    try:
+        strategy = cache_info.delete_revisions(*sorted(revision_hashes))
+        return strategy, len(revision_hashes)
+    except Exception:
+        return None, 0
 
 
 def _normalize_item_type(item_type: str) -> str:
@@ -229,6 +414,11 @@ def start_unified_download(request: UnifiedDownloadRequest):
             request.item_type, request.source, request.save_path
         )
         if downloaded and request.item_type != "lora":
+            try:
+                # Keep manifest readiness badges in sync even when we short-circuit.
+                invalidate_manifest_caches()
+            except Exception:
+                pass
             # Record the latest job id for this request key even when not starting a Ray job.
             _request_key_to_job_id[req_key] = job_id
             # Also seed websocket "latest" so polling `/download/status/{job_id}` is consistent.
@@ -463,13 +653,42 @@ def delete_downloaded_path(request: DeleteRequest):
                 detail="path must be within an allowed download directory",
             )
 
+        # Build HF cache purge plan *before* deleting local files so we can infer
+        # cache revisions from inode/symlink relationships.
+        hf_delete_strategy = None
+        hf_revision_count = 0
+        try:
+            hf_delete_strategy, hf_revision_count = _collect_hf_cache_strategy_for_delete(
+                request.source, target_resolved
+            )
+        except Exception:
+            hf_delete_strategy = None
+            hf_revision_count = 0
+
         # Perform deletion
         if not target_resolved.exists():
-            raise HTTPException(status_code=404, detail="Path not found")
+            raise HTTPException(status_code=500, detail="Path not found")
         if target_resolved.is_dir():
             shutil.rmtree(target_resolved, ignore_errors=False)
         else:
             target_resolved.unlink()
+
+        # Best-effort: purge corresponding HF cache entries now that local deletion succeeded.
+        try:
+            if hf_delete_strategy is not None:
+                hf_delete_strategy.execute()
+                logger.info(
+                    f"Purged Hugging Face cache revisions after delete: {hf_revision_count} revision(s) for path={target_resolved}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to purge Hugging Face cache after deleting {target_resolved}: {e}"
+            )
+
+        try:
+            invalidate_manifest_caches()
+        except Exception:
+            pass
 
         # Best-effort: prune empty parent directories up to (but not including) the allowed base
         try:

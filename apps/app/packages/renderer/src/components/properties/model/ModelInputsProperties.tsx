@@ -18,6 +18,54 @@ import {
   inferExternalFolderFromPath,
 } from "@/lib/externalAssets";
 
+const getManifestStorageKey = (
+  manifest: ManifestDocument | undefined | null,
+): string => {
+  const mfId = String(manifest?.metadata?.id || "").trim();
+  if (mfId) return mfId;
+  const fallbackId = String((manifest as any)?.id || "").trim();
+  if (fallbackId) return fallbackId;
+  return "__default__";
+};
+
+const extractManifestInputValues = (
+  manifest: ManifestDocument | undefined | null,
+): Record<string, any> => {
+  const ui = manifest?.spec?.ui || (manifest as any)?.ui;
+  const inputs = Array.isArray(ui?.inputs) ? (ui.inputs as Array<any>) : [];
+  const out: Record<string, any> = {};
+  for (const inp of inputs) {
+    if (!inp || typeof inp.id !== "string") continue;
+    if (inp.value !== undefined) out[inp.id] = inp.value;
+  }
+  return out;
+};
+
+const cloneManifestWithInputValues = (
+  manifest: ManifestDocument,
+  values?: Record<string, any>,
+): ManifestDocument => {
+  let cloned: any = manifest;
+  try {
+    cloned = JSON.parse(JSON.stringify(manifest));
+  } catch {
+    // best effort fallback
+    cloned = { ...manifest };
+  }
+
+  if (!values || Object.keys(values).length === 0) return cloned as ManifestDocument;
+
+  const ui = cloned?.spec?.ui || cloned?.ui;
+  if (!ui || !Array.isArray(ui.inputs)) return cloned as ManifestDocument;
+
+  ui.inputs = ui.inputs.map((inp: any) => {
+    if (!inp || typeof inp.id !== "string") return inp;
+    if (!Object.prototype.hasOwnProperty.call(values, inp.id)) return inp;
+    return { ...inp, value: values[inp.id] };
+  });
+  return cloned as ManifestDocument;
+};
+
 // ── Variant selector ────────────────────────────────────────────────
 
 const VariantPreview: React.FC<{
@@ -145,33 +193,63 @@ const VariantSelector: React.FC<{
 
       const variant = variants.find((v) => v.id === selectedId);
       if (!variant?.manifest) return;
-      const manifest = variant.manifest as ManifestDocument;
+      const targetManifest = variant.manifest as ManifestDocument;
 
       switchingRef.current = true;
-
-      // Swap manifest and clear stale generation/asset state
-      const patch: Partial<ModelClipProps> = {
-        manifest,
-        modelStatus: undefined,
-        assetId: undefined,
-        previewPath: undefined,
-        selectedComponents: undefined,
-        modelInputValues: undefined,
-      } as any;
-
-      // Best-effort: fetch offload defaults for the new manifest
       try {
-        const mfId = String(manifest.metadata?.id || "").trim();
-        if (mfId) {
-          const defaults = await getOffloadDefaultsForManifest(mfId);
-          if (defaults) (patch as any).offload = defaults;
-        }
-      } catch {
-        // ignore
-      }
+        const store = useClipStore.getState();
+        const currentClip = store.getClipById(clipId) as
+          | ModelClipProps
+          | undefined;
+        if (!currentClip?.manifest) return;
 
-      updateClip(clipId, patch as any);
-      switchingRef.current = false;
+        const currentKey = getManifestStorageKey(currentClip.manifest);
+        const currentValues = extractManifestInputValues(currentClip.manifest);
+        const currentSelectedComponents = (currentClip.selectedComponents ||
+          {}) as Record<string, any>;
+        const nextInputValuesByVariant = {
+          ...(currentClip.modelInputValuesByVariant || {}),
+          [currentKey]: currentValues,
+        };
+        const nextSelectedComponentsByVariant = {
+          ...(currentClip.selectedComponentsByVariant || {}),
+          [currentKey]: currentSelectedComponents,
+        };
+
+        const targetKey = getManifestStorageKey(targetManifest);
+        const targetValues = nextInputValuesByVariant[targetKey];
+        const hydratedTargetManifest = cloneManifestWithInputValues(
+          targetManifest,
+          targetValues,
+        );
+
+        // Swap manifest and clear stale generation/asset state
+        const patch: Partial<ModelClipProps> = {
+          manifest: hydratedTargetManifest,
+          modelStatus: undefined,
+          assetId: undefined,
+          previewPath: undefined,
+          selectedComponents: nextSelectedComponentsByVariant[targetKey],
+          modelInputValues: targetValues,
+          modelInputValuesByVariant: nextInputValuesByVariant,
+          selectedComponentsByVariant: nextSelectedComponentsByVariant,
+        } as any;
+
+        // Best-effort: fetch offload defaults for the new manifest
+        try {
+          const mfId = String(targetManifest.metadata?.id || "").trim();
+          if (mfId) {
+            const defaults = await getOffloadDefaultsForManifest(mfId);
+            if (defaults) (patch as any).offload = defaults;
+          }
+        } catch {
+          // ignore
+        }
+
+        updateClip(clipId, patch as any);
+      } finally {
+        switchingRef.current = false;
+      }
     },
     [clipId, updateClip, variants, activeVariantId],
   );
@@ -227,7 +305,7 @@ const VariantSelector: React.FC<{
         <PopoverContent
           align="start"
           sideOffset={8}
-          className="w-(--radix-popover-trigger-width) font-poppins p-2 bg-brand border border-brand-light/10 rounded-[8px] shadow-xl"
+          className="w-(--radix-popover-trigger-width) font-poppins p-2 bg-brand border border-brand-light/10 rounded-[8px] shadow-xl z-100"
         >
           <div className="space-y-1.5">
             {variants.map((variant) => {

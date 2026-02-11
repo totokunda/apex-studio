@@ -38,6 +38,7 @@ spec:
   - metal_flash
   - efficient_dot_product_attention
   - xformers
+  
   components:
   - type: scheduler
     label: Scheduler

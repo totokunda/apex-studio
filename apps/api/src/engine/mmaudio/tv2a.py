@@ -1,4 +1,5 @@
 from src.engine.base_engine import BaseEngine
+from src.utils.progress import safe_emit_progress, make_mapped_progress
 import torch
 import torch.nn.functional as F
 from pathlib import Path
@@ -70,16 +71,23 @@ class MMAudioTV2AEngine(BaseEngine):
         This is the shared loading path for both `encode_video_with_clip` and
         `encode_text`, since they use the same underlying model.
         """
-        if not self.text_encoder:
+        text_encoder = getattr(self, "text_encoder", None)
+        if text_encoder is None:
             self.load_component_by_type("text_encoder")
-        self.to_device(self.text_encoder)
-        
-        if not self.text_encoder.model_loaded:
-            self.text_encoder.model = self.text_encoder.load_model()
-            self.text_encoder.model_loaded = True
-        
-        tokenizer = self.text_encoder.tokenizer
-        clip_model = self.text_encoder.model
+            text_encoder = getattr(self, "text_encoder", None)
+        if text_encoder is None:
+            raise RuntimeError(
+                "MMAudio text_encoder component could not be loaded. "
+                "Ensure the model manifest includes a text_encoder component."
+            )
+        self.to_device(text_encoder)
+
+        if not getattr(text_encoder, "model_loaded", False):
+            text_encoder.model = text_encoder.load_model()
+            text_encoder.model_loaded = True
+
+        tokenizer = text_encoder.tokenizer
+        clip_model = text_encoder.model
 
         return clip_model, tokenizer
     
@@ -352,10 +360,11 @@ class MMAudioTV2AEngine(BaseEngine):
             latents: torch.Tensor = None,
             offload: bool = True,
             progress_callback: Callable = None,
-            use_video_duration: bool = False,
+            use_video_duration: bool = True,
             **kwargs,
             ):
         
+            safe_emit_progress(progress_callback, 0.0, "Starting video-to-audio pipeline")
             if type(duration) == str:
                 duration = duration.replace('s', '')
                 duration = float(duration)
@@ -366,6 +375,7 @@ class MMAudioTV2AEngine(BaseEngine):
                 generator = torch.Generator(device=self.device).manual_seed(seed)
             
             if video is not None:
+                safe_emit_progress(progress_callback, 0.05, "Loading video")
                 video_info = self._load_video_mmaudio(Path(video), duration if not use_video_duration else None)
                 clip_frames = video_info.clip_frames.unsqueeze(0)
                 sync_frames = video_info.sync_frames.unsqueeze(0)
@@ -379,8 +389,7 @@ class MMAudioTV2AEngine(BaseEngine):
             clip_seq_len = self.get_clip_seq_len(duration)
             sync_seq_len = self.get_sync_seq_len(duration)
             
-
-            
+            safe_emit_progress(progress_callback, 0.10, "Encoding video and text")
             if clip_frames is not None:
                 clip_features = self.encode_video_with_clip(clip_frames)
             if sync_frames is not None:
@@ -393,7 +402,7 @@ class MMAudioTV2AEngine(BaseEngine):
             if offload:
                 self._offload("text_encoder")
             
-
+            safe_emit_progress(progress_callback, 0.20, "Preparing denoising")
             if not self.transformer:
                 self.load_component_by_type("transformer")
             self.to_device(self.transformer)
@@ -433,6 +442,7 @@ class MMAudioTV2AEngine(BaseEngine):
                 bs, negative_text_features=negative_text_features if negative_prompt is not None else None
             )
             
+            denoise_progress_callback = make_mapped_progress(progress_callback, 0.25, 0.88)
             with self._progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
                     # Convert scheduler sigma to MMAudio's time convention.
@@ -464,13 +474,22 @@ class MMAudioTV2AEngine(BaseEngine):
                     
                     if i == len(timesteps) - 1 or (i + 1) % self.scheduler.order == 0:
                         progress_bar.update()
+                    if denoise_progress_callback is not None and len(timesteps) > 0:
+                        try:
+                            denoise_progress_callback(
+                                min((i + 1) / len(timesteps), 1.0),
+                                f"Denoising step {i + 1}/{len(timesteps)}",
+                            )
+                        except Exception:
+                            pass
             
+            safe_emit_progress(progress_callback, 0.88, "Denoising complete")
             latents = self.transformer.unnormalize(latents)
             
             if offload:
                 self._offload("transformer")
             
-            
+            safe_emit_progress(progress_callback, 0.92, "Decoding audio")
             if not self.vae:
                 self.load_component_by_type("vae")
             self.to_device(self.vae)
@@ -482,5 +501,6 @@ class MMAudioTV2AEngine(BaseEngine):
             if offload:
                 self._offload("vae")
             
+            safe_emit_progress(progress_callback, 1.0, "Completed video-to-audio pipeline")
             audio = audio.float().cpu()
             return audio.unbind(dim=0)

@@ -2,18 +2,18 @@ api_version: apex/v1
 kind: Model
 type: video
 metadata:
-  id: hunyuanvideo15-i2v
+  id: hunyuanvideo15-i2v-720p-distilled
   model: hunyuanvideo15
-  name: HunyuanVideo 1.5 Image-to-Video
+  name: HunyuanVideo 1.5 Image-to-Video 720p Distilled
   version: 0.1.2
   description: HunyuanVideo 1.5 is a 8.3B parameter model for text/image-to-video
-    generation.
+    generation at 720p resolution with distilled model.
   tags:
   - hunyuanvideo15
   - i2v
   author: Tencent
   license: Apache-2.0
-  demo_path: models/hunyuan-video-15-i2v.mp4
+  demo_path: models/hunyuan-video-15-i2v-720p-distilled.mp4
   categories:
   - image-to-video
 spec:
@@ -86,23 +86,23 @@ spec:
     base: hunyuanvideo15.base
     config_id: HunyuanVideo-1.5-I2V/transformer
     model_path:
-    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer/transformer-bf16.safetensors
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p_distilled/transformer-bf16.safetensors
       variant: default
       precision: bf16
       type: safetensors
-    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer/transformer-fp8_e4m3fn.safetensors
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p_distilled/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
-    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer/transformer-q8_0.gguf
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p_distilled/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
-    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer/transformer-q6_k.gguf
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p_distilled/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
-    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer/transformer-q4_k_m.gguf
+    - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p_distilled/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
@@ -302,7 +302,7 @@ spec:
       type: number
       value_type: integer
       panel: size
-      default: 480
+      default: 720
       min: 256
       max: 8192
       step: 16
@@ -312,7 +312,7 @@ spec:
       type: number
       value_type: integer
       panel: size
-      default: 832
+      default: 1280
       min: 256
       max: 8192
       step: 16

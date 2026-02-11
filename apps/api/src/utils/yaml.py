@@ -107,7 +107,7 @@ def load_yaml(file_path: str | Path):
         elif stem == "shared" or stem.startswith("shared."):
             # Infer alias from parent directory (e.g., manifest/wan/shared.v1.yml → 'wan')
             parent_name = p.parent.name
-            if parent_name and parent_name != "manifest":
+            if parent_name and parent_name not in {"manifest", ".local_manifest"}:
                 alias = parent_name
         if not alias:
             # Fallbacks: try parent dir name, else stem
@@ -119,10 +119,10 @@ def load_yaml(file_path: str | Path):
     LoaderWithInclude.shared_manifests = shared_manifests
     # Provide resolution hints to the include loader
     LoaderWithInclude.base_dir = file_path.parent
-    # Find nearest 'manifest' directory as root for shared lookups
+    # Find nearest manifest root directory as root for shared lookups
     manifest_root = None
     for parent in file_path.parents:
-        if parent.name == "manifest":
+        if parent.name in {"manifest", ".local_manifest"}:
             manifest_root = parent
             break
     LoaderWithInclude.manifest_root = manifest_root or file_path.parent

@@ -104,11 +104,8 @@ spec:
       type: safetensors
   defaults:
     run:
-      num_inference_steps: 50
-      video_guidance_scale: 4.0
-      audio_guidance_scale: 3.0
-      easy_cache_thresh: 0.05
-      easy_cache_ret_steps: 10
+      num_inference_steps: 25
+      guidance_scale: 4.0
       return_latents: false
       timesteps_as_indices: true
       expand_timesteps: false
@@ -116,14 +113,14 @@ spec:
       attention_kwargs: {}
   ui:
     panels:
-    - name: image
-      label: Image
+    - name: video
+      label: Video
       collapsible: true
       default_open: true
       layout:
         flow: column
         rows:
-        - - image
+        - - video
     - name: prompting
       label: Prompting
       collapsible: true
@@ -140,7 +137,6 @@ spec:
         flow: column
         rows:
         - - negative_prompt
-        - - audio_negative_prompt
     
     - name: sampling
       label: Sampling
@@ -150,108 +146,42 @@ spec:
         flow: column
         rows:
         - - num_inference_steps
-        - - video_guidance_scale
-        - - audio_guidance_scale
+        - - guidance_scale
         - - seed
-        - - shift
 
-    - name: easy_cache
-      label: Easy Cache
-      collapsible: true
-      default_open: false
-      layout:
-        flow: column
-        rows:
-        - - easy_cache_thresh
-        - - easy_cache_ret_steps
     inputs:
-    - id: image
-      label: Image
-      description: The input image to generate a video from.
-      type: image_list
-      panel: image
-      map_h: height
-      map_w: width
-      scale_by: resolution
+    - id: video
+      label: Video
+      description: The input video to generate an audio from.
+      type: video
+      panel: video
       required: false
-      min: 0
-      max: 1
     - id: prompt
       label: Prompt
-      description: Describe the video you want to generate using the <S> and <E> tags
-        for start and end of the text.
-      placeholder: A man in the video grumbles angrily and says <S>I love open source.
-        I can create anything I want.<E> in a deep low voice.
+      description: Describe the audio you want to generate.
+      placeholder: Rain falling on a roof.
       type: text
       panel: prompting
       required: true
     - id: negative_prompt
       label: Negative Prompt
       description: Describe what to avoid in the generation.
-      placeholder: blurry, low quality, distorted, artifacts
+      placeholder: noisy, harsh
       type: text
       panel: advanced_prompting
       required: false
-      default: jitter, bad hands, blur, distortion
-    - id: audio_negative_prompt
-      label: Audio Negative Prompt
-      description: Describe what to avoid in the generation.
-      placeholder: robotic, muffled, echo, distorted
-      type: text
-      panel: advanced_prompting
-      required: false
-      default: robotic, muffled, echo, distorted
-    - id: resolution
-      label: Resolution
-      description: Select the resolution of the output video
-      panel: size
-      type: select
-      default: 960
-      options:
-      - name: Full HD
-        value: 960
-      - name: HD
-        value: 720
-      - name: SD
-        value: 480
-      - name: Custom
-        value: custom
-    - id: aspect_ratio
-      label: Aspect Ratio
-      description: Select the aspect ratio of the output video
-      panel: size
-      type: select
-      default: '1:1'
-      options:
-      - name: Square
-        value: '1:1'
-        ratio_w: 1
-        ratio_h: 1
-      - name: Wide
-        value: '16:9'
-        ratio_w: 16
-        ratio_h: 9
-      - name: Vertical
-        value: '9:16'
-        ratio_w: 9
-        ratio_h: 16
-      - name: Classic
-        value: '4:3'
-        ratio_w: 4
-        ratio_h: 3
-      - name: Custom
-        value: custom
+      default: ''
+
     - id: num_inference_steps
       label: Inference Steps
       description: Number of denoising steps
       type: number+slider
       value_type: integer
       panel: sampling
-      default: 50
+      default: 25
       min: 1
       max: 100
       step: 1
-    
     - id: seed
       label: Seed
       description: Random seed for reproducibility
@@ -262,8 +192,8 @@ spec:
       value_type: integer
       panel: sampling
       required: false
-    - id: video_guidance_scale
-      label: Video Guidance Scale
+    - id: guidance_scale
+      label: Guidance Scale
       type: number+slider
       value_type: float
       panel: sampling
@@ -272,47 +202,4 @@ spec:
       min: 1.0
       max: 15.0
       step: 0.5
-    - id: audio_guidance_scale
-      label: Audio Guidance Scale
-      type: number+slider
-      value_type: float
-      panel: sampling
-      required: false
-      default: 3.0
-      min: 1.0
-      max: 15.0
-      step: 0.5
-    - id: shift
-      label: Scheduler Shift
-      description: Shift for the scheduler
-      type: number+slider
-      value_type: float
-      panel: sampling
-      required: false
-      default: 5.0
-      min: 1.0
-      max: 15.0
-      step: 0.5
-    - id: easy_cache_thresh
-      label: Easy Cache Threshold
-      description: Threshold for the easy cache
-      type: number+slider
-      value_type: float
-      panel: easy_cache
-      required: false
-      default: 0.05
-      min: 0.0
-      max: 1.0
-      step: 0.001
-    - id: easy_cache_ret_steps
-      label: Easy Cache Return Steps
-      description: Number of steps to return for the easy cache
-      type: number+slider
-      value_type: integer
-      panel: easy_cache
-      required: false
-      default: 10
-      min: 1
-      max: 100
-      step: 1
 

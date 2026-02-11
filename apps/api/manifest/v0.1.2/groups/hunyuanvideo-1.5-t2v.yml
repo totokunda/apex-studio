@@ -16,8 +16,16 @@ metadata:
     - text-to-video
 
 variants:
-  - id: hunyuanvideo15-t2v
-    label: "Text to Video"
+  - id: hunyuanvideo15-t2v-480p
+    label: "Text to Video 480p"
     description: "8.3B parameter text-to-video model from Tencent with strong prompt following, cinematic motion quality, and support for high-resolution output up to 720p."
-    manifest_ref: video/hunyuanvideo-1.5-t2v
+    manifest_ref: video/hunyuanvideo-1.5-t2v-480p
     default: true
+  - id: hunyuanvideo15-t2v-720p
+    label: "Text to Video 720p"
+    description: "8.3B parameter text-to-video model from Tencent with strong prompt following, cinematic motion quality, and support for high-resolution output up to 720p."
+    manifest_ref: video/hunyuanvideo-1.5-t2v-720p
+  - id: hunyuanvideo15-t2v-480p-distilled
+    label: "Text to Video 480p Distilled"
+    description: "8.3B parameter text-to-video model from Tencent with strong prompt following, cinematic motion quality, and support for high-resolution output up to 480p with distilled model."
+    manifest_ref: video/hunyuanvideo-1.5-t2v-480p-distilled

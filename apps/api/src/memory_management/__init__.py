@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import glob
+import sys
 import threading
 import time
 import types
@@ -263,6 +264,50 @@ class ComponentMemoryManager:
         else:
             logger.debug(msg)
 
+    def _is_mps_device(self, device: torch.device | None) -> bool:
+        try:
+            if not isinstance(device, torch.device):
+                return False
+            if device.type != "mps":
+                return False
+            if sys.platform != "darwin":
+                return False
+            return bool(
+                hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            )
+        except Exception:
+            return False
+
+    def _mps_cpu_offload_mode(self) -> str:
+        """
+        Policy for handling `offload_type="cpu"` on Apple Silicon / MPS.
+
+        CPU and MPS share unified memory on macOS, so moving tensors to CPU does
+        not usually reduce total memory pressure. We therefore default to
+        `"discard"` to genuinely free memory. Set `APEX_MPS_CPU_OFFLOAD_MODE=cpu`
+        to force legacy CPU-offload behavior.
+        """
+        raw = os.environ.get("APEX_MPS_CPU_OFFLOAD_MODE", "discard")
+        val = str(raw or "").strip().lower()
+        if val not in {"cpu", "discard"}:
+            return "discard"
+        return val
+
+    def _effective_offload_type(
+        self, offload_type: str, *, source_device: torch.device | None
+    ) -> str:
+        normalized = str(offload_type or "discard").strip().lower()
+        if normalized not in {"cpu", "discard"}:
+            normalized = "discard"
+        if normalized == "cpu" and self._is_mps_device(source_device):
+            mode = self._mps_cpu_offload_mode()
+            if mode != "cpu":
+                self._log_debug(
+                    "[mem] mps unified memory: remapping cpu offload -> discard"
+                )
+                return "discard"
+        return normalized
+
     # --------- profiling helpers ----------
     def _profile_component_vram_enabled(self, engine: Any | None) -> bool:
         """
@@ -329,7 +374,8 @@ class ComponentMemoryManager:
     ) -> None:
         """
         Best-effort: move all other engine components off `target_device`.
-        Uses ignore_pins=True so the debug path can override "lease" pins.
+        IMPORTANT: respects component lease pins. Components remain resident until
+        explicit engine `_offload(...)` releases their lease.
         """
         if target_device.type == "cpu":
             return
@@ -356,7 +402,7 @@ class ComponentMemoryManager:
                 # If the component isn't a module anymore (discarded), nothing to do.
                 if offload_type != "discard" and comp.module() is None:
                     continue
-                self._offload_component(comp, offload_type=offload_type, ignore_pins=True)
+                self._offload_component(comp, offload_type=offload_type)
             except Exception:
                 continue
 
@@ -715,9 +761,40 @@ class ComponentMemoryManager:
                 and hasattr(torch.backends, "mps")
                 and torch.backends.mps.is_available()
             ):
+                mps_total = 0
+                mps_free = 0
+                try:
+                    if getattr(torch, "mps", None) is not None and hasattr(
+                        torch.mps, "recommended_max_memory"
+                    ):
+                        mps_total = int(torch.mps.recommended_max_memory())  # type: ignore[attr-defined]
+                except Exception:
+                    mps_total = 0
+                try:
+                    driver_alloc = 0
+                    if getattr(torch, "mps", None) is not None and hasattr(
+                        torch.mps, "driver_allocated_memory"
+                    ):
+                        driver_alloc = int(torch.mps.driver_allocated_memory())  # type: ignore[attr-defined]
+                    elif getattr(torch, "mps", None) is not None and hasattr(
+                        torch.mps, "current_allocated_memory"
+                    ):
+                        driver_alloc = int(torch.mps.current_allocated_memory())  # type: ignore[attr-defined]
+                    if mps_total > 0:
+                        mps_free = max(0, int(mps_total) - int(driver_alloc))
+                except Exception:
+                    mps_free = int(mps_total) if mps_total > 0 else 0
+
                 if psutil:
                     vm = psutil.virtual_memory()
-                    return int(vm.available), int(vm.total)
+                    sys_free = int(vm.available)
+                    sys_total = int(vm.total)
+                    if mps_total > 0:
+                        # Use the tighter bound: MPS runtime budget and system VM.
+                        return int(min(sys_free, max(0, mps_free))), int(mps_total)
+                    return sys_free, sys_total
+                if mps_total > 0:
+                    return int(max(0, mps_free)), int(mps_total)
                 return 0, 0
         except Exception:
             pass
@@ -1151,17 +1228,23 @@ class ComponentMemoryManager:
             if comp is None or comp.in_forward:
                 continue
 
-            # Tiered offloading: accelerator -> CPU -> Discard (for CPU pressure only).
+            # Tiered offloading: accelerator -> CPU (when meaningful) -> Discard.
             if device.type != "cpu":
-                try:
-                    # Be conservative: ensure we have CPU room before offloading more weights.
-                    self._ensure_room(
-                        torch.device("cpu"),
-                        comp.estimated_bytes,
-                        exclude_label=exclude_label,
-                    )
-                    self._offload_component(comp, offload_type="cpu")
-                except Exception:
+                preferred_offload = self._effective_offload_type(
+                    "cpu", source_device=device
+                )
+                if preferred_offload == "cpu":
+                    try:
+                        # Be conservative: ensure we have CPU room before offloading more weights.
+                        self._ensure_room(
+                            torch.device("cpu"),
+                            comp.estimated_bytes,
+                            exclude_label=exclude_label,
+                        )
+                        self._offload_component(comp, offload_type="cpu")
+                    except Exception:
+                        self._offload_component(comp, offload_type="discard")
+                else:
                     self._offload_component(comp, offload_type="discard")
             else:
                 self._offload_component(comp, offload_type="discard")
@@ -1195,16 +1278,22 @@ class ComponentMemoryManager:
             if comp is None or comp.in_forward:
                 continue
 
-            # Tiered offloading: GPU -> CPU -> Discard
+            # Tiered offloading: GPU -> CPU (when meaningful) -> Discard.
             if device.type != "cpu":
-                try:
-                    self._ensure_room(
-                        torch.device("cpu"),
-                        comp.estimated_bytes,
-                        exclude_label=exclude_label,
-                    )
-                    self._offload_component(comp, offload_type="cpu")
-                except Exception:
+                preferred_offload = self._effective_offload_type(
+                    "cpu", source_device=device
+                )
+                if preferred_offload == "cpu":
+                    try:
+                        self._ensure_room(
+                            torch.device("cpu"),
+                            comp.estimated_bytes,
+                            exclude_label=exclude_label,
+                        )
+                        self._offload_component(comp, offload_type="cpu")
+                    except Exception:
+                        self._offload_component(comp, offload_type="discard")
+                else:
                     self._offload_component(comp, offload_type="discard")
             else:
                 self._offload_component(comp, offload_type="discard")
@@ -1221,17 +1310,17 @@ class ComponentMemoryManager:
         engine: Any | None = None,
     ) -> List[str]:
         """
-        Like `_eviction_candidates`, but includes pinned/leased components.
-
-        This is used for **load-time** pressure handling: it's better to
-        temporarily offload previously-loaded weights than to crash with OOM
-        while loading a new component.
+        Load-time eviction candidates for `device`, scoped by engine when provided.
+        Lease-pinned components are intentionally excluded: a component is only
+        eligible for manager eviction after explicit `_offload(...)` release.
         """
         comps: List[Tuple[float, str]] = []
         for label, comp in self._components.items():
             if exclude_label is not None and label == exclude_label:
                 continue
             if comp is None or comp.in_forward:
+                continue
+            if self._is_effectively_pinned(comp):
                 continue
             if engine is not None and comp.engine() is not engine:
                 continue
@@ -1252,9 +1341,8 @@ class ComponentMemoryManager:
         """
         Ensure sufficient free memory **before loading weights** onto `device`.
 
-        Key difference vs `_ensure_room`: load-time preflight is allowed to evict
-        *leased/pinned* components (ignore_pins=True), because otherwise it is
-        easy to hit OOM while simply sequencing component loads.
+        This path respects lease pins: components stay resident until explicit
+        engine `_offload(...)` calls release them.
         """
         free, total = self._device_free_total(device)
         target_free = self._target_free_bytes(device, reserve_bytes)
@@ -1277,18 +1365,24 @@ class ComponentMemoryManager:
                     continue
 
                 if device.type != "cpu":
-                    try:
-                        # Ensure we have CPU room before offloading more weights.
-                        self._ensure_room(
-                            torch.device("cpu"),
-                            comp.estimated_bytes,
-                            exclude_label=exclude_label,
-                        )
-                        self._offload_component(comp, offload_type="cpu", ignore_pins=True)
-                    except Exception:
-                        self._offload_component(comp, offload_type="discard", ignore_pins=True)
+                    preferred_offload = self._effective_offload_type(
+                        "cpu", source_device=device
+                    )
+                    if preferred_offload == "cpu":
+                        try:
+                            # Ensure we have CPU room before offloading more weights.
+                            self._ensure_room(
+                                torch.device("cpu"),
+                                comp.estimated_bytes,
+                                exclude_label=exclude_label,
+                            )
+                            self._offload_component(comp, offload_type="cpu")
+                        except Exception:
+                            self._offload_component(comp, offload_type="discard")
+                    else:
+                        self._offload_component(comp, offload_type="discard")
                 else:
-                    self._offload_component(comp, offload_type="discard", ignore_pins=True)
+                    self._offload_component(comp, offload_type="discard")
 
                 # Flush allocator caches to maximize contiguous free segments for upcoming loads.
                 try:
@@ -1390,59 +1484,12 @@ class ComponentMemoryManager:
             # If we cannot compute pressure, fall through to best-effort eviction.
             pass
 
-        # ---------
-        # Force-offload engine attributes (not just tracked components)
-        # ---------
-        #
-        # Some engine components are wrappers that don't expose Parameters directly
-        # (or load weights lazily). In those cases, relying solely on the tracked
-        # registry can miss large VRAM residents. For load-time safety, we force
-        # offload known engine attributes first.
+        # Preflight must not issue implicit engine `_offload(...)` calls. We only
+        # clear allocator caches and then attempt eviction of already-unpinned
+        # components via `_ensure_room_for_load(...)`.
         try:
-            if hasattr(engine, "_offload"):
-                # Signal to the engine `_offload` wrapper that this is a FORCED eviction
-                # (so it must not keep modules warm on GPU).
-                self._evicting_flag.is_evicting = True
-                try:
-                    # Prefer keeping weights in RAM (CPU) rather than discarding.
-                    for name in ("text_encoder", "vae", "transformer"):
-                        try:
-                            obj = getattr(engine, name, None)
-                        except Exception:
-                            obj = None
-                        if obj is None:
-                            continue
-                        try:
-                            engine._offload(name, offload_type="cpu")  # type: ignore[attr-defined]
-                        except Exception:
-                            # Fallback: try passing the object reference.
-                            try:
-                                engine._offload(obj, offload_type="cpu")  # type: ignore[attr-defined]
-                            except Exception:
-                                pass
-
-                    helpers_map = getattr(engine, "_helpers", None) or getattr(
-                        engine, "helpers", None
-                    )
-                    if isinstance(helpers_map, dict):
-                        for key, helper in helpers_map.items():
-                            if helper is None:
-                                continue
-                            try:
-                                engine._offload(helper, offload_type="cpu")  # type: ignore[attr-defined]
-                            except Exception:
-                                try:
-                                    engine._offload(str(key), offload_type="discard")  # type: ignore[attr-defined]
-                                except Exception:
-                                    pass
-                finally:
-                    self._evicting_flag.is_evicting = False
-                try:
-                    self._flush_device_caches(dev)
-                except Exception:
-                    pass
+            self._flush_device_caches(dev)
         except Exception:
-            # Best-effort only; never block component load due to preflight.
             pass
 
         try:
@@ -1488,6 +1535,15 @@ class ComponentMemoryManager:
             return
 
         module = comp.module()
+        source_device = comp.device
+        if module is not None:
+            try:
+                source_device = self._module_device(module)
+            except Exception:
+                pass
+        offload_type = self._effective_offload_type(
+            offload_type, source_device=source_device
+        )
         if module is None and offload_type != "discard":
             return
 
@@ -1626,6 +1682,7 @@ class ComponentMemoryManager:
             manager = getattr(self, "_component_memory_manager", None)
 
             final_offload_type = offload_type
+            current_device = None
 
             # 1. Resolve Module Object
             mod_obj = module
@@ -1648,6 +1705,26 @@ class ComponentMemoryManager:
                                 or {}
                             )
                             mod_obj = helpers.get(module)
+                except Exception:
+                    pass
+
+                try:
+                    if mod_obj is not None and hasattr(manager, "_module_device"):
+                        current_device = manager._module_device(mod_obj)
+                except Exception:
+                    current_device = None
+                if current_device is None and isinstance(module, str):
+                    try:
+                        comp = manager._components.get(module)
+                        if comp is not None and isinstance(comp.device, torch.device):
+                            current_device = comp.device
+                    except Exception:
+                        current_device = None
+
+                try:
+                    final_offload_type = manager._effective_offload_type(
+                        final_offload_type, source_device=current_device
+                    )
                 except Exception:
                     pass
 
@@ -1679,13 +1756,20 @@ class ComponentMemoryManager:
             # 2. Downgrade Discard -> CPU if RAM allows
             if final_offload_type == "discard" and manager and mod_obj is not None:
                 try:
-                    size = manager._module_size_bytes(mod_obj)
-                    cpu_dev = torch.device("cpu")
-                    free, _ = manager._device_free_total(cpu_dev)
-                    target_free = manager._target_free_bytes(cpu_dev, 0)
+                    can_use_cpu_offload = (
+                        manager._effective_offload_type(
+                            "cpu", source_device=current_device
+                        )
+                        == "cpu"
+                    )
+                    if can_use_cpu_offload:
+                        size = manager._module_size_bytes(mod_obj)
+                        cpu_dev = torch.device("cpu")
+                        free, _ = manager._device_free_total(cpu_dev)
+                        target_free = manager._target_free_bytes(cpu_dev, 0)
 
-                    if free > (target_free + size + 2 * 1024**3):
-                        final_offload_type = "cpu"
+                        if free > (target_free + size + 2 * 1024**3):
+                            final_offload_type = "cpu"
                 except Exception:
                     pass
 
@@ -1736,7 +1820,20 @@ class ComponentMemoryManager:
                     pass
 
             # 5. Execute actual offload (if forced, or if moving to discard, or if already on CPU)
-            result = original(module, offload_type=final_offload_type)
+            offload_target = module
+            if final_offload_type == "discard" and not isinstance(offload_target, str):
+                try:
+                    if manager is not None:
+                        resolved = manager._resolve_label(mod_obj)
+                        if resolved:
+                            offload_target = resolved
+                except Exception:
+                    pass
+                # OffloadMixin only supports discard for string targets.
+                if not isinstance(offload_target, str):
+                    final_offload_type = "cpu"
+
+            result = original(offload_target, offload_type=final_offload_type)
             try:
                 if manager:
                     manager.mark_offloaded(module, offload_type=final_offload_type)
@@ -1760,8 +1857,8 @@ class ComponentMemoryManager:
         original = engine.load_component
 
         def _wrapped_load_component(self, component, *args, **kwargs):
-            # Load-time preflight: ensure other resident components are offloaded
-            # before we start materializing a new component's weights.
+            # Load-time preflight: best-effort eviction for already-unpinned
+            # components only; do not implicitly offload leased components.
             manager = getattr(self, "_component_memory_manager", None)
             if manager is not None and hasattr(manager, "preflight_component_load"):
                 try:

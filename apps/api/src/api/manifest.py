@@ -1,29 +1,63 @@
 import os
+import time
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache, partial
-from loguru import logger
-import anyio
-import yaml
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+
+import anyio
+import yaml
 from fastapi import APIRouter, HTTPException, Response
+from loguru import logger
 from pydantic import BaseModel
+from src.engine import UniversalEngine
+from src.manifest.paths import (
+    ensure_local_manifest_path,
+    find_manifest_root,
+    iter_manifest_relative_paths,
+    local_manifest_base_path,
+    resolve_manifest_path,
+    source_manifest_base_path,
+)
 from src.mixins.download_mixin import DownloadMixin
-from src.utils.defaults import get_components_path, get_config_path, get_lora_path
 from src.utils.compute import (
+    ComputeCapability,
     get_compute_capability,
     validate_compute_requirements,
-    ComputeCapability,
 )
-from src.engine import UniversalEngine
+from src.utils.defaults import get_components_path, get_config_path, get_lora_path
 import traceback
 
 router = APIRouter(prefix="/manifest", tags=["manifest"])
 
-# Base path to manifest directory
-MANIFEST_BASE_PATH = Path(__file__).parent.parent.parent / "manifest"
+# Source-of-truth manifests live under /manifest (read-only).
+MANIFEST_BASE_PATH = source_manifest_base_path()
+# Mutable overlay manifests live under /.local_manifest.
+LOCAL_MANIFEST_BASE_PATH = local_manifest_base_path()
+MANIFEST_CACHE_BUSTER_FILE = LOCAL_MANIFEST_BASE_PATH / ".cache_buster"
 
 
+def resolve_manifest_path_for_read(relative_path: str) -> Path:
+    """
+    Resolve a manifest path with local overlay precedence.
+    """
+    try:
+        return resolve_manifest_path(relative_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def resolve_manifest_path_for_write(relative_path: str) -> Path:
+    """
+    Resolve a writable manifest path under .local_manifest (copy-on-write).
+    """
+    try:
+        return ensure_local_manifest_path(relative_path, copy_if_missing=True)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # Cache the system's compute capability (it doesn't change during runtime)
@@ -71,9 +105,9 @@ def _normalize_subengine_relative_path(yaml_path: str) -> Optional[str]:
         return None
 
     yaml_path = yaml_path.strip()
-    prefix = "manifest/engine/"
-    if yaml_path.startswith(prefix):
-        return yaml_path[len(prefix) :]
+    for prefix in ("manifest/engine/", ".local_manifest/engine/"):
+        if yaml_path.startswith(prefix):
+            return yaml_path[len(prefix) :]
 
     # If it already looks like a path relative to manifest/engine, just return it
     return yaml_path
@@ -81,7 +115,7 @@ def _normalize_subengine_relative_path(yaml_path: str) -> Optional[str]:
 
 def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
     """Load a manifest by relative path and enrich it with runtime info."""
-    file_path = MANIFEST_BASE_PATH / relative_path
+    file_path = resolve_manifest_path_for_read(relative_path)
     content = load_yaml_content(file_path)
 
     # ----------------- Attention backends enrichment (name/label/desc) ----------------- #
@@ -199,8 +233,9 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
     try:
         from src.utils.scheduler_manifest import expand_scheduler_manifests
 
+        manifest_root = find_manifest_root(file_path) or file_path.parent
         content = expand_scheduler_manifests(
-            content, base_path=file_path, manifest_root=MANIFEST_BASE_PATH
+            content, base_path=file_path, manifest_root=manifest_root
         )
         # refresh pointers (content may have been rewritten)
         spec = content.get("spec", {}) if isinstance(content, dict) else {}
@@ -295,6 +330,35 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
                     required_loras_downloaded = False
             content["spec"]["loras"][lora_index] = out_lora
 
+    def _normalize_path_items(raw: Any) -> List[Dict[str, Any]]:
+        """
+        Normalize a path-like field into ``[{path: <str>, ...}]`` entries.
+
+        Supports legacy and modern shapes:
+        - "repo/file.safetensors"
+        - {"path": "..."}
+        - ["...", {"path": "..."}]
+        """
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            return [{"path": raw}] if raw.strip() else []
+        if isinstance(raw, dict):
+            p = raw.get("path")
+            return [raw] if isinstance(p, str) and p.strip() else []
+        if isinstance(raw, list):
+            out: List[Dict[str, Any]] = []
+            for item in raw:
+                if isinstance(item, str):
+                    if item.strip():
+                        out.append({"path": item})
+                elif isinstance(item, dict):
+                    p = item.get("path")
+                    if isinstance(p, str) and p.strip():
+                        out.append(item)
+            return out
+        return []
+
     # Enrich components entries
     for component_index, component in enumerate(
         content.get("spec", {}).get("components", [])
@@ -332,8 +396,10 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
 
             component["scheduler_options"] = options
 
+        normalized_model_paths = _normalize_path_items(component.get("model_path"))
+        component["model_path"] = normalized_model_paths
         any_path_downloaded = False
-        for index, model_path in enumerate(component.get("model_path", [])):
+        for index, model_path in enumerate(normalized_model_paths):
             is_downloaded = DownloadMixin.is_downloaded(
                 model_path.get("path"), get_components_path()
             )
@@ -346,8 +412,10 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
 
             component["model_path"][index] = model_path
 
+        normalized_extra_paths = _normalize_path_items(component.get("extra_model_paths"))
+        component["extra_model_paths"] = normalized_extra_paths
         any_extra_path_downloaded = False
-        for index, model_path in enumerate(component.get("extra_model_paths", [])):
+        for index, model_path in enumerate(normalized_extra_paths):
             path = (
                 model_path.get("path") if isinstance(model_path, dict) else model_path
             )
@@ -363,9 +431,28 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
 
             component["extra_model_paths"][index] = out_model_path
 
-        if (not any_path_downloaded and len(component.get("model_path", [])) > 0) or (
+        normalized_legacy_weights = _normalize_path_items(component.get("weights"))
+        if normalized_legacy_weights:
+            component["weights"] = normalized_legacy_weights
+        any_legacy_weight_downloaded = False
+        for index, weight_entry in enumerate(normalized_legacy_weights):
+            is_downloaded = DownloadMixin.is_downloaded(
+                weight_entry.get("path"), get_components_path()
+            )
+            if is_downloaded is not None:
+                weight_entry["is_downloaded"] = True
+                weight_entry["path"] = is_downloaded
+                any_legacy_weight_downloaded = True
+            else:
+                weight_entry["is_downloaded"] = False
+
+            component["weights"][index] = weight_entry
+
+        if (not any_path_downloaded and len(normalized_model_paths) > 0) or (
             not any_extra_path_downloaded
-            and len(component.get("extra_model_paths", [])) > 0
+            and len(normalized_extra_paths) > 0
+        ) or (
+            not any_legacy_weight_downloaded and len(normalized_legacy_weights) > 0
         ):
             is_component_downloaded = False
 
@@ -389,14 +476,34 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
     content["demo_path"] = metadata.get("demo_path", "")
     # Keep relative path for downstream use
     content["full_path"] = relative_path
-    # Manifest-level downloaded flag: true if there are components and all are downloaded
-    components_list = content.get("spec", {}).get("components", []) or []
-    content["downloaded"] = (
-        bool(components_list)
-        and all(
-            isinstance(c, dict) and c.get("is_downloaded", False)
-            for c in components_list
+    # Enrich top-level legacy `weights` if present.
+    normalized_top_level_weights = _normalize_path_items(content.get("weights"))
+    if normalized_top_level_weights:
+        content["weights"] = normalized_top_level_weights
+    for index, weight_entry in enumerate(normalized_top_level_weights):
+        is_downloaded = DownloadMixin.is_downloaded(
+            weight_entry.get("path"), get_components_path()
         )
+        if is_downloaded is not None:
+            weight_entry["is_downloaded"] = True
+            weight_entry["path"] = is_downloaded
+        else:
+            weight_entry["is_downloaded"] = False
+        content["weights"][index] = weight_entry
+
+    # Manifest-level downloaded flag:
+    # - modern manifests: all components downloaded
+    # - legacy fallback: all top-level weights downloaded
+    components_list = content.get("spec", {}).get("components", []) or []
+    components_downloaded = bool(components_list) and all(
+        isinstance(c, dict) and c.get("is_downloaded", False) for c in components_list
+    )
+    top_level_weights_downloaded = bool(normalized_top_level_weights) and all(
+        isinstance(w, dict) and w.get("is_downloaded", False)
+        for w in normalized_top_level_weights
+    )
+    content["downloaded"] = (
+        (components_downloaded or top_level_weights_downloaded)
         and required_loras_downloaded
     )
 
@@ -432,6 +539,85 @@ def get_manifest(manifest_id: str):
     return _load_and_enrich_manifest(relative_path)
 
 
+def _collect_manifest_relative_paths(*, include_shared: bool = False) -> List[str]:
+    paths: List[str] = []
+    for relative_path in iter_manifest_relative_paths(suffixes=(".yml", ".yaml")):
+        if not include_shared and Path(relative_path).name.startswith("shared"):
+            continue
+        paths.append(relative_path)
+    return paths
+
+
+def _is_legacy_manifest_relative_path(relative_path: str) -> bool:
+    return any(part.lower() == "legacy" for part in Path(relative_path).parts)
+
+
+def _manifest_version_sort_key(relative_path: str) -> tuple[int, int, int, int]:
+    """
+    Lower value = higher preference.
+
+    Returns:
+      (known_version_flag, -major, -minor, -patch)
+    so higher versions sort before lower versions.
+    """
+    parts = Path(relative_path).parts
+    if parts:
+        m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", parts[0].strip(), re.IGNORECASE)
+        if m:
+            major = int(m.group(1))
+            minor = int(m.group(2))
+            patch = int(m.group(3))
+            return (0, -major, -minor, -patch)
+    return (1, 0, 0, 0)
+
+
+def _manifest_relative_path_priority(
+    relative_path: str,
+) -> tuple[int, int, int, int, int, str]:
+    """
+    Lower value = higher preference.
+
+    Priority order:
+      1. Higher manifest version (v0.1.2 over v0.1.0)
+      2. Non-legacy over legacy for same version
+      3. Relative path (stable tie-break)
+    """
+    return (
+        *_manifest_version_sort_key(relative_path),
+        1 if _is_legacy_manifest_relative_path(relative_path) else 0,
+        relative_path,
+    )
+
+
+def _dedupe_manifests_by_id(manifests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Keep one manifest per metadata id, preferring latest version first, then
+    non-legacy paths.
+    """
+    preferred_by_id: Dict[str, Dict[str, Any]] = {}
+    passthrough: List[Dict[str, Any]] = []
+
+    for manifest in manifests:
+        manifest_id = str(manifest.get("id") or "").strip()
+        if not manifest_id:
+            passthrough.append(manifest)
+            continue
+
+        current = preferred_by_id.get(manifest_id)
+        if current is None:
+            preferred_by_id[manifest_id] = manifest
+            continue
+
+        current_path = str(current.get("full_path") or "")
+        candidate_path = str(manifest.get("full_path") or "")
+        if _manifest_relative_path_priority(candidate_path) < _manifest_relative_path_priority(
+            current_path
+        ):
+            preferred_by_id[manifest_id] = manifest
+
+    return [*preferred_by_id.values(), *passthrough]
+
+
 def _get_all_manifest_files_uncached() -> List[Dict[str, Any]]:
     """Scan manifest directory and return all enriched manifest contents (no cache).
 
@@ -439,14 +625,7 @@ def _get_all_manifest_files_uncached() -> List[Dict[str, Any]]:
     Uses parallel threads to load and enrich manifests concurrently for faster startup.
     """
     # Phase 1: Collect all candidate YAML paths (fast filesystem walk, no parsing)
-    candidate_paths: List[str] = []
-    for root, _dirs, files in os.walk(MANIFEST_BASE_PATH):
-        for file in files:
-            if file.endswith(".yml") and not file.startswith("shared"):
-                file_path = Path(root) / file
-                candidate_paths.append(
-                    str(file_path.relative_to(MANIFEST_BASE_PATH))
-                )
+    candidate_paths = _collect_manifest_relative_paths(include_shared=False)
 
     if not candidate_paths:
         return []
@@ -473,7 +652,7 @@ def _get_all_manifest_files_uncached() -> List[Dict[str, Any]]:
             ):
                 manifests.append(enriched)
 
-    return manifests
+    return _dedupe_manifests_by_id(manifests)
 
 
 def _env_truthy(value: Optional[str]) -> bool:
@@ -501,7 +680,7 @@ def get_all_manifest_files() -> List[Dict[str, Any]]:
     if not enabled:
         return _get_all_manifest_files_uncached()
     buster = os.getenv("APEX_MANIFEST_CACHE_BUSTER", "")
-    cache_key = f"v1:{buster}"
+    cache_key = f"v2:{buster}:{_manifest_cache_buster_token()}"
     return _get_all_manifest_files_cached(cache_key)
 
 
@@ -510,23 +689,24 @@ def _build_manifest_id_index_uncached() -> Dict[str, str]:
     Build a mapping of manifest_id -> relative_path (str) without enriching all manifests.
     """
     index: Dict[str, str] = {}
-    for root, dirs, files in os.walk(MANIFEST_BASE_PATH):
-        for file in files:
-            if not file.endswith(".yml") or file.startswith("shared"):
-                continue
-            file_path = Path(root) / file
-            relative_path = str(file_path.relative_to(MANIFEST_BASE_PATH))
-            try:
-                data = load_yaml_content(file_path)
-                manifest_id = ""
-                if isinstance(data, dict):
-                    meta = data.get("metadata", {})
-                    if isinstance(meta, dict):
-                        manifest_id = str(meta.get("id", "")).strip()
-                if manifest_id:
-                    index.setdefault(manifest_id, relative_path)
-            except HTTPException:
-                continue
+    for relative_path in _collect_manifest_relative_paths(include_shared=False):
+        try:
+            data = load_yaml_content(resolve_manifest_path_for_read(relative_path))
+            manifest_id = ""
+            if isinstance(data, dict):
+                meta = data.get("metadata", {})
+                if isinstance(meta, dict):
+                    manifest_id = str(meta.get("id", "")).strip()
+            if manifest_id:
+                current = index.get(manifest_id)
+                if current is None:
+                    index[manifest_id] = relative_path
+                elif _manifest_relative_path_priority(relative_path) < _manifest_relative_path_priority(
+                    current
+                ):
+                    index[manifest_id] = relative_path
+        except HTTPException:
+            continue
     return index
 
 
@@ -546,7 +726,7 @@ def _get_manifest_id_index() -> Dict[str, str]:
     if not enabled:
         return _build_manifest_id_index_uncached()
     buster = os.getenv("APEX_MANIFEST_CACHE_BUSTER", "")
-    cache_key = f"v1:{buster}"
+    cache_key = f"v2:{buster}:{_manifest_cache_buster_token()}"
     return _get_manifest_id_index_cached(cache_key)
 
 
@@ -726,7 +906,7 @@ def _build_attention_options(
 
 def _list_model_types_sync() -> List[ModelTypeInfo]:
     """Blocking implementation for list_model_types()."""
-    if not MANIFEST_BASE_PATH.exists():
+    if not MANIFEST_BASE_PATH.exists() and not LOCAL_MANIFEST_BASE_PATH.exists():
         return []
 
     # Friendly labels and short descriptions per known category.
@@ -765,29 +945,25 @@ def _list_model_types_sync() -> List[ModelTypeInfo]:
 
     discovered_categories = set()
 
-    for root, _, files in os.walk(MANIFEST_BASE_PATH):
-        for file in files:
-            if not file.endswith(".yml") or file.startswith("shared"):
-                continue
-            file_path = Path(root) / file
-            try:
-                data = load_yaml_content(file_path)
-            except HTTPException:
-                # Skip invalid YAMLs
-                continue
+    for relative_path in _collect_manifest_relative_paths(include_shared=False):
+        try:
+            data = load_yaml_content(resolve_manifest_path_for_read(relative_path))
+        except HTTPException:
+            # Skip invalid YAMLs
+            continue
 
-            if not isinstance(data, dict):
-                continue
+        if not isinstance(data, dict):
+            continue
 
-            metadata = data.get("metadata", {}) or {}
-            categories_field = metadata.get("categories")
+        metadata = data.get("metadata", {}) or {}
+        categories_field = metadata.get("categories")
 
-            if isinstance(categories_field, list):
-                for c in categories_field:
-                    if isinstance(c, str) and c.strip():
-                        discovered_categories.add(c.strip())
-            elif isinstance(categories_field, str) and categories_field.strip():
-                discovered_categories.add(categories_field.strip())
+        if isinstance(categories_field, list):
+            for c in categories_field:
+                if isinstance(c, str) and c.strip():
+                    discovered_categories.add(c.strip())
+        elif isinstance(categories_field, str) and categories_field.strip():
+            discovered_categories.add(categories_field.strip())
 
     results: List[ModelTypeInfo] = []
     for key in sorted(discovered_categories):
@@ -834,14 +1010,7 @@ def _list_all_manifests_sync(include_incompatible: bool = False):
     try:
         if include_incompatible:
             # Collect candidate paths, then load all manifests in parallel
-            candidate_paths: List[str] = []
-            for root, _dirs, files in os.walk(MANIFEST_BASE_PATH):
-                for file in files:
-                    if file.endswith(".yml") and not file.startswith("shared"):
-                        file_path = Path(root) / file
-                        candidate_paths.append(
-                            str(file_path.relative_to(MANIFEST_BASE_PATH))
-                        )
+            candidate_paths = _collect_manifest_relative_paths(include_shared=False)
 
             if not candidate_paths:
                 return []
@@ -859,7 +1028,7 @@ def _list_all_manifests_sync(include_incompatible: bool = False):
                         manifests.append(enriched)
                     except Exception:
                         continue
-            return manifests
+            return _dedupe_manifests_by_id(manifests)
         # Use the normal filtered list (already parallelized)
         return get_all_manifest_files()
     except Exception as e:
@@ -1007,7 +1176,7 @@ def _load_group_manifest(relative_path: str) -> Dict[str, Any]:
     This function only resolves variants itself when called standalone (e.g.
     from _get_group_by_id_sync).
     """
-    file_path = MANIFEST_BASE_PATH / relative_path
+    file_path = resolve_manifest_path_for_read(relative_path)
     content = load_yaml_content(file_path)
 
     if not isinstance(content, dict) or content.get("kind") != "ModelGroup":
@@ -1070,10 +1239,12 @@ def _get_all_group_files_sync() -> List[Dict[str, Any]]:
     """
     # --- Step 1: Find group YAML files directly via glob (instant) ----------
     group_paths: List[str] = []
-    for file_path in MANIFEST_BASE_PATH.glob("*/groups/*.yml"):
-        if file_path.name.startswith("shared"):
-            continue
-        group_paths.append(str(file_path.relative_to(MANIFEST_BASE_PATH)))
+    for relative_path in _collect_manifest_relative_paths(include_shared=False):
+        parts = Path(relative_path).parts
+        # Keep compatibility with legacy pattern */groups/*.yml while supporting
+        # additional nesting under version directories.
+        if len(parts) >= 3 and parts[-2] == "groups":
+            group_paths.append(relative_path)
 
     if not group_paths:
         return []
@@ -1082,7 +1253,7 @@ def _get_all_group_files_sync() -> List[Dict[str, Any]]:
     raw_groups: List[tuple[str, Dict[str, Any]]] = []
     for rp in group_paths:
         try:
-            content = load_yaml_content(MANIFEST_BASE_PATH / rp)
+            content = load_yaml_content(resolve_manifest_path_for_read(rp))
             if isinstance(content, dict) and content.get("kind") == "ModelGroup":
                 raw_groups.append((rp, content))
         except (HTTPException, Exception):
@@ -1163,8 +1334,42 @@ def get_all_group_files() -> List[Dict[str, Any]]:
     if not enabled:
         return _get_all_group_files_sync()
     buster = os.getenv("APEX_MANIFEST_CACHE_BUSTER", "")
-    cache_key = f"groups-v1:{buster}"
+    cache_key = f"groups-v2:{buster}:{_manifest_cache_buster_token()}"
     return _get_all_group_files_cached(cache_key)
+
+
+def _manifest_cache_buster_token() -> str:
+    """
+    Return a cheap cross-process cache token derived from an on-disk marker file.
+    """
+    try:
+        return str(MANIFEST_CACHE_BUSTER_FILE.stat().st_mtime_ns)
+    except FileNotFoundError:
+        return "0"
+    except Exception:
+        return "0"
+
+
+def bump_manifest_cache_buster() -> None:
+    """
+    Bump a shared on-disk token so manifest caches in other processes auto-refresh.
+    """
+    try:
+        MANIFEST_CACHE_BUSTER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        MANIFEST_CACHE_BUSTER_FILE.write_text(str(time.time_ns()), encoding="utf-8")
+    except Exception:
+        # Best-effort only; in-process cache clear still helps current process.
+        pass
+
+
+def invalidate_manifest_caches() -> None:
+    """
+    Clear in-process manifest caches after local manifest mutations.
+    """
+    _get_all_manifest_files_cached.cache_clear()
+    _get_manifest_id_index_cached.cache_clear()
+    _get_all_group_files_cached.cache_clear()
+    bump_manifest_cache_buster()
 
 
 def _get_group_by_id_sync(group_id: str) -> Dict[str, Any]:
@@ -1302,7 +1507,7 @@ def _update_lora_scale_sync(req: UpdateLoraScaleRequest) -> Dict[str, Any]:
             status_code=500,
             detail="Manifest missing full_path metadata; cannot locate YAML.",
         )
-    yaml_path = MANIFEST_BASE_PATH / relative_path
+    yaml_path = resolve_manifest_path_for_write(relative_path)
     if not yaml_path.exists():
         raise HTTPException(
             status_code=500,
@@ -1345,6 +1550,7 @@ def _update_lora_scale_sync(req: UpdateLoraScaleRequest) -> Dict[str, Any]:
 
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
+        invalidate_manifest_caches()
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -1403,7 +1609,7 @@ def _update_lora_name_sync(req: UpdateLoraNameRequest) -> Dict[str, Any]:
             status_code=500,
             detail="Manifest missing full_path metadata; cannot locate YAML.",
         )
-    yaml_path = MANIFEST_BASE_PATH / relative_path
+    yaml_path = resolve_manifest_path_for_write(relative_path)
     if not yaml_path.exists():
         raise HTTPException(
             status_code=500,
@@ -1441,6 +1647,7 @@ def _update_lora_name_sync(req: UpdateLoraNameRequest) -> Dict[str, Any]:
 
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
+        invalidate_manifest_caches()
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -1498,7 +1705,7 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
             status_code=500,
             detail="Manifest missing full_path metadata; cannot locate YAML.",
         )
-    yaml_path = MANIFEST_BASE_PATH / relative_path
+    yaml_path = resolve_manifest_path_for_write(relative_path)
     if not yaml_path.exists():
         raise HTTPException(
             status_code=500,
@@ -1546,6 +1753,7 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
 
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
+        invalidate_manifest_caches()
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -1636,7 +1844,7 @@ def _validate_and_register_custom_model_path_sync(
             status_code=500,
             detail="Manifest missing full_path metadata; cannot locate YAML.",
         )
-    yaml_path = MANIFEST_BASE_PATH / relative_path
+    yaml_path = resolve_manifest_path_for_write(relative_path)
     if not yaml_path.exists():
         raise HTTPException(
             status_code=500,
@@ -1765,6 +1973,7 @@ def _validate_and_register_custom_model_path_sync(
     # Persist updated YAML back to disk
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
+        invalidate_manifest_caches()
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -1784,7 +1993,10 @@ async def delete_custom_model_path(req: DeleteCustomModelPathRequest) -> Dict[st
 def _delete_custom_model_path_sync(req: DeleteCustomModelPathRequest) -> Dict[str, Any]:
     """
     Remove a *custom* model_path entry from a component in the manifest YAML,
-    without deleting any underlying model files from disk.
+    without deleting arbitrary user files from disk.
+
+    For legacy migrated entries (`legacy: true`), also attempts best-effort
+    cleanup of downloaded local weights under the managed components directory.
     """
     if not req.manifest_id:
         raise HTTPException(status_code=400, detail="manifest_id is required")
@@ -1807,7 +2019,7 @@ def _delete_custom_model_path_sync(req: DeleteCustomModelPathRequest) -> Dict[st
             status_code=500,
             detail="Manifest missing full_path metadata; cannot locate YAML.",
         )
-    yaml_path = MANIFEST_BASE_PATH / relative_path
+    yaml_path = resolve_manifest_path_for_write(relative_path)
     if not yaml_path.exists():
         raise HTTPException(
             status_code=500,
@@ -1838,6 +2050,18 @@ def _delete_custom_model_path_sync(req: DeleteCustomModelPathRequest) -> Dict[st
 
     mp = component_doc.get("model_path")
     removed = False
+    removed_item: Optional[Dict[str, Any]] = None
+
+    components_base = get_components_path()
+
+    def _canonical_model_path(path_str: str) -> str:
+        try:
+            resolved = DownloadMixin.is_downloaded(path_str, components_base)
+            return resolved or path_str
+        except Exception:
+            return path_str
+
+    requested_path_canonical = _canonical_model_path(req.path)
 
     # Only remove entries that are explicitly marked as custom and match the path.
     if isinstance(mp, list):
@@ -1846,9 +2070,12 @@ def _delete_custom_model_path_sync(req: DeleteCustomModelPathRequest) -> Dict[st
             if isinstance(item, dict):
                 p = item.get("path")
                 is_custom = item.get("custom") is True
-                if is_custom and isinstance(p, str) and p == req.path:
-                    removed = True
-                    continue
+                if is_custom and isinstance(p, str):
+                    existing_path_canonical = _canonical_model_path(p)
+                    if p == req.path or existing_path_canonical == requested_path_canonical:
+                        removed = True
+                        removed_item = item
+                        continue
             new_items.append(item)
         if removed:
             if new_items:
@@ -1858,9 +2085,12 @@ def _delete_custom_model_path_sync(req: DeleteCustomModelPathRequest) -> Dict[st
     elif isinstance(mp, dict):
         p = mp.get("path")
         is_custom = mp.get("custom") is True
-        if is_custom and isinstance(p, str) and p == req.path:
-            removed = True
-            component_doc.pop("model_path", None)
+        if is_custom and isinstance(p, str):
+            existing_path_canonical = _canonical_model_path(p)
+            if p == req.path or existing_path_canonical == requested_path_canonical:
+                removed = True
+                removed_item = mp
+                component_doc.pop("model_path", None)
 
     if not removed:
         raise HTTPException(
@@ -1873,12 +2103,39 @@ def _delete_custom_model_path_sync(req: DeleteCustomModelPathRequest) -> Dict[st
 
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
+        invalidate_manifest_caches()
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
         )
 
+    removed_local = False
+    # Legacy entries are managed/imported by Apex; clean up their downloaded local weights.
+    if isinstance(removed_item, dict) and removed_item.get("legacy") is True:
+        try:
+            base = Path(get_components_path()).resolve()
+            raw_removed_path = removed_item.get("path")
+            delete_path = req.path
+            if isinstance(raw_removed_path, str) and raw_removed_path:
+                delete_path = _canonical_model_path(raw_removed_path)
+            if isinstance(delete_path, str) and delete_path:
+                target = Path(delete_path).expanduser()
+                if target.is_absolute():
+                    target = target.resolve()
+                    if str(target).startswith(str(base)):
+                        if target.is_file() or target.is_symlink():
+                            target.unlink(missing_ok=True)
+                            removed_local = True
+                        elif target.is_dir():
+                            import shutil
+
+                            shutil.rmtree(target, ignore_errors=True)
+                            removed_local = True
+        except Exception:
+            removed_local = False
+
     return {
         "success": True,
         "message": "Custom model path removed successfully.",
+        "removed_local": removed_local,
     }

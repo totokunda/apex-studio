@@ -20,12 +20,25 @@ from tqdm import tqdm
 from src.utils.defaults import DEFAULT_CACHE_PATH, DEFAULT_PREPROCESSOR_SAVE_PATH
 import os
 import torch
+from src.manifest.paths import local_manifest_base_path, source_manifest_base_path
 from src.utils.yaml import load_yaml as load_yaml_file
 from src.mixins.download_mixin import DownloadMixin
 
-_PREPROCESSOR_MANIFEST_PATH = (
-    Path(__file__).resolve().parents[2] / "manifest" / "preprocessor"
+_PREPROCESSOR_MANIFEST_PATHS = (
+    local_manifest_base_path() / "preprocessor",
+    source_manifest_base_path() / "preprocessor",
 )
+
+
+def _resolve_preprocessor_manifest_path(preprocessor_name: str) -> Optional[Path]:
+    for base_path in _PREPROCESSOR_MANIFEST_PATHS:
+        file_path_yml = base_path / f"{preprocessor_name}.yml"
+        if file_path_yml.exists():
+            return file_path_yml
+        file_path_yaml = base_path / f"{preprocessor_name}.yaml"
+        if file_path_yaml.exists():
+            return file_path_yaml
+    return None
 
 
 class ProgressCallback:
@@ -77,13 +90,7 @@ class BasePreprocessor(LoaderMixin, ABC):
         is the source of truth.
         """
         try:
-            file_path_yml = _PREPROCESSOR_MANIFEST_PATH / f"{preprocessor_name}.yml"
-            file_path_yaml = _PREPROCESSOR_MANIFEST_PATH / f"{preprocessor_name}.yaml"
-            manifest_path = (
-                file_path_yml
-                if file_path_yml.exists()
-                else (file_path_yaml if file_path_yaml.exists() else None)
-            )
+            manifest_path = _resolve_preprocessor_manifest_path(preprocessor_name)
             if manifest_path is None:
                 return False
 
