@@ -18,7 +18,7 @@ class TAEW2_2DiffusersWrapper(nn.Module):
         super().__init__()
         self.dtype = torch.float32
         self.device = "mps"
-        self.taehv = TAEHV("lighttaew2_2.safetensors").to(self.device).to(self.dtype)
+        self.taehv = TAEHV("/Users/tosinkuye/apex-workspace/apex-studio/apps/api/taehv/taew2_2.pth").to(self.device).to(self.dtype)
         self.config = DotDict(
             scaling_factor=1.0,
             latents_mean=torch.zeros(self.taehv.latent_channels),
@@ -38,7 +38,9 @@ vp = VideoProcessor()
 with torch.no_grad():
     video = taehv.decode(latent.to(torch.float32))[0]
 
-video = vp.postprocess_video(video)
+
+
+video = vp.postprocess_video(video, output_type="pil")
 export_to_video(video[0], "video.mp4", fps=24)
 
 engine = UniversalEngine(yaml_path="/Users/tosinkuye/apex-workspace/apex-studio/apps/api/manifest/v0.1.2/video/wan-2.2-5b-text-to-image-to-video.yml", components_to_load=["vae"], selected_components={
