@@ -405,6 +405,7 @@ function ensureAlphaDecoder(state: AssetState, assetId: string) {
 }
 
 function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
+
   const state = assetStates.get(assetId);
   if (!state) {
     frame.close();
@@ -418,6 +419,7 @@ function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
 
   const frameTime = frame.timestamp / 1e6;
 
+  
   
 
   
@@ -916,6 +918,8 @@ async function handleConfigure(
   state.config = configAny as VideoDecoderConfig;
  
   createVideoDecoder(state, id);
+
+  console.log("VideoDecoder configure", state.config);
 
   try {
     state?.decoder?.configure(state.config as VideoDecoderConfig);

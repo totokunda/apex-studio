@@ -12,34 +12,120 @@ import {
     FLAC,
     ADTS,
 } from "mediabunny";
-import { getUserDataPath as getUserDataPathPreload } from "@app/preload";
+import {
+    getUserDataPath as getUserDataPathPreload,
+    fileURLToPath,
+    createNativeDecoder,
+    configureNativeDecoder,
+    seekNativeDecoder,
+    iterateNativeDecoder,
+    cancelNativeDecoder,
+    disposeNativeDecoder,
+    disposeAllNativeDecoders,
+    ackNativeFrame,
+    isNativeDecoderAvailable,
+    resolveNativeDecoderPath,
+} from "@app/preload";
+import { NativeFrameUploader } from "./native-frame-uploader";
+import { createBufferPool } from "./native-buffer-pool";
+
+// ---------------------------------------------------------------------------
+// Shared canvas type used by both native (HTMLCanvasElement) and worker
+// (VideoFrame) paths. Consumers use ctx.drawImage() which accepts both.
+// ---------------------------------------------------------------------------
+type DecodedCanvas = VideoFrame | HTMLCanvasElement;
+
+// ---------------------------------------------------------------------------
+// Common helpers
+// ---------------------------------------------------------------------------
+
+function computeFormatStr(fmt: any): string | undefined {
+    if (!fmt) return undefined;
+    if (fmt === MP4) return "mp4";
+    if (fmt === WEBM) return "webm";
+    if (fmt === QTFF) return "mov";
+    if (fmt === MATROSKA) return "mkv";
+    if (fmt === OGG) return "ogg";
+    if (fmt === MP3) return "mp3";
+    if (fmt === WAVE) return "wav";
+    if (fmt === FLAC) return "flac";
+    if (fmt === ADTS) return "aac";
+    return undefined;
+}
+
+function normalizeDimensions(
+    videoDecoderConfig: VideoDecoderConfig,
+    mediaInfo: MediaInfo,
+): { targetWidth: number; targetHeight: number } {
+    const { codedWidth, codedHeight } = videoDecoderConfig;
+    let targetWidth = codedWidth || 0;
+    let targetHeight = codedHeight || 0;
+
+    if (!targetWidth || !targetHeight) {
+        targetWidth = mediaInfo.video?.codedWidth || 0;
+        targetHeight = mediaInfo.video?.codedHeight || 0;
+    }
+
+    if (targetWidth && targetHeight) {
+        const isLandscape = targetWidth >= targetHeight;
+        const shortSide = isLandscape ? targetHeight : targetWidth;
+
+        if (shortSide > 720) {
+            const scale = 720 / shortSide;
+            targetWidth = Math.round(targetWidth * scale);
+            targetHeight = Math.round(targetHeight * scale);
+            targetWidth = targetWidth - (targetWidth % 2);
+            targetHeight = targetHeight - (targetHeight % 2);
+        }
+    }
+
+    return { targetWidth, targetHeight };
+}
+
+// ---------------------------------------------------------------------------
+// Native decoder state (per-asset)
+// ---------------------------------------------------------------------------
+
+interface NativeDecoderAssetState {
+    nativeHandle: number;
+    bufferPool: SharedArrayBuffer[];
+    poolViews: Uint8Array[];
+    uploader: NativeFrameUploader;
+}
+
+// Detect once at module load whether the native path is usable.
+const nativeAvailable: boolean = (() => {
+    try {
+        return typeof SharedArrayBuffer !== "undefined" && isNativeDecoderAvailable();
+    } catch {
+        return false;
+    }
+})();
+
+// ---------------------------------------------------------------------------
+// VideoFrameDecoder — single-asset decoder
+// ---------------------------------------------------------------------------
 
 interface VideoFrameDecoderOptions {
     mediaInfo: MediaInfo;
     videoDecoderConfig: VideoDecoderConfig;
-    onFrame: ({
-        canvas,
-        timestamp,
-        duration,
-    }: {
-        canvas: VideoFrame;
-        timestamp: number;
-        duration: number;
-    }) => void;
+    onFrame: (data: { canvas: DecodedCanvas; timestamp: number; duration: number }) => void;
     onError: (error: Error) => void;
     initialTimestamp?: number;
     onReady?: () => void;
 }
 
 export class VideoFrameDecoder {
-    private worker: Worker;
+    private worker: Worker | null = null;
     private currentRequestId = 0;
     private initialized = false;
     private initializedPromise: Promise<void>;
     private initializedResolve: (() => void) | null = null;
     private onReadyCallback?: () => void;
-    private onFrameCallback: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+    private onFrameCallback: (data: { canvas: DecodedCanvas; timestamp: number; duration: number }) => void;
     private onErrorCallback: (error: Error) => void;
+    private readonly useNative: boolean;
+    private native: NativeDecoderAssetState | null = null;
 
     private activeIteration: {
         requestId: number;
@@ -54,10 +140,8 @@ export class VideoFrameDecoder {
         this.onFrameCallback = options.onFrame;
         this.onErrorCallback = options.onError;
         this.onReadyCallback = options.onReady;
+        this.useNative = nativeAvailable;
 
-        // Setup "ready" tracking that resolves once the worker has finished
-        // initial configuration. Callers can await this or use the onReady
-        // callback; both are driven directly by worker messages.
         this.initializedPromise = new Promise<void>((resolve) => {
             this.initializedResolve = () => {
                 if (this.initialized) return;
@@ -66,6 +150,132 @@ export class VideoFrameDecoder {
             };
         });
 
+        const { targetWidth, targetHeight } = normalizeDimensions(
+            options.videoDecoderConfig,
+            options.mediaInfo,
+        );
+
+        if (this.useNative) {
+            this.initNative(options, targetWidth, targetHeight);
+        } else {
+            this.initWorker(options, targetWidth, targetHeight);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Native path init
+    // -----------------------------------------------------------------------
+
+    private async initNative(
+        options: VideoFrameDecoderOptions,
+        targetWidth: number,
+        targetHeight: number,
+    ): Promise<void> {
+        try {
+            const handle = createNativeDecoder();
+            const pool = createBufferPool(targetWidth, targetHeight);
+            const poolViews = pool.map((sab) => new Uint8Array(sab));
+            const uploader = new NativeFrameUploader();
+
+            this.native = { nativeHandle: handle, bufferPool: pool, poolViews, uploader };
+
+            const filePath = await resolveNativeDecoderPath(options.mediaInfo.path);
+
+            configureNativeDecoder(handle, {
+                filePath,
+                width: targetWidth,
+                height: targetHeight,
+                bufferPool: pool,
+                onFrame: (bufferIndex, width, height, timestamp, duration, requestId) => {
+                    this.handleNativeFrame(bufferIndex, width, height, timestamp, duration, requestId);
+                },
+                onError: (message) => {
+                    if (this.activeIteration) {
+                        this.activeIteration.reject(new Error(message));
+                        this.activeIteration = null;
+                    } else {
+                        this.onErrorCallback(new Error(message));
+                    }
+                },
+                onReady: () => {
+                    if (this.initializedResolve) {
+                        this.initializedResolve();
+                        this.initializedResolve = null;
+                    }
+                    if (this.onReadyCallback) {
+                        this.onReadyCallback();
+                        this.onReadyCallback = undefined;
+                    }
+                },
+            });
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn("[VideoFrameDecoder] Native decoder init failed, falling back to worker:", err);
+            (this as any).useNative = false;
+            this.native = null;
+            this.initWorker(options, targetWidth, targetHeight);
+        }
+    }
+
+    private handleNativeFrame(
+        bufferIndex: number,
+        width: number,
+        height: number,
+        timestamp: number,
+        duration: number,
+        requestId: number,
+    ): void {
+        const native = this.native!;
+
+        // Iteration frames
+        if (this.activeIteration && requestId === this.activeIteration.requestId) {
+            const iteration = this.activeIteration;
+
+            iteration.frameProcessingPromise = iteration.frameProcessingPromise
+                .then(async () => {
+                    if (iteration.checkCancel && !iteration.checkCancel()) {
+                        ackNativeFrame(native.nativeHandle, bufferIndex);
+                        return;
+                    }
+                    if (iteration.shouldDelay) {
+                        await iteration.shouldDelay(timestamp);
+                    }
+                    if (iteration.checkCancel && !iteration.checkCancel()) {
+                        ackNativeFrame(native.nativeHandle, bufferIndex);
+                        return;
+                    }
+
+                    const canvas = native.uploader.upload(native.poolViews[bufferIndex], width, height);
+                    this.onFrameCallback({ canvas, timestamp, duration });
+                    ackNativeFrame(native.nativeHandle, bufferIndex);
+                })
+                .catch((err) => {
+                    console.error("Native frame processing error", err);
+                    ackNativeFrame(native.nativeHandle, bufferIndex);
+                });
+            return;
+        }
+
+        // Seek/preview frames
+        if (requestId !== undefined && requestId !== this.currentRequestId) {
+            ackNativeFrame(native.nativeHandle, bufferIndex);
+            return;
+        }
+
+        const canvas = native.uploader.upload(native.poolViews[bufferIndex], width, height);
+        this.onFrameCallback({ canvas, timestamp, duration });
+        ackNativeFrame(native.nativeHandle, bufferIndex);
+    }
+
+    // -----------------------------------------------------------------------
+    // Worker path init
+    // -----------------------------------------------------------------------
+
+    private initWorker(
+        options: VideoFrameDecoderOptions,
+        targetWidth: number,
+        targetHeight: number,
+    ): void {
         this.worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
             type: "module",
         });
@@ -73,70 +283,51 @@ export class VideoFrameDecoder {
         this.worker.onmessage = (e) => {
             const msg = e.data;
 
-
             if (msg.type === "frame") {
-                // Handle Iteration Frames
                 if (this.activeIteration && msg.requestId === this.activeIteration.requestId) {
                     const iteration = this.activeIteration;
-        
-                    // Chain processing to ensure correct timing and flow control
-                    iteration.frameProcessingPromise = iteration.frameProcessingPromise.then(async () => {
-                        if (iteration.checkCancel && !iteration.checkCancel()) {
-                             msg.frame.close();
-                             return;
-                        }
 
-                        if (iteration.shouldDelay) {
-                             await iteration.shouldDelay(msg.timestamp);
-                        }
+                    iteration.frameProcessingPromise = iteration.frameProcessingPromise
+                        .then(async () => {
+                            if (iteration.checkCancel && !iteration.checkCancel()) {
+                                msg.frame.close();
+                                return;
+                            }
+                            if (iteration.shouldDelay) {
+                                await iteration.shouldDelay(msg.timestamp);
+                            }
+                            if (iteration.checkCancel && !iteration.checkCancel()) {
+                                msg.frame.close();
+                                return;
+                            }
 
-                        if (iteration.checkCancel && !iteration.checkCancel()) {
-                             msg.frame.close();
-                             return;
-                        }
-
-                        this.onFrameCallback({
-                            canvas: msg.frame, // Ownership transferred here usually, but here we just pass it
-                            timestamp: msg.timestamp,
-                            duration: msg.duration,
+                            this.onFrameCallback({
+                                canvas: msg.frame,
+                                timestamp: msg.timestamp,
+                                duration: msg.duration,
+                            });
+                            msg.frame.close();
+                            this.worker!.postMessage({ type: "ack", requestId: msg.requestId });
+                        })
+                        .catch((err) => {
+                            console.error("Frame processing error", err);
+                            msg.frame.close();
                         });
-                        
-                        // We do NOT close the frame here if onFrameCallback consumes/closes it.
-                        // But looking at VideoPreview.tsx, it renders it to canvas.
-                        // `VideoFrame` needs to be closed. VideoPreview calls drawWrappedCanvas -> context.drawImage.
-                        // It doesn't close it explicitly? 
-                        // Wait, original VideoDecoder closed it: `frame.close()` at end of handler.
-                        // `VideoPreview` receives `wc` with `canvas: VideoFrame`.
-                        // `drawWrappedCanvas` does NOT close it.
-                        // So we MUST close it here.
-                        msg.frame.close();
-
-                        // Send Ack to resume worker
-                        this.worker.postMessage({ type: "ack", requestId: msg.requestId });
-                    }).catch(err => {
-                        console.error("Frame processing error", err);
-                        msg.frame.close();
-                    });
-                    
                     return;
                 }
 
-                // Handle Seek/Preview Frames
                 if (msg.requestId !== undefined && msg.requestId !== this.currentRequestId) {
                     msg.frame.close();
                     return;
                 }
-                
+
                 this.onFrameCallback({
                     canvas: msg.frame,
                     timestamp: msg.timestamp,
                     duration: msg.duration,
                 });
                 msg.frame.close();
-
             } else if (msg.type === "ready") {
-                // "ready" from the worker means the decoder is configured
-                // and ready for seeks. Notify both the promise and optional callback.
                 if (this.initializedResolve) {
                     this.initializedResolve();
                     this.initializedResolve = null;
@@ -146,54 +337,27 @@ export class VideoFrameDecoder {
                     this.onReadyCallback = undefined;
                 }
             } else if (msg.type === "seekDone") {
-                // Fallback: in case we ever have an older worker without "ready",
-                // treat the first seekDone as making the decoder ready for callers
-                // that are awaiting waitUntilReady().
                 if (this.initializedResolve) {
                     this.initializedResolve();
                     this.initializedResolve = null;
                 }
             } else if (msg.type === "error") {
-                 if (this.activeIteration && msg.requestId === this.activeIteration.requestId) {
-                     this.activeIteration.reject(new Error(msg.error));
-                     this.activeIteration = null;
-                 } else {
-                     this.onErrorCallback(new Error(msg.error));
-                 }
+                if (this.activeIteration && msg.requestId === this.activeIteration.requestId) {
+                    this.activeIteration.reject(new Error(msg.error));
+                    this.activeIteration = null;
+                } else {
+                    this.onErrorCallback(new Error(msg.error));
+                }
             } else if (msg.type === "iterateDone") {
-                 if (this.activeIteration && msg.requestId === this.activeIteration.requestId) {
-                     const iteration = this.activeIteration;
-                     // Wait for queue to drain
-                     iteration.frameProcessingPromise.then(() => {
-                         iteration.resolve();
-                     });
-                     this.activeIteration = null;
-                 }
+                if (this.activeIteration && msg.requestId === this.activeIteration.requestId) {
+                    const iteration = this.activeIteration;
+                    iteration.frameProcessingPromise.then(() => {
+                        iteration.resolve();
+                    });
+                    this.activeIteration = null;
+                }
             }
         };
-        
-        // Calculate target dimensions (max 720p) logic preserved from original
-        const { codedWidth, codedHeight } = options.videoDecoderConfig;
-        let targetWidth = codedWidth || 0;
-        let targetHeight = codedHeight || 0;
-
-        if (!targetWidth || !targetHeight) {
-             targetWidth = options.mediaInfo.video?.codedWidth || 0;
-             targetHeight = options.mediaInfo.video?.codedHeight || 0;
-        }
-
-        if (targetWidth && targetHeight) {
-            const isLandscape = targetWidth >= targetHeight;
-            const shortSide = isLandscape ? targetHeight : targetWidth;
-            
-            if (shortSide > 720) {
-                 const scale = 720 / shortSide;
-                 targetWidth = Math.round(targetWidth * scale);
-                 targetHeight = Math.round(targetHeight * scale);
-                 targetWidth = targetWidth - (targetWidth % 2);
-                 targetHeight = targetHeight - (targetHeight % 2);
-            }
-        }
 
         const config = {
             ...options.videoDecoderConfig,
@@ -201,48 +365,27 @@ export class VideoFrameDecoder {
             codedHeight: targetHeight,
         };
 
-        // Extract Source
         let sourceConfig: { type: "url" | "blob"; url?: string; blob?: Blob } | null = null;
-        
-        // Try to get source from originalInput if available (best)
-        if (options.mediaInfo.originalInput) {
-             const src = (options.mediaInfo.originalInput).source;
-             if (src instanceof UrlSource) {
-                 sourceConfig = { type: "url", url: (src as any)._url.toString() };
-             } else if (src instanceof BlobSource) {
-                 sourceConfig = { type: "blob", blob: (src as any)._blob };
-             }
-        }
-        
-        // Fallback: Infer from path if originalInput is missing
-        if (!sourceConfig) {
-             const path = options.mediaInfo.path;
-             if (path.startsWith("blob:")) {
-                 // We can't fetch a blob: URL easily in a worker if it wasn't passed as a Blob object,
-                 // but if it's a blob: URL created by URL.createObjectURL, it MIGHT work if same origin.
-                 sourceConfig = { type: "url", url: path };
-        } else {
-                 // Assume it's a URL (file:// or http:// or app://)
-                 // Note: app:// might need special handling if worker doesn't support it,
-                 // but typically custom schemes work if the environment supports them.
-                 sourceConfig = { type: "url", url: path };
-                }
-            }
 
-        // Determine format string to speed up worker init
-        let formatStr: string | undefined;
-        const fmt = options.mediaInfo.format;
-        if (fmt) {
-            if (fmt === MP4) formatStr = "mp4";
-            else if (fmt === WEBM) formatStr = "webm";
-            else if (fmt === QTFF) formatStr = "mov";
-            else if (fmt === MATROSKA) formatStr = "mkv";
-            else if (fmt === OGG) formatStr = "ogg";
-            else if (fmt === MP3) formatStr = "mp3";
-            else if (fmt === WAVE) formatStr = "wav";
-            else if (fmt === FLAC) formatStr = "flac";
-            else if (fmt === ADTS) formatStr = "aac";
+        if (options.mediaInfo.originalInput) {
+            const src = (options.mediaInfo.originalInput).source;
+            if (src instanceof UrlSource) {
+                sourceConfig = { type: "url", url: (src as any)._url.toString() };
+            } else if (src instanceof BlobSource) {
+                sourceConfig = { type: "blob", blob: (src as any)._blob };
+            }
         }
+
+        if (!sourceConfig) {
+            const path = options.mediaInfo.path;
+            if (path.startsWith("blob:")) {
+                sourceConfig = { type: "url", url: path };
+            } else {
+                sourceConfig = { type: "url", url: path };
+            }
+        }
+
+        const formatStr = computeFormatStr(options.mediaInfo.format);
 
         this.worker.postMessage({
             type: "configure",
@@ -256,18 +399,14 @@ export class VideoFrameDecoder {
         });
     }
 
-    /**
-     * Returns true once the worker has fully configured the decoder
-     * and completed the initial seek.
-     */
+    // -----------------------------------------------------------------------
+    // Public API
+    // -----------------------------------------------------------------------
+
     public isReady(): boolean {
         return this.initialized;
     }
 
-    /**
-     * Await this to ensure the worker-side decoder is fully initialized
-     * (configure + initial seekDone) before issuing dependent operations.
-     */
     public async waitUntilReady(): Promise<void> {
         if (this.initialized) return;
         return this.initializedPromise;
@@ -275,53 +414,101 @@ export class VideoFrameDecoder {
 
     public async seek(timestamp: number, forceAccurate: boolean = false): Promise<void> {
         const reqId = ++this.currentRequestId;
-        this.worker.postMessage({
+
+        if (this.useNative && this.native) {
+            return seekNativeDecoder(this.native.nativeHandle, timestamp, forceAccurate, reqId);
+        }
+
+        this.worker!.postMessage({
             type: "seek",
             timestamp,
             forceAccurate,
-            requestId: reqId
+            requestId: reqId,
         });
     }
 
     public async iterate(
-        startTime: number, 
-        endTime: number, 
+        startTime: number,
+        endTime: number,
         shouldDelay?: (timestamp: number) => Promise<void>,
-        checkCancel?: () => boolean
+        checkCancel?: () => boolean,
     ): Promise<void> {
         const reqId = ++this.currentRequestId;
-        
-        return new Promise<void>((resolve, reject) => {
-             this.activeIteration = {
-                 requestId: reqId,
-                 shouldDelay,
-                 checkCancel,
-                 resolve,
-                 reject,
-                 frameProcessingPromise: Promise.resolve()
-             };
 
-             this.worker.postMessage({
+        if (this.useNative && this.native) {
+            return new Promise<void>((resolve, reject) => {
+                this.activeIteration = {
+                    requestId: reqId,
+                    shouldDelay,
+                    checkCancel,
+                    resolve,
+                    reject,
+                    frameProcessingPromise: Promise.resolve(),
+                };
+
+                iterateNativeDecoder(this.native!.nativeHandle, startTime, endTime, reqId)
+                    .then(() => {
+                        if (this.activeIteration && this.activeIteration.requestId === reqId) {
+                            const iteration = this.activeIteration;
+                            this.activeIteration = null;
+                            iteration.frameProcessingPromise.then(() => iteration.resolve());
+                        }
+                    })
+                    .catch((err) => {
+                        if (this.activeIteration && this.activeIteration.requestId === reqId) {
+                            this.activeIteration.reject(err);
+                            this.activeIteration = null;
+                        }
+                    });
+            });
+        }
+
+        return new Promise<void>((resolve, reject) => {
+            this.activeIteration = {
+                requestId: reqId,
+                shouldDelay,
+                checkCancel,
+                resolve,
+                reject,
+                frameProcessingPromise: Promise.resolve(),
+            };
+
+            this.worker!.postMessage({
                 type: "iterate",
                 startTime,
                 endTime,
-                requestId: reqId
+                requestId: reqId,
             });
         });
     }
-    
+
     public dispose() {
         this.currentRequestId++;
-        this.worker.postMessage({ type: "dispose" });
-        this.worker.terminate();
+
+        if (this.native) {
+            cancelNativeDecoder(this.native.nativeHandle);
+            disposeNativeDecoder(this.native.nativeHandle);
+            this.native.uploader.dispose();
+            this.native = null;
+        }
+
+        if (this.worker) {
+            this.worker.postMessage({ type: "dispose" });
+            this.worker.terminate();
+            this.worker = null;
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+// VideoDecoderManager — multi-asset decoder
+// ---------------------------------------------------------------------------
 
 interface VideoDecoderManagerAssetState {
     asset: Asset;
     mediaInfo: MediaInfo;
     videoDecoderConfig: VideoDecoderConfig;
-    onFrame?: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+    onFrame?: (data: { canvas: DecodedCanvas; timestamp: number; duration: number }) => void;
     onError?: (error: Error) => void;
     onReady?: () => void;
     initialized: boolean;
@@ -337,6 +524,7 @@ interface VideoDecoderManagerAssetState {
         frameProcessingPromise: Promise<void>;
     } | null;
     pendingSeeks: Map<number, { resolve: () => void; reject: (err: any) => void }>;
+    native?: NativeDecoderAssetState;
 }
 
 // Cached Electron userData path, resolved once via preload and then reused for
@@ -368,14 +556,15 @@ async function ensureUserDataPathLoaded(): Promise<void> {
 void ensureUserDataPathLoaded();
 
 export class VideoDecoderManager {
-    private worker: Worker;
+    private _worker: Worker | null = null;
     private assets = new Map<string, VideoDecoderManagerAssetState>();
+    private readonly useNative: boolean;
 
     private createAssetState(params: {
         asset: Asset;
         mediaInfo: MediaInfo;
         videoDecoderConfig: VideoDecoderConfig;
-        onFrame?: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+        onFrame?: (data: { canvas: DecodedCanvas; timestamp: number; duration: number }) => void;
         onError?: (error: Error) => void;
         onReady?: () => void;
     }): VideoDecoderManagerAssetState {
@@ -387,7 +576,7 @@ export class VideoDecoderManager {
             onError: params.onError,
             onReady: params.onReady,
             initialized: false,
-            initializedPromise: Promise.resolve() as Promise<void>, // overwritten below
+            initializedPromise: Promise.resolve() as Promise<void>,
             initializedResolve: null,
             currentRequestId: 0,
             activeIteration: null,
@@ -406,170 +595,164 @@ export class VideoDecoderManager {
     }
 
     constructor() {
-        // IMPORTANT: keep this in the inline `new Worker(new URL(...))` form.
-        // Vite's worker transform relies on recognizing this pattern; if we assign the URL
-        // to a variable first, Vite may treat the `.worker.ts` file as a static asset and
-        // ship it with a `.ts` extension (which then gets `video/mp2t` MIME via our protocol).
-        this.worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
+        this.useNative = nativeAvailable;
+
+        if (!this.useNative) {
+            // Eagerly create the worker for the WebCodecs fallback path.
+            this.ensureWorker();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Lazy worker creation
+    // -----------------------------------------------------------------------
+
+    private ensureWorker(): Worker {
+        if (this._worker) return this._worker;
+
+        // IMPORTANT: keep the inline `new Worker(new URL(...))` form.
+        // Vite's worker transform relies on recognizing this pattern.
+        this._worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
             type: "module",
         });
 
-        // Make worker lifecycle issues extremely obvious in the renderer console.
-        this.worker.onerror = (err) => {
-            // eslint-disable-next-line no-console
+        this._worker.onerror = (err) => {
             console.error("[VideoDecoderManager] worker error", err.message || err);
         };
-
-        this.worker.onmessageerror = (err) => {
-            // eslint-disable-next-line no-console
+        this._worker.onmessageerror = (err) => {
             console.error("[VideoDecoderManager] worker message error", err);
         };
 
-        this.worker.onmessage = (e: MessageEvent) => {
-            const msg = e.data;
+        this._worker.onmessage = (e: MessageEvent) => {
+            this.handleWorkerMessage(e.data);
+        };
 
-            
-            const assetId: string | undefined = msg.assetId;
-            const client = assetId ? this.assets.get(assetId) : undefined;
+        return this._worker;
+    }
 
-            if (!client) {
-                // Best effort cleanup of stray frames
-                if (msg.type === "frame" && msg.frame) {
-                    try {
+    private handleWorkerMessage(msg: any): void {
+        const assetId: string | undefined = msg.assetId;
+        const client = assetId ? this.assets.get(assetId) : undefined;
+
+        if (!client) {
+            if (msg.type === "frame" && msg.frame) {
+                try { msg.frame.close(); } catch { /* ignore */ }
+            }
+            return;
+        }
+
+        if (msg.type === "frame") {
+            if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
+                const iteration = client.activeIteration;
+
+                iteration.frameProcessingPromise = iteration.frameProcessingPromise
+                    .then(async () => {
+                        if (iteration.checkCancel && !iteration.checkCancel()) {
+                            msg.frame.close();
+                            return;
+                        }
+                        if (iteration.shouldDelay) {
+                            await iteration.shouldDelay(msg.timestamp);
+                        }
+                        if (iteration.checkCancel && !iteration.checkCancel()) {
+                            msg.frame.close();
+                            return;
+                        }
+
+                        if (client.onFrame) {
+                            client.onFrame({
+                                canvas: msg.frame,
+                                timestamp: msg.timestamp,
+                                duration: msg.duration,
+                            });
+                        }
                         msg.frame.close();
-                    } catch {
-                        // ignore
-                    }
-                }
+
+                        this.ensureWorker().postMessage({
+                            type: "ack",
+                            assetId,
+                            requestId: msg.requestId,
+                        });
+                    })
+                    .catch((err: any) => {
+                        console.error("Frame processing error (manager)", err);
+                        msg.frame.close();
+                    });
                 return;
             }
 
-            if (msg.type === "frame") {
-                // Iteration frames for this asset
-                if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
-                    const iteration = client.activeIteration;
-
-                    iteration.frameProcessingPromise = iteration.frameProcessingPromise
-                        .then(async () => {
-                            if (iteration.checkCancel && !iteration.checkCancel()) {
-                                msg.frame.close();
-                                return;
-                            }
-
-                            if (iteration.shouldDelay) {
-                                await iteration.shouldDelay(msg.timestamp);
-                            }
-
-                            if (iteration.checkCancel && !iteration.checkCancel()) {
-                                msg.frame.close();
-                                return;
-                            }
-
-                            if (client.onFrame) {
-                                client.onFrame({
-                                    canvas: msg.frame,
-                                    timestamp: msg.timestamp,
-                                    duration: msg.duration,
-                                });
-                            }
-
-                            msg.frame.close();
-
-                            // Ack this frame to allow the worker to resume iteration
-                            this.worker.postMessage({
-                                type: "ack",
-                                assetId,
-                                requestId: msg.requestId,
-                            });
-                        })
-                        .catch((err: any) => {
-                            console.error("Frame processing error (manager)", err);
-                            msg.frame.close();
-                        });
-
-                    return;
-                }
-
-                // Seek/preview frames for this asset
-                if (msg.requestId !== undefined && msg.requestId !== client.currentRequestId) {
-                    msg.frame.close();
-                    return;
-                }
-
-                if (client.onFrame) {
-                    client.onFrame({
-                        canvas: msg.frame,
-                        timestamp: msg.timestamp,
-                        duration: msg.duration,
-                    });
-                } else {
-                    // If no handler is registered yet, just close the frame.
-                }
+            if (msg.requestId !== undefined && msg.requestId !== client.currentRequestId) {
                 msg.frame.close();
+                return;
+            }
 
-            } else if (msg.type === "ready") {
-                if (!client.initialized) {
-                    client.initialized = true;
-                    if (client.initializedResolve) {
-                        client.initializedResolve();
-                        client.initializedResolve = null;
-                    }
-                    if (client.onReady) {
-                        client.onReady();
-                        client.onReady = undefined;
-                    }
+            if (client.onFrame) {
+                client.onFrame({
+                    canvas: msg.frame,
+                    timestamp: msg.timestamp,
+                    duration: msg.duration,
+                });
+            }
+            msg.frame.close();
+        } else if (msg.type === "ready") {
+            if (!client.initialized) {
+                client.initialized = true;
+                if (client.initializedResolve) {
+                    client.initializedResolve();
+                    client.initializedResolve = null;
                 }
-            } else if (msg.type === "seekDone") {
-                const pending = client.pendingSeeks.get(msg.requestId);
-                if (pending) {
-                    client.pendingSeeks.delete(msg.requestId);
-                    pending.resolve();
-                }
-                // Also treat first seekDone as "ready" fallback
-                if (!client.initialized) {
-                    client.initialized = true;
-                    if (client.initializedResolve) {
-                        client.initializedResolve();
-                        client.initializedResolve = null;
-                    }
-                    if (client.onReady) {
-                        client.onReady();
-                        client.onReady = undefined;
-                    }
-                }
-            } else if (msg.type === "error") {
-                // Route iteration-specific errors first
-                if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
-                    client.activeIteration.reject(new Error(msg.error));
-                    client.activeIteration = null;
-                } else {
-                    const pending = msg.requestId ? client.pendingSeeks.get(msg.requestId) : undefined;
-                    if (pending) {
-                        client.pendingSeeks.delete(msg.requestId);
-                        pending.reject(new Error(msg.error));
-                    } else {
-                        if (client.onError) {
-                            client.onError(new Error(msg.error));
-                        } else {
-                            console.error("[VideoDecoderManager] Unhandled error", msg.error);
-                        }
-                    }
-                }
-            } else if (msg.type === "iterateDone") {
-                if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
-                    const iteration = client.activeIteration;
-                    iteration.frameProcessingPromise.then(() => {
-                        iteration.resolve();
-                    });
-                    client.activeIteration = null;
+                if (client.onReady) {
+                    client.onReady();
+                    client.onReady = undefined;
                 }
             }
-        };
+        } else if (msg.type === "seekDone") {
+            const pending = client.pendingSeeks.get(msg.requestId);
+            if (pending) {
+                client.pendingSeeks.delete(msg.requestId);
+                pending.resolve();
+            }
+            if (!client.initialized) {
+                client.initialized = true;
+                if (client.initializedResolve) {
+                    client.initializedResolve();
+                    client.initializedResolve = null;
+                }
+                if (client.onReady) {
+                    client.onReady();
+                    client.onReady = undefined;
+                }
+            }
+        } else if (msg.type === "error") {
+            if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
+                client.activeIteration.reject(new Error(msg.error));
+                client.activeIteration = null;
+            } else {
+                const pending = msg.requestId ? client.pendingSeeks.get(msg.requestId) : undefined;
+                if (pending) {
+                    client.pendingSeeks.delete(msg.requestId);
+                    pending.reject(new Error(msg.error));
+                } else if (client.onError) {
+                    client.onError(new Error(msg.error));
+                } else {
+                    console.error("[VideoDecoderManager] Unhandled error", msg.error);
+                }
+            }
+        } else if (msg.type === "iterateDone") {
+            if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
+                const iteration = client.activeIteration;
+                iteration.frameProcessingPromise.then(() => {
+                    iteration.resolve();
+                });
+                client.activeIteration = null;
+            }
+        }
     }
 
-    /**
-     * Register a new asset with the shared worker-backed decoder.
-     */
+    // -----------------------------------------------------------------------
+    // addAsset
+    // -----------------------------------------------------------------------
+
     public addAsset(
         asset: Asset,
         options: {
@@ -577,75 +760,29 @@ export class VideoDecoderManager {
             videoDecoderConfig: VideoDecoderConfig;
             folderUuid?: string;
             initialTimestamp?: number;
-            onFrame?: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+            onFrame?: (data: { canvas: DecodedCanvas; timestamp: number; duration: number }) => void;
             onError?: (error: Error) => void;
             onReady?: () => void;
-            /**
-             * Optional logical identifier that scopes the decoder instance.
-             * This allows multiple independent decoders to share the same
-             * underlying Asset (e.g. several clips using the same file) without
-             * overwriting each other's handlers or request state.
-             *
-             * When provided, this id is used as the manager/worker key, while
-             * the real Asset.id is still passed through in the asset metadata.
-             */
             logicalId?: string;
         },
     ): void {
         const decoderId = options.logicalId ?? asset.id;
 
-        // Normalize target dimensions (same logic as VideoFrameDecoder)
-        const { codedWidth, codedHeight } = options.videoDecoderConfig;
-        let targetWidth = codedWidth || 0;
-        let targetHeight = codedHeight || 0;
-
-        if (!targetWidth || !targetHeight) {
-            targetWidth = options.mediaInfo.video?.codedWidth || 0;
-            targetHeight = options.mediaInfo.video?.codedHeight || 0;
-        }
-
-        if (targetWidth && targetHeight) {
-            const isLandscape = targetWidth >= targetHeight;
-            const shortSide = isLandscape ? targetHeight : targetWidth;
-
-            if (shortSide > 720) {
-                const scale = 720 / shortSide;
-                targetWidth = Math.round(targetWidth * scale);
-                targetHeight = Math.round(targetHeight * scale);
-                targetWidth = targetWidth - (targetWidth % 2);
-                targetHeight = targetHeight - (targetHeight % 2);
-            }
-        }
+        const { targetWidth, targetHeight } = normalizeDimensions(
+            options.videoDecoderConfig,
+            options.mediaInfo,
+        );
 
         const normalizedConfig: VideoDecoderConfig = {
             ...options.videoDecoderConfig,
             codedWidth: targetWidth,
             codedHeight: targetHeight,
         };
-        // Prefer keeping alpha for formats that support it (e.g. WebM with alpha).
-        // Some TS lib.dom versions don't expose `alpha` on VideoDecoderConfig yet,
-        // but the runtime may support it. The worker will fall back if unsupported.
         const normalizedAny = normalizedConfig as any;
         if (normalizedAny.alpha == null) {
             normalizedAny.alpha = "keep";
         }
 
-        // Determine format string to speed up worker init
-        let formatStr: string | undefined;
-        const fmt = options.mediaInfo.format;
-        if (fmt) {
-            if (fmt === MP4) formatStr = "mp4";
-            else if (fmt === WEBM) formatStr = "webm";
-            else if (fmt === QTFF) formatStr = "mov";
-            else if (fmt === MATROSKA) formatStr = "mkv";
-            else if (fmt === OGG) formatStr = "ogg";
-            else if (fmt === MP3) formatStr = "mp3";
-            else if (fmt === WAVE) formatStr = "wav";
-            else if (fmt === FLAC) formatStr = "flac";
-            else if (fmt === ADTS) formatStr = "aac";
-        }
-
-        // Track per-asset (or per-logical-id) state in the manager
         const assetClient = this.createAssetState({
             asset,
             mediaInfo: options.mediaInfo,
@@ -657,14 +794,149 @@ export class VideoDecoderManager {
 
         this.assets.set(decoderId, assetClient);
 
-        // Send configure to the shared worker
+        if (this.useNative) {
+            this.addAssetNative(decoderId, asset, options, assetClient, targetWidth, targetHeight);
+        } else {
+            this.addAssetWorker(decoderId, asset, options, assetClient, normalizedConfig, targetWidth, targetHeight);
+        }
+    }
+
+    private async addAssetNative(
+        decoderId: string,
+        asset: Asset,
+        options: {
+            mediaInfo: MediaInfo;
+            initialTimestamp?: number;
+            onReady?: () => void;
+        },
+        assetClient: VideoDecoderManagerAssetState,
+        targetWidth: number,
+        targetHeight: number,
+    ): Promise<void> {
+        try {
+            const handle = createNativeDecoder();
+            const pool = createBufferPool(targetWidth, targetHeight);
+            const poolViews = pool.map((sab) => new Uint8Array(sab));
+            const uploader = new NativeFrameUploader();
+
+            assetClient.native = { nativeHandle: handle, bufferPool: pool, poolViews, uploader };
+
+            const filePath = await resolveNativeDecoderPath(asset.path);
+
+            configureNativeDecoder(handle, {
+                filePath,
+                width: targetWidth,
+                height: targetHeight,
+                bufferPool: pool,
+                onFrame: (bufferIndex, width, height, timestamp, duration, requestId) => {
+                    this.handleNativeFrame(assetClient, bufferIndex, width, height, timestamp, duration, requestId);
+                },
+                onError: (message) => {
+                    if (assetClient.activeIteration) {
+                        assetClient.activeIteration.reject(new Error(message));
+                        assetClient.activeIteration = null;
+                    } else if (assetClient.onError) {
+                        assetClient.onError(new Error(message));
+                    }
+                },
+                onReady: () => {
+                    if (!assetClient.initialized) {
+                        assetClient.initialized = true;
+                        if (assetClient.initializedResolve) {
+                            assetClient.initializedResolve();
+                            assetClient.initializedResolve = null;
+                        }
+                        if (assetClient.onReady) {
+                            assetClient.onReady();
+                            assetClient.onReady = undefined;
+                        }
+                    }
+                },
+            });
+        } catch (err) {
+            console.warn("[VideoDecoderManager] Native decoder failed for", decoderId, ", falling back to worker:", err);
+            assetClient.native = undefined;
+            // Fall back to worker path
+            this.addAssetWorker(decoderId, asset, options as any, assetClient, assetClient.videoDecoderConfig, targetWidth, targetHeight);
+        }
+    }
+
+    private handleNativeFrame(
+        client: VideoDecoderManagerAssetState,
+        bufferIndex: number,
+        width: number,
+        height: number,
+        timestamp: number,
+        duration: number,
+        requestId: number,
+    ): void {
+        const native = client.native!;
+
+        // Iteration frames
+        if (client.activeIteration && requestId === client.activeIteration.requestId) {
+            const iteration = client.activeIteration;
+
+            iteration.frameProcessingPromise = iteration.frameProcessingPromise
+                .then(async () => {
+                    if (iteration.checkCancel && !iteration.checkCancel()) {
+                        ackNativeFrame(native.nativeHandle, bufferIndex);
+                        return;
+                    }
+                    if (iteration.shouldDelay) {
+                        await iteration.shouldDelay(timestamp);
+                    }
+                    if (iteration.checkCancel && !iteration.checkCancel()) {
+                        ackNativeFrame(native.nativeHandle, bufferIndex);
+                        return;
+                    }
+
+                    const canvas = native.uploader.upload(native.poolViews[bufferIndex], width, height);
+                    if (client.onFrame) {
+                        client.onFrame({ canvas, timestamp, duration });
+                    }
+                    ackNativeFrame(native.nativeHandle, bufferIndex);
+                })
+                .catch((err) => {
+                    console.error("Native frame processing error (manager)", err);
+                    ackNativeFrame(native.nativeHandle, bufferIndex);
+                });
+            return;
+        }
+
+        // Seek/preview frames
+        if (requestId !== undefined && requestId !== client.currentRequestId) {
+            ackNativeFrame(native.nativeHandle, bufferIndex);
+            return;
+        }
+
+        const canvas = native.uploader.upload(native.poolViews[bufferIndex], width, height);
+        if (client.onFrame) {
+            client.onFrame({ canvas, timestamp, duration });
+        }
+        ackNativeFrame(native.nativeHandle, bufferIndex);
+    }
+
+    private addAssetWorker(
+        decoderId: string,
+        asset: Asset,
+        options: {
+            mediaInfo: MediaInfo;
+            folderUuid?: string;
+            initialTimestamp?: number;
+        },
+        assetClient: VideoDecoderManagerAssetState,
+        normalizedConfig: VideoDecoderConfig,
+        _targetWidth: number,
+        _targetHeight: number,
+    ): void {
+        const worker = this.ensureWorker();
         const reqId = ++assetClient.currentRequestId;
+
+        const formatStr = computeFormatStr(options.mediaInfo.format);
 
         const config: any = {
             videoDecoderConfig: normalizedConfig,
             asset: {
-                // Preserve the real Asset identity in metadata so worker-side
-                // path/format logic continues to function as before.
                 id: asset.id,
                 type: asset.type,
                 path: asset.path,
@@ -674,14 +946,11 @@ export class VideoDecoderManager {
             initialTimestamp: options.initialTimestamp ?? 0,
         };
 
-        // If we've already resolved the Electron userData path via preload,
-        // pass it through so the worker can cheaply detect when an incoming
-        // asset path is rooted under userData and prefer app://user-data.
         if (cachedUserDataPath) {
             config.userDataPath = cachedUserDataPath;
         }
 
-        this.worker.postMessage({
+        worker.postMessage({
             type: "configure",
             assetId: decoderId,
             config,
@@ -689,43 +958,43 @@ export class VideoDecoderManager {
         });
     }
 
-    /**
-     * Dispose a single asset and release any resources associated with it.
-     */
+    // -----------------------------------------------------------------------
+    // disposeAsset / hasAsset / updateAssetHandlers
+    // -----------------------------------------------------------------------
+
     public disposeAsset(assetId: string): void {
         const client = this.assets.get(assetId);
         if (!client) return;
 
-        // Cancel any active iteration promises
         if (client.activeIteration) {
             client.activeIteration.reject(new Error("Asset disposed"));
             client.activeIteration = null;
         }
-        // Reject any pending seeks
         for (const { reject } of client.pendingSeeks.values()) {
             reject(new Error("Asset disposed"));
         }
         client.pendingSeeks.clear();
 
+        if (client.native) {
+            cancelNativeDecoder(client.native.nativeHandle);
+            disposeNativeDecoder(client.native.nativeHandle);
+            client.native.uploader.dispose();
+            client.native = undefined;
+        } else if (this._worker) {
+            this._worker.postMessage({ type: "dispose", assetId });
+        }
+
         this.assets.delete(assetId);
-        this.worker.postMessage({ type: "dispose", assetId });
     }
 
-    /**
-     * Returns true if an asset with the given id has already been registered.
-     */
     public hasAsset(assetId: string): boolean {
         return this.assets.has(assetId);
     }
 
-    /**
-     * Update just the handlers (onFrame, onError, onReady) for an existing asset
-     * without reconfiguring the underlying decoder/worker state.
-     */
     public updateAssetHandlers(
         assetId: string,
         handlers: {
-            onFrame?: (data: { canvas: VideoFrame; timestamp: number; duration: number }) => void;
+            onFrame?: (data: { canvas: DecodedCanvas; timestamp: number; duration: number }) => void;
             onError?: (error: Error) => void;
             onReady?: () => void;
         },
@@ -738,30 +1007,34 @@ export class VideoDecoderManager {
 
         if (handlers.onReady) {
             if (client.initialized) {
-                // If the asset is already initialized, invoke immediately.
                 handlers.onReady();
             } else {
                 client.onReady = handlers.onReady;
             }
         }
-    
     }
 
-    /**
-     * Perform a seek for a specific asset.
-     */
+    // -----------------------------------------------------------------------
+    // seek / iterate
+    // -----------------------------------------------------------------------
+
     public async seek(assetId: string, timestamp: number, forceAccurate: boolean = false): Promise<void> {
         const client = this.assets.get(assetId);
-        if (!client) {
-            return;
-        }
+        if (!client) return;
 
         const reqId = ++client.currentRequestId;
 
+        if (client.native) {
+            // Native path — the C++ addon's seek() returns a Promise directly.
+            // The onFrame callback handles frame delivery.
+            return seekNativeDecoder(client.native.nativeHandle, timestamp, forceAccurate, reqId);
+        }
+
+        // Worker path
         return new Promise<void>((resolve, reject) => {
             client.pendingSeeks.set(reqId, { resolve, reject });
 
-            this.worker.postMessage({
+            this.ensureWorker().postMessage({
                 type: "seek",
                 assetId,
                 timestamp,
@@ -771,9 +1044,6 @@ export class VideoDecoderManager {
         });
     }
 
-    /**
-     * Iterate frames for a specific asset over a time range.
-     */
     public async iterate(
         assetId: string,
         startTime: number,
@@ -781,14 +1051,40 @@ export class VideoDecoderManager {
         shouldDelay?: (timestamp: number) => Promise<void>,
         checkCancel?: () => boolean,
     ): Promise<void> {
-
         const client = this.assets.get(assetId);
-        if (!client) {
-            return;
-        }
+        if (!client) return;
 
         const reqId = ++client.currentRequestId;
 
+        if (client.native) {
+            return new Promise<void>((resolve, reject) => {
+                client.activeIteration = {
+                    requestId: reqId,
+                    shouldDelay,
+                    checkCancel,
+                    resolve,
+                    reject,
+                    frameProcessingPromise: Promise.resolve(),
+                };
+
+                iterateNativeDecoder(client.native!.nativeHandle, startTime, endTime, reqId)
+                    .then(() => {
+                        if (client.activeIteration && client.activeIteration.requestId === reqId) {
+                            const iteration = client.activeIteration;
+                            client.activeIteration = null;
+                            iteration.frameProcessingPromise.then(() => iteration.resolve());
+                        }
+                    })
+                    .catch((err) => {
+                        if (client.activeIteration && client.activeIteration.requestId === reqId) {
+                            client.activeIteration.reject(err);
+                            client.activeIteration = null;
+                        }
+                    });
+            });
+        }
+
+        // Worker path
         return new Promise<void>((resolve, reject) => {
             client.activeIteration = {
                 requestId: reqId,
@@ -799,7 +1095,7 @@ export class VideoDecoderManager {
                 frameProcessingPromise: Promise.resolve(),
             };
 
-            this.worker.postMessage({
+            this.ensureWorker().postMessage({
                 type: "iterate",
                 assetId,
                 startTime,
@@ -809,15 +1105,24 @@ export class VideoDecoderManager {
         });
     }
 
-    /**
-     * Dispose all assets and terminate the underlying worker.
-     */
+    // -----------------------------------------------------------------------
+    // disposeAll
+    // -----------------------------------------------------------------------
+
     public disposeAll(): void {
         for (const id of this.assets.keys()) {
             this.disposeAsset(id);
         }
-        this.worker.terminate();
+
+        if (this.useNative) {
+            disposeAllNativeDecoders();
+        }
+
+        if (this._worker) {
+            this._worker.terminate();
+            this._worker = null;
+        }
+
         this.assets.clear();
     }
 }
-

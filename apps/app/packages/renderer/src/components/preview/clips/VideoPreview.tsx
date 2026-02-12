@@ -1340,7 +1340,7 @@ const VideoPreview: React.FC<
           const logicalId = makeDecoderId(id);
 
           const onFrame = (data: {
-            canvas: VideoFrame;
+            canvas: VideoFrame | HTMLCanvasElement;
             timestamp: number;
             duration: number;
           }) => {

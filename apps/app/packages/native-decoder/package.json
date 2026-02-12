@@ -1,0 +1,19 @@
+{
+  "name": "@app/native-decoder",
+  "version": "1.0.0",
+  "private": true,
+  "main": "build/Release/native_decoder.node",
+  "scripts": {
+    "install": "node scripts/fetch-ffmpeg.js && cmake-js compile -r electron -v 38.1.2",
+    "prebuild": "node scripts/fetch-ffmpeg.js",
+    "build": "cmake-js build -r electron -v 38.1.2",
+    "build:debug": "cmake-js build -r electron -v 38.1.2 -D",
+    "rebuild": "cmake-js rebuild -r electron -v 38.1.2",
+    "clean": "cmake-js clean",
+    "test": "electron --no-sandbox test/test-addon.mjs"
+  },
+  "dependencies": {
+    "cmake-js": "^7.3.0",
+    "node-addon-api": "^8.3.0"
+  }
+}

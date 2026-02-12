@@ -103,3 +103,18 @@ export * from "./python.js";
 // (uv removed) - we ship the full Python environment in the server bundle / python-api.
 // Launcher helpers (gate the main UI behind a setup/launcher screen)
 export * from "./launcher.js";
+
+// Native video decoder addon (C++ FFmpeg-based)
+export {
+  createNativeDecoder,
+  configureNativeDecoder,
+  seekNativeDecoder,
+  iterateNativeDecoder,
+  cancelNativeDecoder,
+  disposeNativeDecoder,
+  disposeAllNativeDecoders,
+  ackNativeFrame,
+  getNativeDecoderCapabilities,
+  isNativeDecoderAvailable,
+  resolveNativeDecoderPath,
+} from "./media/nativeDecoder.js";
