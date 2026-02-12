@@ -12,89 +12,39 @@ import _ from "lodash";
 let __playbackRafId: number | null = null;
 let __lastTickMs = 0;
 let __frameAccumulator = 0;
-let __playbackRunId = 0;
-let __resumePlaybackTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-const __resetPlaybackClock = () => {
-  __lastTickMs = 0;
-  __frameAccumulator = 0;
-};
-
-const __cancelPlaybackRaf = () => {
-  if (__playbackRafId != null) {
-    cancelAnimationFrame(__playbackRafId);
-    __playbackRafId = null;
-  }
-};
-
-const __clearPlaybackResumeTimeout = () => {
-  if (__resumePlaybackTimeoutId != null) {
-    clearTimeout(__resumePlaybackTimeoutId);
-    __resumePlaybackTimeoutId = null;
-  }
-};
-
-const __queuePlaybackResume = () => {
-  __clearPlaybackResumeTimeout();
-  __resumePlaybackTimeoutId = setTimeout(() => {
-    __resumePlaybackTimeoutId = null;
-    const s = useControlsStore.getState();
-    if (!s.isPlaying) s.play();
-  }, 0);
-};
-
-const __requestNextPlaybackTick = (runId: number) => {
-  __playbackRafId = requestAnimationFrame((ts) => __playbackTick(ts, runId));
-};
-
-const __playbackTick = (now: number, runId: number) => {
-  if (runId !== __playbackRunId) return;
+const __playbackTick = (now: number) => {
   const controls = useControlsStore.getState();
   const clips = useClipStore.getState();
   if (!controls.isPlaying) return;
 
-  const totalFramesRaw = Number(clips.clipDuration);
-  const totalFrames = Number.isFinite(totalFramesRaw)
-    ? Math.max(0, Math.round(totalFramesRaw))
-    : 0;
-  if (totalFrames <= 0) {
-    controls.pause();
-    return;
-  }
+  const fps = Math.max(1, controls.fps || 1);
+  const totalFrames = Math.max(0, clips.clipDuration || 0);
 
-  if (__lastTickMs === 0 || now <= __lastTickMs) {
+  if (__lastTickMs === 0) {
     __lastTickMs = now;
-    __requestNextPlaybackTick(runId);
+    __playbackRafId = requestAnimationFrame(__playbackTick);
     return;
   }
 
-  const fps = Math.max(1, Math.round(Number(controls.fps) || 1));
-  const dt = Math.min((now - __lastTickMs) / 1000, 0.25);
-  if (!Number.isFinite(dt) || dt <= 0) {
-    __lastTickMs = now;
-    __requestNextPlaybackTick(runId);
-    return;
-  }
-
+  const dt = (now - __lastTickMs) / 1000;
   __frameAccumulator += dt * fps;
   let steps = Math.floor(__frameAccumulator);
   if (steps > 0) {
-    // Prevent giant frame catch-up bursts after UI stalls.
-    steps = Math.min(steps, fps);
     __frameAccumulator -= steps;
-    const current = Math.max(0, Math.round(Number(controls.focusFrame) || 0));
+    const current = controls.focusFrame || 0;
     const next = Math.min(totalFrames, current + steps);
-    if (next !== current) {
-      useControlsStore.setState({ focusFrame: next });
-    }
+    controls.setFocusFrame(next, false);
     if (next >= totalFrames) {
       controls.pause();
+      __lastTickMs = 0;
+      __frameAccumulator = 0;
       return;
     }
   }
 
   __lastTickMs = now;
-  __requestNextPlaybackTick(runId);
+  __playbackRafId = requestAnimationFrame(__playbackTick);
 };
 
 interface ControlStore {
@@ -211,14 +161,7 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
   },
   timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS], // [startFrame, endFrame]
   setTimelineDuration: (startFrame: number, endFrame: number) =>
-    set((state) => {
-      const s = Math.max(0, Math.round(Number(startFrame) || 0));
-      const e = Math.max(s + 1, Math.round(Number(endFrame) || 0));
-      if (state.timelineDuration[0] === s && state.timelineDuration[1] === e) {
-        return state;
-      }
-      return { timelineDuration: [s, e] };
-    }),
+    set({ timelineDuration: [startFrame, endFrame] }),
   shiftTimelineDuration: (
     duration: number,
     shiftFocusFrame?: boolean,
@@ -253,19 +196,17 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
       : { timelineDuration: [newStartFrame, newEndFrame] };
     set(nextUpdate as any);
     if (wasPlaying && pause) {
-      __queuePlaybackResume();
+      setTimeout(() => {
+        const s = get();
+        if (!s.isPlaying) s.play();
+      }, 0);
     }
   },
   resetTimelineDuration: () =>
     set({ timelineDuration: [0, TIMELINE_DURATION_SECONDS * DEFAULT_FPS] }),
   // FPS State
   fps: DEFAULT_FPS,
-  setFps: (fps) =>
-    set((state) => {
-      const safe = Math.max(1, Math.round(Number(fps) || DEFAULT_FPS));
-      if (state.fps === safe) return state;
-      return { fps: safe };
-    }),
+  setFps: (fps) => set({ fps }),
   setFpsWithRescale: (fps) => {
     const oldFps = get().fps || DEFAULT_FPS;
     const newFps = Math.max(1, fps || DEFAULT_FPS);
@@ -307,16 +248,16 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
   focusFrame: 0,
   setFocusFrame: (frame, pause = true) => {
     const state = get();
-    const numeric = Number(frame);
-    if (!Number.isFinite(numeric)) return;
-    const clamped = Math.max(0, Math.round(numeric));
-    if (clamped === state.focusFrame) return;
+    const clamped = Math.max(0, Math.round(frame));
     if (pause) {
       const wasPlaying = state.isPlaying;
       if (wasPlaying) state.pause();
       set({ focusFrame: clamped });
       if (wasPlaying) {
-        __queuePlaybackResume();
+        setTimeout(() => {
+          const s = get();
+          if (!s.isPlaying) s.play();
+        }, 0);
       }
     } else {
       set({ focusFrame: clamped });
@@ -363,38 +304,27 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     const clips = useClipStore.getState();
     if (state.isPlaying) return;
     if (!clips || (clips.clips || []).length === 0) return;
-    const totalFramesRaw = Number(clips.clipDuration);
-    const totalFrames = Number.isFinite(totalFramesRaw)
-      ? Math.max(0, Math.round(totalFramesRaw))
-      : 0;
-    if (totalFrames <= 0) return;
     // If we're at or past the end, restart from the beginning
-    if (state.focusFrame >= totalFrames && state.focusFrame !== 0) {
+    if (state.focusFrame >= clips.clipDuration) {
       set({ focusFrame: 0 });
     }
-    __clearPlaybackResumeTimeout();
-    __cancelPlaybackRaf();
-    __resetPlaybackClock();
-    __playbackRunId += 1;
-    const runId = __playbackRunId;
+    __lastTickMs = 0;
+    __frameAccumulator = 0;
+    if (__playbackRafId != null) cancelAnimationFrame(__playbackRafId);
     set({ isPlaying: true });
-    __requestNextPlaybackTick(runId);
+    __playbackRafId = requestAnimationFrame(__playbackTick);
   },
   pause: () => {
-    __playbackRunId += 1;
-    __clearPlaybackResumeTimeout();
-    __cancelPlaybackRaf();
-    __resetPlaybackClock();
-    if (get().isPlaying) {
-      set({ isPlaying: false });
+    if (__playbackRafId != null) {
+      cancelAnimationFrame(__playbackRafId);
+      __playbackRafId = null;
     }
+    __lastTickMs = 0;
+    __frameAccumulator = 0;
+    set({ isPlaying: false });
   },
   isPlaying: false,
-  setIsPlaying: (isPlaying) =>
-    set((state) => {
-      if (state.isPlaying === isPlaying) return state;
-      return { isPlaying };
-    }),
+  setIsPlaying: (isPlaying) => set({ isPlaying }),
   isFullscreen: false,
   setIsFullscreen: (isFullscreen) => set({ isFullscreen }),
   selectedMaskId: null,
