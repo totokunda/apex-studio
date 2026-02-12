@@ -45,10 +45,10 @@ interface LoraPanelProps {
   panelSize: number;
 }
 
-const isLoraDownloading = (item: any): boolean => {
+const isLoraDownloading = (item: LoraType): boolean => {
   if (typeof item === "string") return true;
   if (typeof item !== "object" || item == null) return false;
-  return !(item as any).is_downloaded;
+  return !(item).verified;
 };
 
 const POLL_MS = 2000;
@@ -1087,6 +1087,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
       ),
     [loras],
   );
+
   const hasInstalledLoras = useMemo(
     () => visibleLoras.some((lora) => !isLoraDownloading(lora)),
     [visibleLoras],

@@ -872,6 +872,7 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
         (k) => manifestCategoryKeyToLabel.get(k) || k,
       );
       return (
+        ((m as any)?._group as ManifestGroup | undefined)?.metadata?.name.toLowerCase().includes(query) ||
         m.metadata?.name.toLowerCase().includes(query) ||
         (m.metadata?.description?.toLowerCase().includes(query) ?? false) ||
         m.metadata?.model?.toLowerCase().includes(query) ||
