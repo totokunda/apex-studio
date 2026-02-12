@@ -49,7 +49,7 @@ class WanT2VEngine(WanShared):
     ):
         if expand_timesteps:
             fps = 24
-            
+        
         
         if (
             high_noise_guidance_scale is not None
