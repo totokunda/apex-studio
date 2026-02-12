@@ -236,3 +236,4 @@ apps/train/zimage/datasets/*
 !apps/train/zimage/training_inputs/
 apps/train/zimage/training_inputs/*
 !apps/train/zimage/training_inputs/.gitkeep
+taehv/**
