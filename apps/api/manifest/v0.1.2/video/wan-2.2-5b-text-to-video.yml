@@ -68,7 +68,8 @@ spec:
   - type: vae
     label: Tiny Wan VAE
     name: __tiny_transformer_vae__
-    base: tiny_wan
+    base: tae
+    config_id: TAE/wan-2.2-5b
     model_path:
     - path: lightx2v/Autoencoders/lighttaew2_2.safetensors
       variant: default
@@ -152,6 +153,14 @@ spec:
         flow: column
         rows:
         - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
     - name: size
       label: Size
       collapsible: true
@@ -212,6 +221,13 @@ spec:
       type: text
       panel: prompting
       required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe the image you don't want to generate.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
     - id: resolution
       label: Resolution
       description: Select the resolution of the output video
@@ -342,7 +358,7 @@ spec:
       value_type: integer
       panel: vae
       default: 256
-      min: 256
+      min: 64
       max: 2048
       step: 64
     - id: vae_tile_sample_min_width
@@ -352,7 +368,7 @@ spec:
       value_type: integer
       panel: vae
       default: 256
-      min: 256
+      min: 64
       max: 2048
       step: 64  
     - id: vae_tile_sample_stride_height
@@ -362,7 +378,7 @@ spec:
       value_type: integer
       panel: vae
       default: 192
-      min: 64
+      min: 48
       max: 2048
       step: 64
     - id: vae_tile_sample_stride_width  
@@ -372,6 +388,6 @@ spec:
       value_type: integer
       panel: vae
       default: 192
-      min: 64
+      min: 48
       max: 2048
       step: 64
