@@ -431,15 +431,19 @@ class ComponentMemoryManager:
             except Exception:
                 pass
 
+            # `original` may be a bound method (normal) or a plain callable assigned
+            # on the instance (unbound w.r.t module). Bind explicitly only when needed.
+            def _call_original(_self_mod, *args: Any, **kwargs: Any):
+                if getattr(original, "__self__", None) is not None:
+                    return original(*args, **kwargs)
+                return original(_self_mod, *args, **kwargs)
+
             def _wrapped(_self_mod, *args: Any, **kwargs: Any):
                 comp = self._components.get(label)
                 engine = None if comp is None else comp.engine()
                 if comp is None or not self._profile_component_vram_enabled(engine):
                     # Fast path: profiling disabled.
-                    try:
-                        return original(*args, **kwargs)
-                    except TypeError:
-                        return original(_self_mod, *args, **kwargs)
+                    return _call_original(_self_mod, *args, **kwargs)
 
                 # Mark active so debug isolation doesn't accidentally offload us.
                 comp.in_forward = True
@@ -465,10 +469,7 @@ class ComponentMemoryManager:
                     rss_before = self._get_process_rss_bytes()
                     self._start_forward_vram_profile(comp, module, device=target_device)
                     try:
-                        try:
-                            return original(*args, **kwargs)
-                        except TypeError:
-                            return original(_self_mod, *args, **kwargs)
+                        return _call_original(_self_mod, *args, **kwargs)
                     finally:
                         self._end_forward_vram_profile(comp, module)
                         rss_after = self._get_process_rss_bytes()

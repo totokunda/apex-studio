@@ -14,6 +14,7 @@ from einops import rearrange
 from diffusers.loaders import PeftAdapterMixin
 from src.transformer.wan.mova.model import DiTBlock
 from src.transformer.efficiency.ops import apply_scale_shift_inplace
+from src.utils.dtype import supports_double
 
 
 def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor):
@@ -98,8 +99,9 @@ def precompute_freqs_cis_1d(dim: int, end: int = 16384, theta: float = 10000.0):
 
 def precompute_freqs_cis(dim: int, end: int = 16384, theta: float = 10000.0, s: float = 1.0):
     # 1d rope precompute
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)
-                   [: (dim // 2)].double() / dim))
+    arange = torch.arange(0, dim, 2)[: (dim // 2)]
+    arange = arange.double() if supports_double(arange.device) else arange.to(torch.float32)
+    freqs = 1.0 / (theta ** (arange / dim))
     pos = torch.arange(end, dtype=torch.float64, device=freqs.device) * s
     freqs = torch.outer(pos, freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64

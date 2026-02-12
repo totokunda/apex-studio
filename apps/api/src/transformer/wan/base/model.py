@@ -43,6 +43,7 @@ from diffusers.models.normalization import FP32LayerNorm
 from .attention import WanAttnProcessor2_0
 from src.transformer.efficiency.mod import InplaceRMSNorm
 from src.transformer.base import TRANSFORMERS_REGISTRY
+from src.utils.dtype import supports_double
 from src.transformer.efficiency.ops import (
     apply_gate_inplace,
     apply_scale_shift_inplace,
@@ -836,9 +837,9 @@ def rope_1d(
     """
     if dim % 2 != 0:
         raise ValueError(f"RoPE dim must be even, got {dim}")
-    base = 1.0 / (
-        theta ** (torch.arange(0, dim, 2, dtype=dtype, device=device).double() / dim)
-    )
+    arange = torch.arange(0, dim, 2, dtype=dtype, device=device)
+    arange = arange.double() if supports_double(arange.device) else arange.to(torch.float32)
+    base = 1.0 / (theta ** (arange / dim))
     pos = torch.arange(start, start + length, dtype=dtype, device=device)
     ang = torch.outer(pos, base)  # [length, dim//2]
     return torch.polar(torch.ones_like(ang, dtype=dtype), ang)
@@ -884,7 +885,7 @@ class WanRotaryPosEmbed(nn.Module):
         self.freqs_t = rope_1d(t_dim, t_len, theta=theta, start=time_offset)
         self.freqs_h = rope_1d(h_dim, h_len, theta=theta, start=0)
         self.freqs_w = rope_1d(w_dim, w_len, theta=theta, start=0)
-
+        
         # cache half-dims for final concat
         self.t_half = t_dim // 2
         self.h_half = h_dim // 2

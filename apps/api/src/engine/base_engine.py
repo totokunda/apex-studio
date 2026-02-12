@@ -1092,7 +1092,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         vae = vae.eval()
         return vae
 
-    def enable_vae_tiling(self, component_name: str = "vae"):
+    def enable_vae_tiling(self, component_name: str = "vae", **vae_tile_kwargs):
         """
         Enable VAE tiling if the component supports it.
 
@@ -1105,7 +1105,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             return
         vae_obj = getattr(self, component_name)
         if hasattr(vae_obj, "enable_tiling"):
-            runtime_kwargs = getattr(self, "_vae_tiling_runtime_kwargs", None)
+            runtime_kwargs = getattr(self, "_vae_tiling_runtime_kwargs", {})
+            if vae_tile_kwargs:
+                runtime_kwargs.update(vae_tile_kwargs)
             if isinstance(runtime_kwargs, dict) and runtime_kwargs:
                 try:
                     vae_obj.enable_tiling(**runtime_kwargs)
@@ -2039,9 +2041,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         denormalize_latents: bool = True,
         timestep: Optional[torch.Tensor] = None,
         offload_type: Literal["cpu", "discard"] = "cpu",
+        vae_tile_kwargs: Optional[Dict[str, Any]] = None,
+        use_tiny_vae: bool = False,
     ):
-        if getattr(self, component_name, None) is None:
+        if use_tiny_vae:
+            # Should always have this when using tiny vae
+            component_name = "__tiny_transformer_vae__"
+        if getattr(self, component_name, None) is None and not use_tiny_vae:
             self.load_component_by_type(component_name)
+        else:
+            self.load_component_by_name(component_name)
         self.to_device(getattr(self, component_name))
         if denormalize_latents:
             denormalized_latents = (
@@ -2052,7 +2061,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         else:
             denormalized_latents = latents
 
-        self.enable_vae_tiling(component_name=component_name)
+        self.enable_vae_tiling(component_name=component_name, **vae_tile_kwargs)
 
         video = getattr(self, component_name).decode(
             denormalized_latents, return_dict=False
