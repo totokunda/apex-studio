@@ -33,10 +33,10 @@ variants:
     description: "Previous generation 14B dense model optimized for 480p output. Lower resolution reduces memory usage and generation time, making it well suited for quick previews or resource-constrained environments."
     manifest_ref: video/wan-2.1-14b-image-to-video-480p
 
-  - id: wan-2-2-a5b-text-image-to-video
-    label: "Wan 2.2 5B Text to Image to Video"
-    description: "Compact 5B parameter model that supports both text-to-video and image-to-video in a single checkpoint. Significantly lower VRAM requirements, suitable for consumer GPUs or fast drafting."
-    manifest_ref: video/wan-2.2-5b-text-to-image-to-video
+  - id: wan-2-2-a5b-image-to-video
+    label: "Wan 2.2 5B Image to Video"
+    description: "Compact 5B parameter model that supports image-to-video generation. Significantly lower VRAM requirements, suitable for consumer GPUs or fast drafting."
+    manifest_ref: video/wan-2.2-5b-image-to-video
 
   - id: wan-2-2-a14b-smooth-mix-image-to-video
     label: "Wan 2.2 A14B Smooth Mix Image to Video"

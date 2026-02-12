@@ -11,6 +11,7 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.models.modeling_utils import ModelMixin
 from .utils import Buffer_LQ4x_Proj, Causal_LQ4x_Proj
+from src.utils.dtype import supports_double
 
 try:
     from block_sparse_attn import block_sparse_attn_func
@@ -427,7 +428,9 @@ def precompute_freqs_cis_3d(dim: int, end: int = 1024, theta: float = 10000.0):
 
 
 def precompute_freqs_cis(dim: int, end: int = 1024, theta: float = 10000.0):
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].double() / dim))
+    arange = torch.arange(0, dim, 2)[: (dim // 2)]
+    arange = arange.double() if supports_double(arange.device) else arange.to(torch.float32)
+    freqs = 1.0 / (theta ** (arange / dim))
     freqs = torch.outer(torch.arange(end, device=freqs.device), freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
     return freqs_cis

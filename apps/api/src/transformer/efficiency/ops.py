@@ -152,6 +152,12 @@ def apply_wan_rope_inplace(
         x_imag = x_pairs[..., 1]
 
         freqs_chunk = freqs[:, :, start:end]
+
+        # MPS does not support float64 (Double) or complex128. Downcast on CPU first
+        # (conversion on MPS would fail since it cannot handle complex128).
+        if hidden_states.device.type == "mps" and freqs_chunk.dtype == torch.complex128:
+            freqs_chunk = freqs_chunk.cpu().to(torch.complex64)
+
         if freqs_may_be_cpu and freqs_chunk.device != hidden_states.device:
             freqs_chunk = freqs_chunk.to(hidden_states.device)
         freqs_real = freqs_chunk.real.to(dtype=hs_chunk.dtype)

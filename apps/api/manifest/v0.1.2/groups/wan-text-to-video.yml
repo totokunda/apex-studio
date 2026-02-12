@@ -32,7 +32,7 @@ variants:
     description: "Previous generation 14B dense model. Well-tested and stable, with broad community support for LoRAs and workflows. A reliable fallback when 2.2 variants produce unexpected results."
     manifest_ref: video/wan-2.1-14b-text-to-video
 
-  - id: wan-2-2-a5b-text-image-to-video
+  - id: wan-2-2-a5b-text-to-video
     label: "Wan 2.2 5B"
-    description: "Compact 5B parameter model that supports both text-to-video and image-to-video in a single checkpoint. Significantly lower VRAM requirements, suitable for consumer GPUs or fast drafting."
-    manifest_ref: video/wan-2.2-5b-text-to-image-to-video
+    description: "Compact 5B parameter model that supports text-to-video generation. Significantly lower VRAM requirements, suitable for consumer GPUs or fast drafting."
+    manifest_ref: video/wan-2.2-5b-text-to-video

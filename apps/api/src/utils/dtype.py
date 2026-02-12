@@ -2,7 +2,7 @@ import platform
 import warnings
 import torch
 import torch.backends.mps
-
+from src.utils.defaults import get_torch_device as get_device
 
 def _has_mps_bf16() -> bool:
     if not torch.backends.mps.is_available():
@@ -127,7 +127,9 @@ def select_ideal_dtypes(
     }
 
 
-def supports_double(device):
+def supports_double(device: torch.device | None = None):
+    if device is None or device.type == "cpu":
+        device = get_device()
     device = torch.device(device)
     if device.type == "mps":
         # MPS backend has limited support for float64
