@@ -12,6 +12,19 @@ from safetensors.torch import load_file
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 import os
+from diffusers.models.modeling_outputs import AutoencoderKLOutput
+# create an attribute dict 
+
+
+class FakeDiagonalGaussianDistribution:
+    def __init__(self, parameters):
+        self.parameters = parameters
+    def sample(self):
+        return self.parameters
+    def mode(self):
+        return self.parameters
+    def kl(self, other=None):
+        return 0.0
 
 TWorkItem = namedtuple("TWorkItem", ("input_tensor", "block_index"))
 
@@ -324,4 +337,9 @@ class TAEHV(ModelMixin, ConfigMixin):
         return (self.decode_video(latents.transpose(1, 2), parallel=False).transpose(1, 2).mul_(2).sub_(1),)
     
     def encode(self, x, return_dict=None):
-        return (self.encode_video(x.transpose(1, 2), parallel=False).transpose(1, 2),)
+        output_h = self.encode_video(x.transpose(1, 2), parallel=False).transpose(1, 2).contiguous()
+        posterior = FakeDiagonalGaussianDistribution(output_h)
+        if return_dict:
+            return AutoencoderKLOutput(latent_dist=posterior)
+        else:
+            return (posterior,)

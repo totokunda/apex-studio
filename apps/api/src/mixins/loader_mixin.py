@@ -26,6 +26,7 @@ from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
 from src.config_registry import resolve_config_path, resolve_config_dir, load_config as registry_load_config, config_exists
 from src.types import InputImage, InputVideo, InputAudio
 import types
+import traceback
 import numpy as np
 try:
     import pillow_avif
@@ -226,6 +227,9 @@ class LoaderMixin(DownloadMixin):
 
         if component.get("config"):
             pydash.merge(config, component.get("config"))
+            
+        
+
 
         # Lazy import here as well to avoid circular imports.
         from src.converters.convert import (
@@ -254,9 +258,8 @@ class LoaderMixin(DownloadMixin):
             if os.path.exists(config_path):
                 pydash.merge(config, self._load_json(config_path))
                 
-        
         init_config = True
-
+ 
         with init_empty_weights():
             # Check the constructor signature to determine what it expects
             sig = inspect.signature(model_class.__init__)
@@ -298,6 +301,7 @@ class LoaderMixin(DownloadMixin):
                     try:
                         model = model_class.from_config(config, **extra_kwargs)
                     except Exception as e:
+                        traceback.print_exc()
                         init_config = False
                         # try just straight from_pretrained
                     
@@ -305,12 +309,15 @@ class LoaderMixin(DownloadMixin):
             try:
                 model = model_class.from_pretrained(model_path, **extra_kwargs)
             except Exception as e:
+                traceback.print_exc()
                 # as last resort just plug the wholr component into the model
                 model = model_class(**component)
+                
             return model
 
         if no_weights:
             return model
+        
 
         model_keys = list(model.state_dict().keys())
 
@@ -454,6 +461,7 @@ class LoaderMixin(DownloadMixin):
                     device=load_device,
                     **gguf_kwargs,
                 )
+
                 converter.convert(state_dict, model_keys)
 
                 # Load GGMLTensors without replacing nn.Parameters by copying data

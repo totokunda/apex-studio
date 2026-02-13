@@ -212,6 +212,11 @@ class WanI2VEngine(WanShared):
             offload=offload,
             dtype=latents.dtype,
             normalize_latents_dtype=latents.dtype,
+            vae_tile_kwargs={"sample_min_height": 
+                vae_tile_sample_min_height, "sample_min_width": 
+                    vae_tile_sample_min_width, "sample_stride_height":
+                        vae_tile_sample_stride_height, "sample_stride_width": 
+                            vae_tile_sample_stride_width}
         )
 
         batch_size, _, num_latent_frames, latent_height, latent_width = latents.shape

@@ -2082,9 +2082,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         normalize_latents: bool = True,
         normalize_latents_dtype: torch.dtype | None = None,
         offload_type: Literal["cpu", "discard"] = "discard",
+        use_tiny_vae: bool = False,
+        vae_tile_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        if getattr(self, component_name, None) is None:
+        if getattr(self, component_name, None) is None and not use_tiny_vae:
             self.load_component_by_type("vae")
+        if use_tiny_vae:
+            self.load_component_by_name("__tiny_transformer_vae__")
+            component_name = "__tiny_transformer_vae__"
+        else:
+            self.load_component_by_name(component_name)
         self.to_device(getattr(self, component_name))
 
         # --- VAE encode cache (small, disk-backed) ---
@@ -2150,7 +2157,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         video = video.to(dtype=getattr(self, component_name).dtype, device=self.device)
 
-        self.enable_vae_tiling(component_name=component_name)
+        self.enable_vae_tiling(component_name=component_name, **vae_tile_kwargs)
 
         latents = getattr(self, component_name).encode(video, return_dict=False)[0]
         if sample_mode == "sample":
