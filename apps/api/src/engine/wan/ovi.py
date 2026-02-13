@@ -222,6 +222,10 @@ class OviEngine(WanShared):
         chunking_profile: str = "none",
         rope_on_cpu: bool = False,
         cache_on_cpu: bool = False,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         safe_emit_progress(
@@ -236,6 +240,13 @@ class OviEngine(WanShared):
                 max_area=height * width,
                 mod_value=64,
             )
+        
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         specs = self._get_model_specs()
         if seed is None:
@@ -633,7 +644,7 @@ class OviEngine(WanShared):
         video_latents_for_vae = video_noise.unsqueeze(0)  # 1, c, f, h, w
         safe_emit_progress(progress_callback, 0.97, "Decoding video")
         generated_video_tensor = self.vae_decode(
-            video_latents_for_vae, component_name="transformer_vae"
+            video_latents_for_vae, component_name="transformer_vae", vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None)
         )
 
         generated_video = generated_video_tensor.squeeze(0).cpu().float().numpy()
@@ -677,7 +688,9 @@ class OviEngine(WanShared):
         # Decode Video
         video_latents_for_vae = video_noise.unsqueeze(0)  # 1, c, f, h, w
         generated_video_tensor = self.vae_decode(
-            video_latents_for_vae, component_name="transformer_vae"
+            video_latents_for_vae,
+            component_name="transformer_vae",
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
         )
         generated_video = generated_video_tensor.squeeze(0).cpu().float().numpy()
 

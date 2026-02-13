@@ -113,7 +113,7 @@ spec:
         min_vram_gb: 25
         recommended_vram_gb: 34
     - path: totoku/apex-models/LTX-2/text_encoder/text_encoder-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 13205396120
@@ -121,7 +121,7 @@ spec:
         min_vram_gb: 19
         recommended_vram_gb: 26
     - path: totoku/apex-models/LTX-2/text_encoder/text_encoder-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 13364410688
@@ -147,7 +147,7 @@ spec:
         min_vram_gb: 33
         recommended_vram_gb: 44
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 19126026144
@@ -155,7 +155,7 @@ spec:
         min_vram_gb: 22
         recommended_vram_gb: 30
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 20289911712
@@ -163,7 +163,7 @@ spec:
         min_vram_gb: 21
         recommended_vram_gb: 28
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q6_k.gguf
-      variant: GGUF_Q6_K
+      variant: Q6
       precision: q6_k
       type: gguf
       file_size: 15778708384
@@ -171,7 +171,7 @@ spec:
         min_vram_gb: 14
         recommended_vram_gb: 19
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q4_k_m.gguf
-      variant: GGUF_Q4_K_M
+      variant: Q4
       precision: q4_k_m
       type: gguf
       file_size: 10976459680
@@ -226,6 +226,10 @@ spec:
       guidance_scale: 1.0
       guidance_rescale: 0.0
       upsample: true
+      vae_tile_sample_min_height: 256
+      vae_tile_sample_min_width: 256
+      vae_tile_sample_stride_height: 192
+      vae_tile_sample_stride_width: 192
   ui:
     panels:
     - name: media
@@ -288,17 +292,7 @@ spec:
       layout:
         flow: column
         rows:
-        - - vae_tiling_enabled
-        - - vae_use_framewise_encoding
-        - - vae_use_framewise_decoding
-        - - vae_tile_sample_min_height
-        - - vae_tile_sample_min_width
-        - - vae_tile_sample_min_num_frames
-        - - vae_tile_sample_stride_height
-        - - vae_tile_sample_stride_width
-        - - vae_tile_sample_stride_num_frames
-        - - vae_num_sample_frames_batch_size
-        - - vae_num_latent_frames_batch_size
+        - - vae_tile_size
     inputs:
     - id: video
       preprocessor_ref: dwpose
@@ -427,32 +421,9 @@ spec:
       panel: chunking_profile
       default: true
       required: false
-    - id: vae_tiling_enabled
-      label: Enable VAE Tiling
-      description: Enable tiled VAE encode/decode (recommended).
-      type: boolean
-      panel: vae
-      default: true
-      required: false
-    - id: vae_use_framewise_encoding
-      label: Force Framewise Encoding
-      description: Force temporal tiled (framewise) encoding; otherwise uses an automatic
-        heuristic.
-      type: boolean
-      panel: vae
-      default: false
-      required: false
-    - id: vae_use_framewise_decoding
-      label: Force Framewise Decoding
-      description: Force temporal tiled (framewise) decoding; otherwise uses an automatic
-        heuristic.
-      type: boolean
-      panel: vae
-      default: true
-      required: false
-    - id: vae_tile_sample_min_height
-      label: VAE Tile Min Height
-      description: Minimum pixel height before spatial tiling is used.
+    - id: vae_tile_size
+      label: VAE Tile Size
+      description: Size of the VAE tile.
       type: number+slider
       value_type: integer
       panel: vae
@@ -460,53 +431,3 @@ spec:
       min: 256
       max: 2048
       step: 64
-    - id: vae_tile_sample_min_width
-      label: VAE Tile Min Width
-      description: Minimum pixel width before spatial tiling is used.
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 512
-      min: 256
-      max: 2048
-      step: 64
-    - id: vae_tile_sample_min_num_frames
-      label: VAE Tile Min Frames
-      description: Minimum number of frames before temporal tiling is used.
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 32
-      min: 1
-      max: 256
-      step: 1
-    - id: vae_tile_sample_stride_height
-      label: VAE Tile Stride Height
-      description: Spatial tiling stride (controls overlap) in height direction.
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 448
-      min: 64
-      max: 2048
-      step: 64
-    - id: vae_tile_sample_stride_width
-      label: VAE Tile Stride Width
-      description: Spatial tiling stride (controls overlap) in width direction.
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 448
-      min: 64
-      max: 2048
-      step: 64
-    - id: vae_tile_sample_stride_num_frames
-      label: VAE Tile Stride Frames
-      description: Temporal tiling stride (controls overlap) in frames.
-      type: number+slider
-      value_type: integer
-      panel: vae
-      default: 16
-      min: 1
-      max: 512
-      step: 1

@@ -1311,10 +1311,12 @@ const hydrateStoresFromProjectJson = async (
           ? doc.settings.defaultClipLength
           : 5;
 
-      const manifestsMap =
+      const manifestsMap: Record<string, ManifestDocument> =
         doc && typeof (doc as any).manifests === "object"
-          ? ((doc as any).manifests as Record<string, ManifestDocument>)
-          : undefined;
+          ? ({
+              ...((doc as any).manifests as Record<string, ManifestDocument>),
+            } as Record<string, ManifestDocument>)
+          : {};
       const preprocessorsMap =
         doc && typeof (doc as any).preprocessors === "object"
           ? ((doc as any).preprocessors as Record<string, Preprocessor>)
@@ -1323,6 +1325,93 @@ const hydrateStoresFromProjectJson = async (
         doc && typeof (doc as any).groups === "object"
           ? ((doc as any).groups as Record<string, ManifestGroup>)
           : undefined;
+      const manifestFetchByRef = new Map<
+        string,
+        Promise<ManifestDocument | undefined>
+      >();
+      const sanitizeManifestForLookup = (
+        manifestRaw: ManifestDocument,
+      ): ManifestDocument => {
+        try {
+          const { _group, ...safeManifest } = manifestRaw as any;
+          return safeManifest as ManifestDocument;
+        } catch {
+          return manifestRaw;
+        }
+      };
+
+      const findManifestInLookup = (
+        refRaw: unknown,
+      ): ManifestDocument | undefined => {
+        const ref = String(refRaw ?? "").trim();
+        if (!ref) return undefined;
+        if (manifestsMap[ref]) return manifestsMap[ref];
+        return Object.values(manifestsMap).find(
+          (m: any) =>
+            m?.metadata?.id === ref || m?.id === ref || m?.name === ref,
+        );
+      };
+
+      const cacheManifestInLookup = (
+        manifestRaw: ManifestDocument | undefined,
+        ...keys: unknown[]
+      ): void => {
+        if (!manifestRaw || typeof manifestRaw !== "object") return;
+        const manifest = manifestRaw as ManifestDocument;
+
+        const idsToCache = new Set<string>();
+        for (const key of keys) {
+          const normalized = String(key ?? "").trim();
+          if (normalized) idsToCache.add(normalized);
+        }
+
+        const manifestId = String(
+          manifest.metadata?.id ?? manifest.id ?? manifest.name ?? "",
+        ).trim();
+        if (manifestId) idsToCache.add(manifestId);
+
+        const manifestVersion = String(
+          (manifest as any).version ?? (manifest as any)?.metadata?.version ?? "",
+        ).trim();
+        if (manifestId && manifestVersion) {
+          idsToCache.add(makeManifestCacheKey(manifestId, manifestVersion));
+        }
+
+        for (const id of idsToCache) {
+          if (!manifestsMap[id]) manifestsMap[id] = manifest;
+        }
+      };
+
+      const fetchManifestForLookup = async (
+        refRaw: unknown,
+      ): Promise<ManifestDocument | undefined> => {
+        const ref = String(refRaw ?? "").trim();
+        if (!ref) return undefined;
+        const cached = findManifestInLookup(ref);
+        if (cached) return cached;
+
+        const existing = manifestFetchByRef.get(ref);
+        if (existing) return await existing;
+
+        const pending = (async (): Promise<ManifestDocument | undefined> => {
+          try {
+            const res = await getManifest(ref);
+            if (res?.success && res.data) {
+              const manifest = sanitizeManifestForLookup(
+                res.data as ManifestDocument,
+              );
+              cacheManifestInLookup(manifest, ref);
+              return manifest;
+            }
+          } catch {
+            // ignore; best-effort
+          }
+          return undefined;
+        })();
+
+        manifestFetchByRef.set(ref, pending);
+        return await pending;
+      };
 
       for (const c of clipsJson) {
         if (!c) continue;
@@ -1417,27 +1506,25 @@ const hydrateStoresFromProjectJson = async (
           const manifestCacheKey =
             manifestId ? makeManifestCacheKey(manifestId, manifestVersion) : "";
 
-          let manifestFromDoc =
-            manifestId && manifestsMap
-              ? (manifestsMap[manifestCacheKey] ?? manifestsMap[manifestId])
-              : undefined;
+          let manifestFromDoc = manifestId
+            ? (manifestsMap[manifestCacheKey] ??
+              manifestsMap[manifestId] ??
+              findManifestInLookup(manifestId))
+            : undefined;
 
           // If we don't have an exact local match, try to refresh from the API.
           // This prevents hydration from using a stale local manifest that is
           // missing UI inputs, which can otherwise cause persisted input values
           // to be dropped during re-application.
           if (!manifestFromDoc && manifestId) {
-            try {
-              const res = await getManifest(manifestId);
-              if (res?.success && res.data) {
-                manifestFromDoc = res.data as ManifestDocument;
-                if (manifestsMap) {
-                  manifestsMap[manifestCacheKey || manifestId] = manifestFromDoc;
-                }
-              }
-            } catch {
-              // ignore; best-effort
-            }
+            manifestFromDoc = await fetchManifestForLookup(manifestId);
+          }
+          if (manifestFromDoc) {
+            cacheManifestInLookup(
+              manifestFromDoc,
+              manifestCacheKey || manifestId,
+              manifestId,
+            );
           }
 
           if (manifestFromDoc) {
@@ -1499,16 +1586,32 @@ const hydrateStoresFromProjectJson = async (
             // Re-resolve variant manifests from the local manifest cache
             // since they were stripped during serialization to avoid cycles.
             const savedGroup = groupsMap[groupId];
-            const hydratedVariants = (savedGroup.variants ?? []).map((v: any) => {
-              if (v.manifest) return v; // already resolved
-              const vid = v.manifest_ref ?? v.manifestRef ?? v.id;
-              const resolved = vid && manifestsMap
-                ? (manifestsMap[vid] ?? Object.values(manifestsMap).find(
-                    (m: any) => m?.metadata?.id === vid || m?.id === vid,
-                  ))
-                : undefined;
-              return resolved ? { ...v, manifest: resolved } : v;
-            });
+            const hydratedVariants: any[] = [];
+            for (const variant of savedGroup.variants ?? []) {
+              const v = variant as any;
+              if (v.manifest) {
+                hydratedVariants.push(v);
+                continue;
+              }
+
+              const manifestRefCandidates = [
+                v.manifest_ref,
+                v.manifestRef,
+                v.id,
+              ]
+                .map((value) => String(value ?? "").trim())
+                .filter((value) => value.length > 0);
+
+              let resolved: ManifestDocument | undefined;
+              for (const candidate of manifestRefCandidates) {
+                resolved =
+                  findManifestInLookup(candidate) ??
+                  (await fetchManifestForLookup(candidate));
+                if (resolved) break;
+              }
+
+              hydratedVariants.push(resolved ? { ...v, manifest: resolved } : v);
+            }
             mergedAny.group = { ...savedGroup, variants: hydratedVariants };
           }
           delete mergedAny.groupRef;

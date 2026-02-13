@@ -3196,6 +3196,8 @@ def _run_engine_from_manifest_impl(
 
         # Reset progress timeline when the actual engine run begins.
         send_progress(0.0, "Starting engine run", {"status": "processing", "stage": "engine"})
+        
+        logger.info(f"Prepared inputs: {prepared_inputs}")
 
         output = engine.run(
             **(prepared_inputs or {}),

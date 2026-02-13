@@ -602,8 +602,8 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   const [isAddingLora, setIsAddingLora] = useState(false);
   const [newLoraName, setNewLoraName] = useState("");
   const [newLoraSource, setNewLoraSource] = useState("");
-  const [activeTab, setActiveTab] = useState<"downloads" | "installed">(
-    "installed",
+  const [activeTab, setActiveTab] = useState<"downloads" | "verified">(
+    "verified",
   );
   const sourceHelpShort = "Enter a CivitAI ID/URN, URL, or local path.";
   if (!clip || !clip.manifest) return null;
@@ -1115,7 +1115,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
       hadDownloadActivityRef.current &&
       verifiedInstalledCount > prev
     ) {
-      setActiveTab("installed");
+      setActiveTab("verified");
       // Reset activity so we only auto-switch once per "burst" of downloads.
       hadDownloadActivityRef.current = false;
     }
@@ -1219,14 +1219,14 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab("installed")}
+          onClick={() => setActiveTab("verified")}
           className={`flex-1 text-[11px] font-medium px-2 py-1.5 rounded-r-[6px] transition-colors ${
-            activeTab === "installed"
+            activeTab === "verified"
               ? "bg-brand-accent-shade text-brand-light"
               : "bg-brand-background-light text-brand-light/70 hover:text-brand-light"
           }`}
         >
-          Installed
+          Verified
         </button>
       </div>
 
@@ -1412,7 +1412,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
         </>
       )}
 
-      {activeTab === "installed" && (
+      {activeTab === "verified" && (
         <>
           {!hasInstalledLoras && (
             <div className="text-brand-light/90 text-[12px] font-medium flex flex-col justify-center items-center gap-y-2 p-4 w-full h-28 border border-brand-light/10 rounded-md bg-brand">

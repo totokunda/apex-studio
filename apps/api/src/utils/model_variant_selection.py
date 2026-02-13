@@ -54,6 +54,36 @@ class HardwareMemoryProfile:
     max_vram_gb: float
     unified_memory: bool
     has_gpu: bool
+    has_cuda: bool
+    has_mps: bool
+    cuda_float8_supported: bool
+
+
+def _cuda_device_supports_float8(device_index: int) -> bool:
+    """
+    Best-effort FP8 support check for a CUDA device.
+    We require float8 dtype availability in torch plus a GPU architecture
+    that is known to support FP8 tensor cores (Ada/Hopper+).
+    """
+    if getattr(torch, "float8_e4m3fn", None) is None:
+        return False
+    try:
+        major, minor = torch.cuda.get_device_capability(device_index)
+        return (major, minor) >= (8, 9)
+    except Exception:
+        return False
+
+
+def _cuda_any_device_supports_float8() -> bool:
+    try:
+        if not torch.cuda.is_available():
+            return False
+        for idx in range(int(torch.cuda.device_count())):
+            if _cuda_device_supports_float8(idx):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def detect_hardware_memory_profile() -> HardwareMemoryProfile:
@@ -78,6 +108,9 @@ def detect_hardware_memory_profile() -> HardwareMemoryProfile:
             max_vram_gb=total_ram_gb,
             unified_memory=True,
             has_gpu=True,
+            has_cuda=False,
+            has_mps=True,
+            cuda_float8_supported=False,
         )
 
     max_vram_gb = 0.0
@@ -92,11 +125,15 @@ def detect_hardware_memory_profile() -> HardwareMemoryProfile:
     except Exception:
         max_vram_gb = 0.0
 
+    has_cuda = max_vram_gb > 0.0
     return HardwareMemoryProfile(
         total_ram_gb=total_ram_gb,
         max_vram_gb=max_vram_gb,
         unified_memory=False,
-        has_gpu=max_vram_gb > 0.0,
+        has_gpu=has_cuda,
+        has_cuda=has_cuda,
+        has_mps=False,
+        cuda_float8_supported=_cuda_any_device_supports_float8(),
     )
 
 
@@ -215,20 +252,42 @@ def _tier_order(
     manifest_metadata: Optional[Dict[str, Any]],
     hardware: HardwareMemoryProfile,
 ) -> list[str]:
+    fp8_allowed = bool(hardware.has_cuda and hardware.cuda_float8_supported)
+
     if profile == "maximum_performance":
-        return ["full", "fp8", "q8", "q6", "q4", "other"]
+        # MPS should prefer GGUF families; FP8 is never valid on MPS.
+        if hardware.has_mps:
+            return ["q8", "q6", "q4", "full", "other"]
+        if fp8_allowed:
+            return ["full", "fp8", "q8", "q6", "q4", "other"]
+        return ["full", "q8", "q6", "q4", "other"]
 
     # Auto profile defaults.
     if _is_flux2_dev_text_encoder(component_type, manifest_metadata):
+        if hardware.has_mps:
+            return ["q6", "q8", "q4", "full", "other"]
         if not hardware.has_gpu and not hardware.unified_memory:
-            return ["q6", "q4", "q8", "fp8", "full", "other"]
-        return ["q6", "fp8", "q8", "q4", "full", "other"]
+            return ["q6", "q4", "q8", "full", "other"]
+        if fp8_allowed:
+            return ["q6", "fp8", "q8", "q4", "full", "other"]
+        return ["q6", "q8", "q4", "full", "other"]
 
     if not hardware.has_gpu and not hardware.unified_memory:
         # CPU-only fallback: still prefer q8 by default, then downshift when needed.
-        return ["q8", "q6", "q4", "fp8", "full", "other"]
+        return ["q8", "q6", "q4", "full", "other"]
 
-    return ["fp8", "q8", "q6", "q4", "full", "other"]
+    if hardware.has_mps:
+        return ["q8", "q6", "q4", "full", "other"]
+    if fp8_allowed:
+        return ["fp8", "q8", "q6", "q4", "full", "other"]
+    return ["q8", "q6", "q4", "full", "other"]
+
+
+def _tier_allowed_on_hardware(tier: str, hardware: HardwareMemoryProfile) -> bool:
+    # Hard guard: FP8 variants are valid only on CUDA devices with float8 support.
+    if tier == "fp8":
+        return bool(hardware.has_cuda and hardware.cuda_float8_supported)
+    return True
 
 
 def _fits_hardware(
@@ -323,11 +382,27 @@ def select_model_path_item(
     model_download_profile: Optional[str] = None,
     hardware_profile: Optional[HardwareMemoryProfile] = None,
 ) -> Optional[Dict[str, Any]]:
-    candidates = []
+    raw_candidates: list[Dict[str, Any]] = []
     for raw in model_paths:
         normalized = _normalize_model_path_item(raw)
         if normalized is not None:
-            candidates.append(normalized)
+            raw_candidates.append(normalized)
+    if not raw_candidates:
+        return None
+
+    profile = normalize_model_download_profile(
+        model_download_profile or get_effective_model_download_profile(),
+    )
+    hardware = hardware_profile or detect_hardware_memory_profile()
+
+    candidates = []
+    for item in raw_candidates:
+        tier = _tier_for_model_path_item(item)
+        if _tier_allowed_on_hardware(tier, hardware):
+            candidates.append(item)
+
+    # If every candidate is unsupported for this hardware (e.g. FP8-only on MPS),
+    # return no selection instead of auto-picking an unusable artifact.
     if not candidates:
         return None
 
@@ -339,10 +414,6 @@ def select_model_path_item(
     if not auto_candidates:
         auto_candidates = list(candidates)
 
-    profile = normalize_model_download_profile(
-        model_download_profile or get_effective_model_download_profile(),
-    )
-    hardware = hardware_profile or detect_hardware_memory_profile()
     order = _tier_order(profile, component_type, manifest_metadata, hardware)
     order_map = {tier: idx for idx, tier in enumerate(order)}
 

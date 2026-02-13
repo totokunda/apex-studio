@@ -305,32 +305,40 @@ class TAEHV(ModelMixin, ConfigMixin):
     
     @torch.no_grad()
     def denormalize_latents(self, latents: torch.Tensor):
-        if self.latents_mean is None:
-            return latents
-        latents_mean = latents_mean = (
-            torch.tensor(self.config.latents_mean)
-            .view(1, self.config.latent_channels, 1, 1, 1)
-            .to(latents.device, latents.dtype)
-        )
-        latents_std = 1.0 / torch.tensor(self.config.latents_std).view(
-            1, self.config.latent_channels, 1, 1, 1
-        ).to(latents.device, latents.dtype)
-        latents = (latents / latents_std) + latents_mean
+        if self.latents_mean is not None:
+            latents_mean = (
+                torch.tensor(self.config.latents_mean)
+                .view(1, self.config.latent_channels, 1, 1, 1)
+                .to(latents.device, latents.dtype)
+            )
+            latents_std = 1.0 / torch.tensor(self.config.latents_std).view(
+                1, self.config.latent_channels, 1, 1, 1
+            ).to(latents.device, latents.dtype)
+            return (latents / latents_std) + latents_mean
+        if getattr(self.config, "scaling_factor", None) is not None:
+            scaling = self.config.scaling_factor
+            if getattr(self.config, "shift_factor", None):
+                return latents / scaling + self.config.shift_factor
+            return latents / scaling
         return latents
 
     @torch.no_grad()
     def normalize_latents(self, latents: torch.Tensor):
-        if self.latents_mean is None:
-            return latents
-        latents_mean = (
-            torch.tensor(self.config.latents_mean)
-            .view(1, self.config.latent_channels, 1, 1, 1)
-            .to(latents.device, latents.dtype)
-        )
-        latents_std = 1.0 / torch.tensor(self.config.latents_std).view(
-            1, self.config.latent_channels, 1, 1, 1
-        ).to(latents.device, latents.dtype)
-        latents = (latents - latents_mean) * latents_std
+        if self.latents_mean is not None:
+            latents_mean = (
+                torch.tensor(self.config.latents_mean)
+                .view(1, self.config.latent_channels, 1, 1, 1)
+                .to(latents.device, latents.dtype)
+            )
+            latents_std = 1.0 / torch.tensor(self.config.latents_std).view(
+                1, self.config.latent_channels, 1, 1, 1
+            ).to(latents.device, latents.dtype)
+            return (latents - latents_mean) * latents_std
+        if getattr(self.config, "scaling_factor", None) is not None:
+            scaling = self.config.scaling_factor
+            if getattr(self.config, "shift_factor", None):
+                return (latents - self.config.shift_factor) * scaling
+            return latents * scaling
         return latents
     
     def decode(self, latents, return_dict=None, cond=None):

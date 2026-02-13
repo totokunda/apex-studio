@@ -58,8 +58,17 @@ spec:
       resource_requirements:
         min_vram_gb: 12
         recommended_vram_gb: 16
-    config:
-      light_vae_path: totoku/apex-models/HunyuanVideo-1.5/vae/lightvae-bf16.safetensors
+  - type: vae
+    label: Tiny HunyuanVideo VAE
+    name: __tiny_transformer_vae__
+    base: hunyuanvideo15
+    config_id: TAE/hy15
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-1.5/vae/lightvae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 2521294886
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration
@@ -76,7 +85,7 @@ spec:
         min_vram_gb: 21
         recommended_vram_gb: 28
     - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 8839637196
@@ -84,7 +93,7 @@ spec:
         min_vram_gb: 17
         recommended_vram_gb: 23
     - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 9452685216
@@ -109,7 +118,7 @@ spec:
         min_vram_gb: 21
         recommended_vram_gb: 28
     - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p/transformer-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 8499784912
@@ -117,7 +126,7 @@ spec:
         min_vram_gb: 16
         recommended_vram_gb: 22
     - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p/transformer-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 9009236896
@@ -125,7 +134,7 @@ spec:
         min_vram_gb: 16
         recommended_vram_gb: 22
     - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p/transformer-q6_k.gguf
-      variant: GGUF_Q6_K
+      variant: Q6
       precision: q6_k
       type: gguf
       file_size: 7034506144
@@ -133,7 +142,7 @@ spec:
         min_vram_gb: 13
         recommended_vram_gb: 18
     - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p/transformer-q4_k_m.gguf
-      variant: GGUF_Q4_K_M
+      variant: Q4
       precision: q4_k_m
       type: gguf
       file_size: 4932373408
@@ -185,6 +194,10 @@ spec:
       return_latents: false
       guidance_scale: 1.0
       attention_kwargs: {}
+      vae_tile_sample_min_height: 256
+      vae_tile_sample_min_width: 256
+      vae_tile_sample_stride_height: 192
+      vae_tile_sample_stride_width: 192
       chunking_profile: light
       rope_on_cpu: false
   ui:
@@ -236,6 +249,18 @@ spec:
         rows:
         - - chunking_profile
         - - rope_on_cpu
+    - name: vae
+      label: VAE / Memory
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - use_tiny_vae
+        - - vae_tile_sample_min_height
+        - - vae_tile_sample_min_width
+        - - vae_tile_sample_stride_height
+        - - vae_tile_sample_stride_width
     inputs:
     - id: prompt
       label: Prompt
@@ -250,6 +275,9 @@ spec:
       type: image
       panel: image
       required: true
+      scale_by: resolution
+      map_h: height
+      map_w: width
     - id: num_inference_steps
       label: Inference Steps
       description: Number of denoising steps
@@ -381,3 +409,50 @@ spec:
       panel: chunking_profile
       default: false
       required: false
+    - id: use_tiny_vae
+      label: Use Tiny VAE
+      description: Use the tiny VAE model.
+      type: boolean
+      panel: vae
+      default: false
+      required: false
+    - id: vae_tile_sample_min_height
+      label: VAE Tile Min Height
+      description: Minimum pixel height before spatial tiling is used.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 256
+      min: 256
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_min_width
+      label: VAE Tile Min Width
+      description: Minimum pixel width before spatial tiling is used.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 256
+      min: 256
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_stride_height
+      label: VAE Tile Stride Height
+      description: Stride height for spatial tiling.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 192
+      min: 64
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_stride_width
+      label: VAE Tile Stride Width
+      description: Stride width for spatial tiling.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 192
+      min: 64
+      max: 2048
+      step: 64

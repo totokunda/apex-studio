@@ -1,5 +1,6 @@
 import { useClipStore } from '@/lib/clip'
 import { useControlsStore } from '@/lib/control'
+import { useSettingsStore } from '@/lib/settings-store'
 import AudioProperties from '../properties/AudioProperties'
 import { useMemo, useRef, useEffect, useState, useCallback } from 'react'
 import { getMediaInfoCached } from '@/lib/media/utils'
@@ -36,7 +37,8 @@ import { usePreprocessorsListQuery } from "@/lib/preprocessor/queries";
 import type { Preprocessor } from '@/lib/preprocessor/api';
 import { validatePreprocessorFrames } from '@/lib/preprocessorHelpers';
 import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
-import { ManifestComponent } from '@/lib/manifest/api';
+import { ManifestComponent, ManifestComponentModelPathItem } from '@/lib/manifest/api';
+import { selectPreferredModelPathItem } from '@/lib/manifest/model-variant-selection';
 import ModelComponentsProperties from '../properties/model/ModelComponentsProperties'
 import OffloadProperties from '../properties/OffloadProperties'
 import { v4 as uuidv4 } from 'uuid';
@@ -46,10 +48,21 @@ import LoraPanel from '../properties/model/LoraPanel'
 import { runModelGeneration } from '@/lib/modelGeneration';
 import { runPreprocessorJob } from '@/lib/preprocessorRun';
 import { useManifestQuery } from '@/lib/manifest/queries'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { formatBytes } from '@/lib/components-download/format'
+import { getTorchDevice } from '@app/preload'
 
 interface PropertiesPanelProps {
     panelSize: number;
 }
+
+type PendingModelDownloadItem = {
+  path: string;
+  sizeBytes: number | null;
+  componentLabel: string;
+  variantLabel?: string;
+  kind: "model" | "config" | "lora";
+};
 
 const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const {selectedClipIds, selectedMaskId} = useControlsStore();
@@ -76,8 +89,16 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const { clearJob, stopTracking } = usePreprocessorJobActions();
   const { startTracking: startEngineTracking, stopTracking: stopEngineTracking, clearJob: clearEngineJob } = useEngineJobActions();
   const [isPreparingGeneration, setIsPreparingGeneration] = useState(false);
+  const [showDownloadConfirm, setShowDownloadConfirm] = useState(false);
+  const [pendingModelDownloads, setPendingModelDownloads] = useState<PendingModelDownloadItem[]>([]);
+  const [backendTorchDevice, setBackendTorchDevice] = useState<string>("");
   const getModelValues = useClipStore((s) => s.getModelValues);
   const getRawModelValues = useClipStore((s) => s.getRawModelValues);
+  const modelDownloadProfile = useSettingsStore((s) => s.modelDownloadProfile);
+  const allowFp8ForPopup = useMemo(() => {
+    const dev = String(backendTorchDevice || "").trim().toLowerCase();
+    return dev.startsWith("cuda");
+  }, [backendTorchDevice]);
   const hasFrameInterpolate = useMemo(() => {
     if (clip?.type === 'video') return true;
     return false;
@@ -86,6 +107,23 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const hasPreprocessorBrowser = useMemo(() => {
     return clip?.type === 'video' || clip?.type === 'image';
   }, [clip?.type]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await getTorchDevice();
+        if (!cancelled && res?.success && typeof res.data?.device === "string") {
+          setBackendTorchDevice(res.data.device);
+        }
+      } catch {
+        // ignore; keep conservative fallback (no fp8 in popup when device is unknown)
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Preprocessor browser state
   const { data: preprocessors = [] } = usePreprocessorsListQuery({
@@ -338,6 +376,212 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     });
     return defaults;
   }, []);
+
+  const collectPendingModelDownloads = useCallback((manifest: any): PendingModelDownloadItem[] => {
+    if (!manifest) return [];
+    const components: ManifestComponent[] = (manifest?.spec?.components || []) as ManifestComponent[];
+    const loras: any[] = (manifest?.spec?.loras || []) as any[];
+    const selectedExisting = (clip as ModelClipProps | undefined)?.selectedComponents || {};
+    const selectedDefaults = buildSelectedComponentDefaults(manifest);
+    const selectedMap = { ...selectedDefaults, ...selectedExisting } as Record<string, any>;
+    const pendingByPath = new Map<string, PendingModelDownloadItem>();
+
+    const addPending = (entry: PendingModelDownloadItem) => {
+      if (!entry.path || pendingByPath.has(entry.path)) return;
+      pendingByPath.set(entry.path, entry);
+    };
+
+    const componentDisplayName = (comp: ManifestComponent): string =>
+      String(comp.label || comp.name || comp.type || "component");
+
+    const normalizeModelPaths = (
+      rawModelPath: ManifestComponent["model_path"] | any,
+    ): ManifestComponentModelPathItem[] => {
+      const raw = Array.isArray(rawModelPath)
+        ? rawModelPath
+        : rawModelPath
+          ? [{ path: rawModelPath }]
+          : [];
+      return (raw as any[])
+        .map((it) => (typeof it === "string" ? { path: it } : it))
+        .filter((it) => it && typeof it.path === "string" && it.path.trim()) as ManifestComponentModelPathItem[];
+    };
+
+    const selectedItemFromSpec = (
+      items: ManifestComponentModelPathItem[],
+      selectedSpec: any,
+    ): ManifestComponentModelPathItem | undefined => {
+      if (!selectedSpec || !Array.isArray(items) || items.length === 0) return undefined;
+      const selectedPath = typeof selectedSpec?.path === "string" ? selectedSpec.path : null;
+      if (selectedPath) {
+        const byPath = items.find((it) => String(it.path) === String(selectedPath));
+        if (byPath) return byPath;
+      }
+      const selectedVariant = typeof selectedSpec?.variant === "string" ? selectedSpec.variant : null;
+      if (selectedVariant) {
+        const byVariant = items.find((it) => String(it.variant || "") === String(selectedVariant));
+        if (byVariant) return byVariant;
+      }
+      return undefined;
+    };
+
+    const parsePossibleSizeBytes = (value: unknown): number | null => {
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+      if (typeof value === "string") {
+        const n = Number(value);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return null;
+    };
+
+    const isFp8Item = (item: ManifestComponentModelPathItem): boolean => {
+      const joined = [
+        String(item.variant || ""),
+        String(item.precision || ""),
+        String(item.type || ""),
+        String(item.path || ""),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return joined.includes("fp8");
+    };
+
+    const supportedItems = (
+      items: ManifestComponentModelPathItem[],
+    ): ManifestComponentModelPathItem[] => {
+      if (allowFp8ForPopup) return items;
+      return items.filter((it) => !isFp8Item(it));
+    };
+
+    for (const comp of components) {
+      const label = componentDisplayName(comp);
+      const isExtraModelPath = String(comp.type || "").toLowerCase() === "extra_model_path";
+      const componentKey = String((comp as any).name || comp.type || "component");
+      const selectedSpecForComponent = selectedMap[componentKey];
+
+      if (isExtraModelPath) {
+        const extraSelectedSpec =
+          selectedMap[String((comp as any).name || "")] ||
+          selectedMap[String((comp as any).label || "")] ||
+          selectedMap[String((comp as any).component || "")] ||
+          selectedSpecForComponent;
+        const modelItems = normalizeModelPaths((comp as any).model_paths ?? comp.model_path);
+        const eligibleItems = supportedItems(modelItems);
+        if (eligibleItems.length > 0) {
+          const selectedItem = selectedItemFromSpec(eligibleItems, extraSelectedSpec);
+          const candidate =
+            selectedItem ||
+            selectPreferredModelPathItem(
+              eligibleItems.filter((it) => !it.is_downloaded && !it.custom),
+              {
+                profile: modelDownloadProfile,
+                componentType: "extra_model_path",
+                manifestMetadata: manifest?.metadata || null,
+              },
+            ) ||
+            eligibleItems.find((it) => !it.is_downloaded);
+          if (candidate && !candidate.is_downloaded) {
+            addPending({
+              path: String(candidate.path),
+              sizeBytes: typeof candidate.file_size === "number" ? candidate.file_size : null,
+              componentLabel: label,
+              variantLabel: candidate.variant,
+              kind: "model",
+            });
+          }
+        }
+        continue;
+      }
+
+      const modelItems = normalizeModelPaths(comp.model_path);
+      const eligibleItems = supportedItems(modelItems);
+      if (eligibleItems.length > 0) {
+        const selectedItem = selectedItemFromSpec(eligibleItems, selectedSpecForComponent);
+        let candidate: ManifestComponentModelPathItem | undefined;
+        if (selectedItem) {
+          candidate = selectedItem.is_downloaded ? undefined : selectedItem;
+        } else if (!eligibleItems.some((it) => !!it.is_downloaded)) {
+          candidate =
+            selectPreferredModelPathItem(
+              eligibleItems.filter((it) => !it.is_downloaded && !it.custom),
+              {
+                profile: modelDownloadProfile,
+                componentType: comp.type,
+                manifestMetadata: manifest?.metadata || null,
+              },
+            ) ||
+            eligibleItems.find((it) => !it.is_downloaded);
+        }
+
+        if (candidate && !candidate.is_downloaded) {
+          addPending({
+            path: String(candidate.path),
+            sizeBytes: typeof candidate.file_size === "number" ? candidate.file_size : null,
+            componentLabel: label,
+            variantLabel: candidate.variant,
+            kind: "model",
+          });
+          if (typeof comp.config_path === "string" && comp.config_path.trim()) {
+            addPending({
+              path: String(comp.config_path),
+              sizeBytes: null,
+              componentLabel: label,
+              kind: "config",
+            });
+          }
+        }
+      } else if (typeof comp.config_path === "string" && comp.config_path.trim() && (comp as any).is_downloaded === false) {
+        addPending({
+          path: String(comp.config_path),
+          sizeBytes: null,
+          componentLabel: label,
+          kind: "config",
+        });
+      }
+    }
+
+    // Include LoRAs that are part of generation and not yet downloaded.
+    // Mirrors engine behavior where LoRAs with scale=0 are ignored.
+    for (const lora of loras) {
+      if (!lora) continue;
+
+      if (typeof lora === "string") {
+        addPending({
+          path: lora,
+          sizeBytes: null,
+          componentLabel: "LoRA",
+          kind: "lora",
+        });
+        continue;
+      }
+
+      if (typeof lora !== "object") continue;
+      const scale = typeof (lora as any).scale === "number" ? Number((lora as any).scale) : 1.0;
+      if (scale === 0) continue;
+
+      // Important: use backend-enriched `is_downloaded` for actual local presence.
+      // `verified` only describes metadata state and may be true even when file is absent.
+      const isDownloaded = Boolean((lora as any).is_downloaded);
+      if (isDownloaded) continue;
+
+      const source = String((lora as any).source || (lora as any).remote_source || "").trim();
+      if (!source) continue;
+
+      addPending({
+        path: source,
+        sizeBytes:
+          parsePossibleSizeBytes((lora as any).file_size) ??
+          parsePossibleSizeBytes((lora as any).size_bytes) ??
+          parsePossibleSizeBytes((lora as any).filesize) ??
+          parsePossibleSizeBytes((lora as any).size),
+        componentLabel: "LoRA",
+        variantLabel: String((lora as any).label || (lora as any).name || "").trim() || undefined,
+        kind: "lora",
+      });
+    }
+
+    return Array.from(pendingByPath.values());
+  }, [clip, buildSelectedComponentDefaults, modelDownloadProfile, allowFp8ForPopup]);
 
   // Automatically populate/refresh default selectedComponents when downloads complete
   useEffect(() => {
@@ -612,7 +856,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
 
-  const handleGenerate = useCallback(async () => {
+  const startGeneration = useCallback(async () => {
     setIsPreparingGeneration(true);
     try {
       // Always read the latest clip from the store so newly-changed offload settings
@@ -658,6 +902,28 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     updateClip,
     setSelectedTab,
   ]);
+
+  const handleGenerate = useCallback(async () => {
+    if (hasModel && !isModelDownloaded) {
+      const manifest: any = manifestData || (clip as any)?.manifest;
+      const pending = collectPendingModelDownloads(manifest);
+      setPendingModelDownloads(
+        pending.length > 0
+          ? pending
+          : [
+              {
+                path: "Model and LoRA assets will be resolved and downloaded by the backend.",
+                sizeBytes: null,
+                componentLabel: String(manifest?.metadata?.name || "Model"),
+                kind: "model",
+              },
+            ],
+      );
+      setShowDownloadConfirm(true);
+      return;
+    }
+    await startGeneration();
+  }, [hasModel, isModelDownloaded, manifestData, clip, collectPendingModelDownloads, startGeneration]);
 
   const isModelRunning =
     !!clip &&
@@ -705,6 +971,20 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     }
     return '100%';
   }, [hasValidPreprocessor, hasModel, isModelDownloaded]);
+
+  const pendingKnownBytes = useMemo(
+    () =>
+      pendingModelDownloads.reduce(
+        (acc, item) => acc + (typeof item.sizeBytes === "number" ? item.sizeBytes : 0),
+        0,
+      ),
+    [pendingModelDownloads],
+  );
+
+  const pendingUnknownSizeCount = useMemo(
+    () => pendingModelDownloads.filter((item) => typeof item.sizeBytes !== "number").length,
+    [pendingModelDownloads],
+  );
 
 
   return (
@@ -872,6 +1152,77 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           )}
         </div>
       )}
+
+      <Dialog
+        open={showDownloadConfirm}
+        onOpenChange={(open) => {
+          setShowDownloadConfirm(open);
+          if (!open) setPendingModelDownloads([]);
+        }}
+      >
+        <DialogContent className="max-w-xl bg-brand-background text-brand-light border border-brand-light/10 p-0 gap-0 font-poppins">
+          <DialogHeader className="px-4 py-3 border-b border-brand-light/10">
+            <DialogTitle className="text-[13px] font-medium text-brand-light">
+              Model Download Required
+            </DialogTitle>
+            <DialogDescription className="text-[11px] text-brand-light/70 mt-1">
+              {pendingModelDownloads.length} file{pendingModelDownloads.length === 1 ? "" : "s"} will be downloaded before generation.
+              {" "}
+              <span className="font-medium text-brand-light">{pendingKnownBytes > 0 ? `Total known size: ${formatBytes(pendingKnownBytes, 1)}.` : ""}</span>
+              {pendingUnknownSizeCount > 0 ? ` ${pendingUnknownSizeCount} file${pendingUnknownSizeCount === 1 ? "" : "s"} have unknown size.` : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[320px] overflow-auto px-4 py-3 space-y-2">
+            {pendingModelDownloads.map((item) => (
+              <div
+                key={item.path}
+                className="rounded-md border border-brand-light/10 bg-brand/60 px-3 py-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10.5px] font-medium text-brand-light/90">
+                    {item.componentLabel}
+                    {item.variantLabel ? ` • ${item.variantLabel}` : ""}
+                    {item.kind === "config" ? " • Config" : ""}
+                    {item.kind === "lora" ? " • LoRA" : ""}
+                  </div>
+                  <div className="text-[10px] font-mono text-brand-light/70 whitespace-nowrap">
+                    {typeof item.sizeBytes === "number" ? formatBytes(item.sizeBytes, 1) : "Unknown size"}
+                  </div>
+                </div>
+                <div className="mt-1 text-[10px] text-brand-light/70 font-mono break-all">
+                  {item.path}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <DialogFooter className="px-4 py-3 border-t border-brand-light/10 flex-row items-center justify-end gap-2">
+            <button
+              type="button"
+              className="h-8 px-4 text-[11px] rounded-[6px] font-medium bg-brand border border-brand-light/10 hover:bg-brand-light/10"
+              onClick={() => {
+                setShowDownloadConfirm(false);
+                setPendingModelDownloads([]);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={isPreparingGeneration}
+              className="h-8 px-4 text-[11px] rounded-[6px] font-medium bg-brand-accent-two-shade text-brand-lighter hover:opacity-90 disabled:opacity-60"
+              onClick={async () => {
+                setShowDownloadConfirm(false);
+                setPendingModelDownloads([]);
+                await startGeneration();
+              }}
+            >
+              {isPreparingGeneration ? "Preparing…" : "Download and Generate"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

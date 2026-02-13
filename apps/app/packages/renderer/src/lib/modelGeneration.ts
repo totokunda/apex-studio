@@ -9,6 +9,7 @@ import { exportClip, exportSequence } from "@app/export-renderer";
 import type { ManifestComponent } from "@/lib/manifest/api";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
+import { resolveManifestVariantId } from "@/lib/manifest/variantStorageKey";
 import { useProjectsStore } from "@/lib/projects";
 type MediaItem = {
   type: "image" | "video" | "audio";
@@ -999,17 +1000,14 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     engineInputs["duration"] = `${durationSeconds}s`;
     const manifestId = (clip as ModelClipProps)?.manifest?.metadata?.id;
     const variantId = (() => {
-      const variants = ((clip as ModelClipProps)?.group?.variants ||
-        []) as Array<any>;
-      if (!manifestId || variants.length === 0) return undefined;
-      const mfId = String(manifestId);
-      const match = variants.find((v) => {
-        const byVariantId = String(v?.id || "") === mfId;
-        const byMetaId = String(v?.manifest?.metadata?.id || "") === mfId;
-        const byManifestId = String(v?.manifest?.id || "") === mfId;
-        return byVariantId || byMetaId || byManifestId;
+      const explicitVariantId = String(
+        (clip as ModelClipProps)?.variantId || "",
+      ).trim();
+      if (explicitVariantId) return explicitVariantId;
+      return resolveManifestVariantId({
+        group: (clip as ModelClipProps)?.group,
+        manifest: (clip as ModelClipProps)?.manifest,
       });
-      return match?.id ? String(match.id) : undefined;
     })();
     const selectedExisting = (clip as ModelClipProps)?.selectedComponents || {};
     const manifestForDefaults =
@@ -1050,6 +1048,10 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     const activeProject = useProjectsStore.getState().getActiveProject();
     const folderUuid = activeProject?.folderUuid;
+
+
+    console.log("Engine inputs: ", engineInputs);
+    return;
 
 
     const res = await runEngine({

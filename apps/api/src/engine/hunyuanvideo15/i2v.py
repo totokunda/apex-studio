@@ -104,13 +104,18 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
         guidance_scale: float = 1.0,
         guidance_rescale: float = 0.0,
         # --- Video VAE tiling / framewise controls (UI-configurable) ---
-        use_light_vae: bool = False,
+        
         enable_cache: bool = True,
         cache_type: str = "deepcache",
         cache_start_step: int = 11,
         cache_end_step: int = 45,
         cache_step_interval: int = 4,
         no_cache_block_id: Optional[Dict[str, List[int]]] = None,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
+        use_tiny_vae: bool = bool,
         **kwargs,
     ):
         safe_emit_progress(progress_callback, 0.0, "Starting image-to-video pipeline")
@@ -131,6 +136,13 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             width=width,
             device=device,
         )
+        
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         self.load_component_by_type("vae")
         if seed is not None:
@@ -217,9 +229,11 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             if sigmas is None
             else sigmas
         )
+        print("Num inference steps: ", num_inference_steps)
         timesteps, num_inference_steps = self._get_timesteps(
             self.scheduler, num_inference_steps, sigmas=sigmas
         )
+        print("Timesteps: ", timesteps, "Num inference steps: ", num_inference_steps)
 
         # 6. Prepare latent variables
         safe_emit_progress(progress_callback, 0.25, "Preparing latents")
@@ -426,15 +440,11 @@ class HunyuanVideo15I2VEngine(HunyuanVideo15Shared):
             safe_emit_progress(progress_callback, 1.0, "Returning latents")
             return latents
         else:
-            if not self.vae:
-                self.load_component_by_type("vae")
-            self.vae.enable_tiling(use_light_vae=use_light_vae)
-            self.to_device(self.vae)
             safe_emit_progress(
                 progress_callback, 0.95, "Decoding latents to video with light VAE"
             )
             safe_emit_progress(progress_callback, 0.95, "Decoding latents to video")
-            video = self.vae_decode(latents, offload=offload)
+            video = self.vae_decode(latents, offload=offload, use_tiny_vae=use_tiny_vae, vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None))
             postprocessed_video = self._tensor_to_frames(video)
             safe_emit_progress(
                 progress_callback, 1.0, "Completed image-to-video pipeline"

@@ -17,16 +17,11 @@ import {
   getLastPathSegment,
   inferExternalFolderFromPath,
 } from "@/lib/externalAssets";
-
-const getManifestStorageKey = (
-  manifest: ManifestDocument | undefined | null,
-): string => {
-  const mfId = String(manifest?.metadata?.id || "").trim();
-  if (mfId) return mfId;
-  const fallbackId = String((manifest as any)?.id || "").trim();
-  if (fallbackId) return fallbackId;
-  return "__default__";
-};
+import {
+  getVariantScopedValue,
+  getVariantStorageKey,
+  getVariantStorageLookupKeys,
+} from "@/lib/manifest/variantStorageKey";
 
 const extractManifestInputValues = (
   manifest: ManifestDocument | undefined | null,
@@ -34,8 +29,11 @@ const extractManifestInputValues = (
   const ui = manifest?.spec?.ui || (manifest as any)?.ui;
   const inputs = Array.isArray(ui?.inputs) ? (ui.inputs as Array<any>) : [];
   const out: Record<string, any> = {};
+  const seen = new Set<string>();
   for (const inp of inputs) {
     if (!inp || typeof inp.id !== "string") continue;
+    if (seen.has(inp.id)) continue;
+    seen.add(inp.id);
     if (inp.value !== undefined) out[inp.id] = inp.value;
   }
   return out;
@@ -53,15 +51,16 @@ const cloneManifestWithInputValues = (
     cloned = { ...manifest };
   }
 
-  if (!values || Object.keys(values).length === 0) return cloned as ManifestDocument;
-
   const ui = cloned?.spec?.ui || cloned?.ui;
   if (!ui || !Array.isArray(ui.inputs)) return cloned as ManifestDocument;
 
   ui.inputs = ui.inputs.map((inp: any) => {
     if (!inp || typeof inp.id !== "string") return inp;
-    if (!Object.prototype.hasOwnProperty.call(values, inp.id)) return inp;
-    return { ...inp, value: values[inp.id] };
+    const { value: _existingValue, ...rest } = inp;
+    if (!values || !Object.prototype.hasOwnProperty.call(values, inp.id)) {
+      return rest;
+    }
+    return { ...rest, value: values[inp.id] };
   });
   return cloned as ManifestDocument;
 };
@@ -170,7 +169,8 @@ const VariantSelector: React.FC<{
   clipId: string;
   group: ManifestGroup;
   currentManifestId: string | undefined;
-}> = ({ clipId, group, currentManifestId }) => {
+  currentVariantId?: string;
+}> = ({ clipId, group, currentManifestId, currentVariantId }) => {
   const updateClip = useClipStore((s) => s.updateClip);
   const switchingRef = useRef(false);
   const [isVariantDropdownOpen, setIsVariantDropdownOpen] = useState(false);
@@ -178,13 +178,18 @@ const VariantSelector: React.FC<{
   const variants = useMemo(() => group.variants ?? [], [group]);
 
   const activeVariantId = useMemo(() => {
+    const byClipVariantId = String(currentVariantId || "").trim();
+    if (byClipVariantId) {
+      const direct = variants.find((v) => String(v.id) === byClipVariantId);
+      if (direct) return direct.id;
+    }
     for (const v of variants) {
       if (v.id === currentManifestId) return v.id;
       if (v.manifest?.metadata?.id === currentManifestId) return v.id;
       if (v.manifest?.id === currentManifestId) return v.id;
     }
     return variants[0]?.id ?? null;
-  }, [variants, currentManifestId]);
+  }, [variants, currentManifestId, currentVariantId]);
 
   const handleChange = useCallback(
     async (selectedId: string) => {
@@ -203,7 +208,11 @@ const VariantSelector: React.FC<{
           | undefined;
         if (!currentClip?.manifest) return;
 
-        const currentKey = getManifestStorageKey(currentClip.manifest);
+        const currentKey = getVariantStorageKey({
+          group: currentClip.group,
+          manifest: currentClip.manifest,
+          preferredVariantId: currentClip.variantId,
+        });
         const currentValues = extractManifestInputValues(currentClip.manifest);
         const currentSelectedComponents = (currentClip.selectedComponents ||
           {}) as Record<string, any>;
@@ -216,8 +225,20 @@ const VariantSelector: React.FC<{
           [currentKey]: currentSelectedComponents,
         };
 
-        const targetKey = getManifestStorageKey(targetManifest);
-        const targetValues = nextInputValuesByVariant[targetKey];
+        const targetLookupKeys = getVariantStorageLookupKeys({
+          group: currentClip.group || group,
+          manifest: targetManifest,
+          preferredVariantId: selectedId,
+          includeLegacy: false,
+        });
+        const targetValues = getVariantScopedValue(
+          nextInputValuesByVariant,
+          targetLookupKeys,
+        );
+        const targetSelectedComponents = getVariantScopedValue(
+          nextSelectedComponentsByVariant,
+          targetLookupKeys,
+        );
         const hydratedTargetManifest = cloneManifestWithInputValues(
           targetManifest,
           targetValues,
@@ -229,7 +250,8 @@ const VariantSelector: React.FC<{
           modelStatus: undefined,
           assetId: undefined,
           previewPath: undefined,
-          selectedComponents: nextSelectedComponentsByVariant[targetKey],
+          variantId: selectedId,
+          selectedComponents: targetSelectedComponents,
           modelInputValues: targetValues,
           modelInputValuesByVariant: nextInputValuesByVariant,
           selectedComponentsByVariant: nextSelectedComponentsByVariant,
@@ -392,7 +414,11 @@ export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({
           <VariantSelector
             clipId={clipId}
             group={group}
-            currentManifestId={manifest?.metadata?.id}
+            currentManifestId={
+              String(manifest?.metadata?.id || (manifest as any)?.id || "")
+                .trim() || undefined
+            }
+            currentVariantId={clip?.variantId}
           />
         )}
 

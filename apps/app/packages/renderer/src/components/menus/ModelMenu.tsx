@@ -52,6 +52,7 @@ import {
   prefetchModelMenuQueries,
   useManifestQuery,
 } from "@/lib/manifest/queries";
+import { resolveManifestVariantId } from "@/lib/manifest/variantStorageKey";
 
 import { getOffloadDefaultsForManifest } from "@app/preload";
 
@@ -424,6 +425,10 @@ export const ModelItem: React.FC<{
                 clipBase.manifest = manifest;
                 if (group) {
                   clipBase.group = group;
+                  clipBase.variantId = resolveManifestVariantId({
+                    group,
+                    manifest,
+                  });
                 }
                 try {
                   const mfId = String(manifest?.metadata?.id || "").trim();
