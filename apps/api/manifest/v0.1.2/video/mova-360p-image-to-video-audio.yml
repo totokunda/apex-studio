@@ -6,7 +6,8 @@ metadata:
   model: wan
   name: MOVA Image to Video Audio 360p
   version: 0.1.2
-  description: MOVA is a 14B parameter model for image-to-video-audio generation at 360p resolution.
+  description: MOVA is a 14B parameter model for image-to-video-audio generation at
+    360p resolution.
   tags:
   - mova
   - i2v
@@ -56,6 +57,10 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 253806934
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -66,14 +71,26 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 11361851224
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 6731313000
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 7027437536
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     tokenizer_class: T5Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -88,6 +105,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 2838470672
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
   - type: vae
     label: MOVA Audio VAE
     base: movaaudiovae
@@ -98,6 +119,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 743102794
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: helper
     label: Dual Tower Bridge
     base: wan.mova
@@ -108,6 +133,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 5319561560
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: transformer
     label: High Noise Transformer
     base: wan.mova
@@ -118,23 +147,42 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 28577915880
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 14479517404
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 15360590368
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 11946126368
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-    
+      file_size: 8311374368
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: transformer
     label: Low Noise Transformer
     base: wan.mova
@@ -145,23 +193,42 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 28577915880
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 14479517404
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 15360590368
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 11946126368
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
-
+      file_size: 8311374368
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   defaults:
     run:
       num_inference_steps: 50
@@ -262,7 +329,12 @@ spec:
       type: text
       panel: advanced_prompting
       required: false
-      default: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指"
+      default: "\u8272\u8C03\u8273\u4E3D\uFF0C\u8FC7\u66DD\uFF0C\u9759\u6001\uFF0C\
+        \u7EC6\u8282\u6A21\u7CCA\u4E0D\u6E05\uFF0C\u5B57\u5E55\uFF0C\u98CE\u683C\uFF0C\
+        \u4F5C\u54C1\uFF0C\u753B\u4F5C\uFF0C\u753B\u9762\uFF0C\u9759\u6B62\uFF0C\u6574\
+        \u4F53\u53D1\u7070\uFF0C\u6700\u5DEE\u8D28\u91CF\uFF0C\u4F4E\u8D28\u91CF\uFF0C\
+        JPEG\u538B\u7F29\u6B8B\u7559\uFF0C\u4E11\u964B\u7684\uFF0C\u6B8B\u7F3A\u7684\
+        \uFF0C\u591A\u4F59\u7684\u624B\u6307"
     - id: resolution
       label: Resolution
       description: Select the resolution of the output image
@@ -378,14 +450,16 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false
       required: false
     - id: use_easy_cache
       label: Use Easy Cache
-      description: Use the Easy Cache to speed up the generation, at the cost of some quality.
+      description: Use the Easy Cache to speed up the generation, at the cost of some
+        quality.
       type: boolean
       panel: easy_cache
       required: false

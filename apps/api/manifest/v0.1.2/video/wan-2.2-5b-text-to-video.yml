@@ -64,7 +64,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
-    
+      file_size: 1409400568
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
   - type: vae
     label: Tiny Wan VAE
     name: __tiny_transformer_vae__
@@ -75,7 +78,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
-  
+      file_size: 45684280
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -86,14 +92,26 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 11361851224
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 6731313000
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 7027437536
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     tokenizer_class: T5Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -107,22 +125,42 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 9999660080
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 22
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 5092350248
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 5398999872
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 4210504512
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
+      file_size: 2945332032
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
   defaults:
     run:
       num_inference_steps: 4
@@ -183,7 +221,6 @@ spec:
         rows:
         - - rope_on_cpu
         - - chunking_profile
-    
     - name: vae
       label: VAE / Memory
       collapsible: true
@@ -325,8 +362,6 @@ spec:
         value: balanced
       - name: Aggressive
         value: aggressive
-
-    # VAE SETTINGS 
     - id: use_tiny_vae
       label: Use Tiny Wan VAE
       description: Use the tiny Wan VAE model for faster inference.
@@ -353,7 +388,7 @@ spec:
       default: 256
       min: 64
       max: 2048
-      step: 64  
+      step: 64
     - id: vae_tile_sample_stride_height
       label: VAE Tile Sample Stride Height
       description: The stride height of the tile sample.
@@ -364,7 +399,7 @@ spec:
       min: 48
       max: 2048
       step: 64
-    - id: vae_tile_sample_stride_width  
+    - id: vae_tile_sample_stride_width
       label: VAE Tile Sample Stride Width
       description: The stride width of the tile sample.
       type: number+slider

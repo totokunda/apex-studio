@@ -73,6 +73,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 2444982370
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
   - type: vae
     label: LTX2 Audio Vae
     name: audio_vae
@@ -83,6 +87,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 106507972
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: LTX2 Text Encoder
     name: text_encoder
@@ -100,14 +108,26 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 24374794792
+      resource_requirements:
+        min_vram_gb: 25
+        recommended_vram_gb: 34
     - path: totoku/apex-models/LTX-2/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 13205396120
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
     - path: totoku/apex-models/LTX-2/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 13364410688
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     tokenizer_class: GemmaTokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -122,22 +142,42 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 37752781296
+      resource_requirements:
+        min_vram_gb: 33
+        recommended_vram_gb: 44
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 19126026144
+      resource_requirements:
+        min_vram_gb: 22
+        recommended_vram_gb: 30
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 20289911712
+      resource_requirements:
+        min_vram_gb: 21
+        recommended_vram_gb: 28
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 15778708384
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     - path: totoku/apex-models/LTX-2-Distilled/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
+      file_size: 10976459680
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
   - type: helper
     label: LTX2 Connectors
     name: connectors
@@ -148,6 +188,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 2862957976
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
   - type: helper
     label: LTX2 Vocoder
     name: vocoder
@@ -158,6 +202,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 111204124
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   - type: helper
     label: LTX2 Spatial Upsampler
     name: latent_upsampler
@@ -168,6 +216,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 995743482
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   defaults:
     run:
       use_distilled_stage_1: true

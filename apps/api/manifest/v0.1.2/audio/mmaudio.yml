@@ -59,15 +59,23 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 1221942998
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: extra_model_path
     name: vocoder_model
     label: Vocoder Model
     component: vae
     model_path:
-    - path: totoku/apex-models/MMAudio/vocoder/bigvgan_generator.pt 
+    - path: totoku/apex-models/MMAudio/vocoder/bigvgan_generator.pt
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 489041291
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   - type: text_encoder
     name: text_encoder
     label: CLIP Model
@@ -80,6 +88,10 @@ spec:
       variant: default
       precision: fp32
       type: safetensors
+      file_size: 3946981844
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
       subfolder: MMAudio/text_encoder
@@ -92,6 +104,10 @@ spec:
       variant: default
       precision: bf16
       type: pth
+      file_size: 949901692
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   - type: transformer
     name: transformer
     label: Transformer
@@ -102,6 +118,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 2061198808
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
   defaults:
     run:
       num_inference_steps: 25
@@ -137,7 +157,6 @@ spec:
         flow: column
         rows:
         - - negative_prompt
-    
     - name: sampling
       label: Sampling
       collapsible: true
@@ -148,7 +167,6 @@ spec:
         - - num_inference_steps
         - - guidance_scale
         - - seed
-
     inputs:
     - id: video
       label: Video
@@ -171,7 +189,6 @@ spec:
       panel: advanced_prompting
       required: false
       default: ''
-
     - id: num_inference_steps
       label: Inference Steps
       description: Number of denoising steps
@@ -202,4 +219,3 @@ spec:
       min: 1.0
       max: 15.0
       step: 0.5
-

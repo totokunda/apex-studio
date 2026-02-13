@@ -11,7 +11,7 @@ metadata:
   - anima
   - t2i
   - anime
-  author: Circlestone Labs 
+  author: Circlestone Labs
   license: Apache-2.0
   demo_path: models/anima-text-to-image.jpg
   categories:
@@ -68,6 +68,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 1192135096
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -81,6 +85,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 3912874432
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
   - type: helper
     label: Anima LLM Adapter
     base: anima.llm_adapter
@@ -91,6 +99,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 269339368
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   defaults:
     run:
       num_inference_steps: 50
@@ -154,7 +166,8 @@ spec:
       type: text
       panel: advanced_prompting
       required: false
-      default: worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia
+      default: worst quality, low quality, score_1, score_2, score_3, blurry, jpeg
+        artifacts, sepia
     - id: resolution
       label: Resolution
       description: Select the resolution of the output image

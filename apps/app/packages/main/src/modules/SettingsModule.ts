@@ -25,6 +25,8 @@ type PathKey =
   | "postprocessorPath"
   | "maskModel";
 
+type ModelDownloadProfile = "auto" | "maximum_performance";
+
 interface Settings {
   activeProjectId?: string | number | null;
   /**
@@ -45,6 +47,7 @@ interface Settings {
   renderImageSteps?: boolean;
   renderVideoSteps?: boolean;
   useFastDownload?: boolean;
+  modelDownloadProfile?: ModelDownloadProfile;
   autoUpdateEnabled?: boolean;
   /**
    * If true, disable the backend auto memory manager hooks/wrappers and fall back to
@@ -70,6 +73,7 @@ type BackendSyncedSettings = {
   renderImageSteps: boolean;
   renderVideoSteps: boolean;
   useFastDownload: boolean;
+  modelDownloadProfile: ModelDownloadProfile;
   autoUpdateEnabled: boolean;
   disableAutoMemoryManagement: boolean;
 };
@@ -356,6 +360,9 @@ export class SettingsModule extends EventEmitter implements AppModule {
           const v = this.store.get("useFastDownload");
           return v === undefined ? true : Boolean(v);
         })(),
+        modelDownloadProfile: this.normalizeModelDownloadProfile(
+          this.store.get("modelDownloadProfile"),
+        ),
         autoUpdateEnabled: (() => {
           const v = this.store.get("autoUpdateEnabled");
           return v === undefined ? true : Boolean(v);
@@ -395,6 +402,11 @@ export class SettingsModule extends EventEmitter implements AppModule {
         ) {
           // Settings interface includes these booleans
           this.store.set(key as any, Boolean(value));
+        } else if (key === "modelDownloadProfile") {
+          this.store.set(
+            key as any,
+            this.normalizeModelDownloadProfile(value),
+          );
         }
       };
 
@@ -454,6 +466,23 @@ export class SettingsModule extends EventEmitter implements AppModule {
       if (fast.success && fast.data && typeof fast.data.enabled === "boolean") {
         okCount++;
         setIfStillCurrent("useFastDownload", Boolean(fast.data.enabled));
+      }
+
+      const mdlProfile = await this.makeConfigRequestAtUrl<any>(
+        urlAtStart,
+        "GET",
+        "/config/model-download-profile",
+      );
+      if (
+        mdlProfile.success &&
+        mdlProfile.data &&
+        typeof mdlProfile.data.profile === "string"
+      ) {
+        okCount++;
+        setIfStillCurrent(
+          "modelDownloadProfile",
+          this.normalizeModelDownloadProfile(mdlProfile.data.profile),
+        );
       }
 
       const au = await this.makeConfigRequestAtUrl<any>(
@@ -601,6 +630,9 @@ export class SettingsModule extends EventEmitter implements AppModule {
         const v = this.store.get("useFastDownload");
         return v === undefined ? true : Boolean(v);
       })(),
+      modelDownloadProfile: this.normalizeModelDownloadProfile(
+        this.store.get("modelDownloadProfile"),
+      ),
       autoUpdateEnabled: (() => {
         const v = this.store.get("autoUpdateEnabled");
         return v === undefined ? true : Boolean(v);
@@ -677,6 +709,23 @@ export class SettingsModule extends EventEmitter implements AppModule {
     if (fast.success && fast.data && typeof fast.data.enabled === "boolean") {
       okCount++;
       setFetched("useFastDownload", Boolean(fast.data.enabled));
+    }
+
+    const mdlProfile = await this.makeConfigRequestAtUrl<any>(
+      backendUrl,
+      "GET",
+      "/config/model-download-profile",
+    );
+    if (
+      mdlProfile.success &&
+      mdlProfile.data &&
+      typeof mdlProfile.data.profile === "string"
+    ) {
+      okCount++;
+      setFetched(
+        "modelDownloadProfile",
+        this.normalizeModelDownloadProfile(mdlProfile.data.profile),
+      );
     }
 
     const au = await this.makeConfigRequestAtUrl<any>(
@@ -834,6 +883,54 @@ export class SettingsModule extends EventEmitter implements AppModule {
     void this.makeConfigRequest<any>("POST", endpoint, {
       [requestField]: v,
     });
+  }
+
+  private normalizeModelDownloadProfile(
+    value: unknown,
+  ): ModelDownloadProfile {
+    const raw = String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, "_")
+      .replace(/\s+/g, "_");
+    if (
+      raw === "maximum_performance" ||
+      raw === "max_performance" ||
+      raw === "max" ||
+      raw === "performance" ||
+      raw === "full" ||
+      raw === "full_models" ||
+      raw === "full_model"
+    ) {
+      return "maximum_performance";
+    }
+    return "auto";
+  }
+
+  private async getModelDownloadProfileEnsuringFromApi(): Promise<ModelDownloadProfile> {
+    const current = this.store.get("modelDownloadProfile");
+    if (typeof current === "string" && current.trim()) {
+      return this.normalizeModelDownloadProfile(current);
+    }
+
+    const res = await this.makeConfigRequest<any>(
+      "GET",
+      "/config/model-download-profile",
+    ).catch(() => ({ success: false } as any));
+    const profile =
+      res && res.success && res.data
+        ? this.normalizeModelDownloadProfile(res.data.profile)
+        : "auto";
+    this.store.set("modelDownloadProfile", profile);
+    return profile;
+  }
+
+  private setModelDownloadProfileAndUpdateApi(profile: string): void {
+    const normalized = this.normalizeModelDownloadProfile(profile);
+    this.store.set("modelDownloadProfile", normalized);
+    void this.makeConfigRequest<any>("POST", "/config/model-download-profile", {
+      profile: normalized,
+    }).catch(() => undefined);
   }
 
   private async getAutoUpdateEnabledEnsuringFromApi(): Promise<boolean> {
@@ -1163,6 +1260,18 @@ export class SettingsModule extends EventEmitter implements AppModule {
           "/config/enable-fast-download",
           "enabled",
         );
+        return { success: true };
+      },
+    );
+
+    ipcMain.handle("settings:get-model-download-profile", async () => {
+      return await this.getModelDownloadProfileEnsuringFromApi();
+    });
+
+    ipcMain.handle(
+      "settings:set-model-download-profile",
+      (_event, profile: string) => {
+        this.setModelDownloadProfileAndUpdateApi(profile);
         return { success: true };
       },
     );

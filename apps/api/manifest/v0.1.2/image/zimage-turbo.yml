@@ -55,6 +55,10 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 167666902
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: ZImage Text Encoder
     base: Qwen3ForCausalLM
@@ -67,14 +71,26 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 8044982048
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 4411692616
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 4280400512
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -88,22 +104,42 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 12309866400
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 6293432116
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 6671501408
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
     - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 5212606432
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
+      file_size: 3661553632
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
   defaults:
     run:
       num_inference_steps: 9
