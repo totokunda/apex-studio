@@ -136,6 +136,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     renderImageSteps: renderImageStepsGlobal,
     renderVideoSteps: renderVideoStepsGlobal,
     useFastDownload: useFastDownloadGlobal,
+    modelDownloadProfile: modelDownloadProfileGlobal,
     autoUpdateEnabled: autoUpdateEnabledGlobal,
     disableAutoMemoryManagement: disableAutoMemoryManagementGlobal,
     maskModel: maskModelGlobal,
@@ -152,6 +153,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRenderImageSteps: setRenderImageStepsGlobal,
     setRenderVideoSteps: setRenderVideoStepsGlobal,
     setUseFastDownload: setUseFastDownloadGlobal,
+    setModelDownloadProfile: setModelDownloadProfileGlobal,
     setAutoUpdateEnabled: setAutoUpdateEnabledGlobal,
     setDisableAutoMemoryManagement: setDisableAutoMemoryManagementGlobal,
   } = useSettingsStore();
@@ -203,6 +205,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [renderImageSteps, setRenderImageSteps] = useState<boolean>(false);
   const [renderVideoSteps, setRenderVideoSteps] = useState<boolean>(false);
   const [useFastDownload, setUseFastDownload] = useState<boolean>(true);
+  const [modelDownloadProfile, setModelDownloadProfile] =
+    useState<string>("auto");
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
   const [disableAutoMemoryManagement, setDisableAutoMemoryManagement] =
     useState<boolean>(false);
@@ -439,6 +443,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRenderImageSteps(Boolean(renderImageStepsGlobal));
     setRenderVideoSteps(Boolean(renderVideoStepsGlobal));
     setUseFastDownload(Boolean(useFastDownloadGlobal));
+    setModelDownloadProfile(String(modelDownloadProfileGlobal || "auto"));
     setAutoUpdateEnabled(Boolean(autoUpdateEnabledGlobal));
     setDisableAutoMemoryManagement(Boolean(disableAutoMemoryManagementGlobal));
 
@@ -508,6 +513,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setRenderImageSteps(Boolean(res.data.renderImageSteps));
       setRenderVideoSteps(Boolean(res.data.renderVideoSteps));
       setUseFastDownload(Boolean(res.data.useFastDownload));
+      setModelDownloadProfile(String(res.data.modelDownloadProfile || "auto"));
       setAutoUpdateEnabled(Boolean(res.data.autoUpdateEnabled));
       setDisableAutoMemoryManagement(Boolean(res.data.disableAutoMemoryManagement));
 
@@ -605,6 +611,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setRenderImageSteps(Boolean(res.data.renderImageSteps));
       setRenderVideoSteps(Boolean(res.data.renderVideoSteps));
       setUseFastDownload(Boolean(res.data.useFastDownload));
+      setModelDownloadProfile(String(res.data.modelDownloadProfile || "auto"));
       setAutoUpdateEnabled(Boolean(res.data.autoUpdateEnabled));
       setDisableAutoMemoryManagement(Boolean(res.data.disableAutoMemoryManagement));
 
@@ -666,6 +673,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRenderImageSteps(Boolean(renderImageStepsGlobal));
     setRenderVideoSteps(Boolean(renderVideoStepsGlobal));
     setUseFastDownload(Boolean(useFastDownloadGlobal));
+    setModelDownloadProfile(String(modelDownloadProfileGlobal || "auto"));
     setAutoUpdateEnabled(Boolean(autoUpdateEnabledGlobal));
     setDisableAutoMemoryManagement(Boolean(disableAutoMemoryManagementGlobal));
   }, [
@@ -683,6 +691,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     renderImageStepsGlobal,
     renderVideoStepsGlobal,
     useFastDownloadGlobal,
+    modelDownloadProfileGlobal,
     autoUpdateEnabledGlobal,
     disableAutoMemoryManagementGlobal,
   ]);
@@ -1319,6 +1328,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 />
               </div>
 
+              <div className="flex flex-col gap-1">
+                <label className={fieldLabelClass}>
+                  <span>Model Download Profile</span>
+                  <span className="text-[10px] text-brand-light/60 font-normal">
+                    Controls which model variant is auto-downloaded when multiple
+                    precisions are available.
+                  </span>
+                </label>
+                <Select
+                  value={modelDownloadProfile}
+                  onValueChange={(value) => setModelDownloadProfile(value)}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="w-full h-7.5! text-[11px] bg-brand-background/70 rounded-[6px]"
+                  >
+                    <SelectValue placeholder="Select profile" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                    <SelectItem value="auto" className="text-[11px] font-medium">
+                      Automatic (Recommended)
+                    </SelectItem>
+                    <SelectItem
+                      value="maximum_performance"
+                      className="text-[11px] font-medium"
+                    >
+                      Maximum Performance (Full Models)
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
             </div>
           </TabsContent>
           <TabsContent value="memory">
@@ -1910,6 +1951,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               void setRenderImageStepsGlobal(renderImageSteps);
               void setRenderVideoStepsGlobal(renderVideoSteps);
               void setUseFastDownloadGlobal(useFastDownload);
+              void setModelDownloadProfileGlobal(modelDownloadProfile);
               void setAutoUpdateEnabledGlobal(autoUpdateEnabled);
               void setDisableAutoMemoryManagementGlobal(disableAutoMemoryManagement);
               onOpenChange(false);

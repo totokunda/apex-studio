@@ -5,7 +5,7 @@ metadata:
   id: flashvsr-1.1-full
   model: wan
   name: FlashVSR 1.1 Full
-  version: "0.1.2"
+  version: 0.1.2
   description: FlashVSR 1.1 Full is a full-scale upscaler model for video and image
     upscaling.
   tags:
@@ -52,6 +52,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 253806934
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: transformer
     base: wan.flashvsr
     label: FlashVSR Transformer
@@ -61,7 +65,10 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
-
+      file_size: 6251762992
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
   defaults:
     run:
       num_inference_steps: 1
@@ -239,7 +246,8 @@ spec:
       step: 0.5
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

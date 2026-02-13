@@ -35,7 +35,6 @@ spec:
   - flash3
   - metal_flash
   - efficient_dot_product_attention
-  
   components:
   - type: scheduler
     label: Scheduler
@@ -55,9 +54,12 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 2521294886
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     config:
       light_vae_path: totoku/apex-models/HunyuanVideo-1.5/vae/lightvae-bf16.safetensors
-
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration
@@ -69,14 +71,26 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 16584415576
+      resource_requirements:
+        min_vram_gb: 21
+        recommended_vram_gb: 28
     - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 8839637196
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 9452685216
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 22
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -90,22 +104,42 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 16653430048
+      resource_requirements:
+        min_vram_gb: 21
+        recommended_vram_gb: 28
     - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 8499784912
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 22
     - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 9009236896
+      resource_requirements:
+        min_vram_gb: 16
+        recommended_vram_gb: 22
     - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 7034506144
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: totoku/apex-models/HunyuanVideo-1.5-I2V/transformer_720p/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
+      file_size: 4932373408
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
   - type: helper
     label: HunyuanVideo Image Encoder
     base: SiglipVisionModel
@@ -117,6 +151,10 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 856506120
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   - type: helper
     label: HunyuanVideo Image Feature Extractor
     base: SiglipImageProcessor
@@ -137,6 +175,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 877273128
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
   defaults:
     run:
       num_inference_steps: 50
@@ -333,7 +375,8 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

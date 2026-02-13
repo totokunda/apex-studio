@@ -22,6 +22,7 @@ export const useSettingsStore = create<SettingsState>(
     renderImageSteps: false,
     renderVideoSteps: false,
     useFastDownload: true,
+    modelDownloadProfile: "auto",
     autoUpdateEnabled: true,
     disableAutoMemoryManagement: false,
 
@@ -40,8 +41,8 @@ export const useSettingsStore = create<SettingsState>(
     setRenderImageSteps: async () => {},
     setRenderVideoSteps: async () => {},
     setUseFastDownload: async () => {},
+    setModelDownloadProfile: async () => {},
     setAutoUpdateEnabled: async () => {},
     setDisableAutoMemoryManagement: async () => {},
   })),
 );
-

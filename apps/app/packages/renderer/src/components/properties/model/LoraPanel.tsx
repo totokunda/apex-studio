@@ -177,7 +177,7 @@ const LoraDownloadRow: React.FC<{
       : (item as any).label ||
         (item as any).name ||
         (path ? path.split("/").pop() || path : "LoRA");
-  const isDownloaded = typeof item === "string" ? false : !!(item as any).is_downloaded;
+  const isVerified = typeof item === "string" ? false : !!(item as any).verified;
   const [startDownloading, setStartDownloading] = useState(false);
 
   const {
@@ -285,7 +285,7 @@ const LoraDownloadRow: React.FC<{
         </div>
       </div>
 
-      {!isDownloaded && (
+      {!isVerified && (
         <>
           {isDownloading && (
             <DownloadProgressSection
@@ -1097,7 +1097,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   useEffect(() => {
     const verifiedInstalledCount = (manifest?.spec?.loras || []).filter((l: any) => {
       if (!l || typeof l !== "object") return false;
-      const downloaded = !!(l as any).is_downloaded;
+      const downloaded = !!(l as any).verified;
       const verified = (l as any).verified === true;
       return downloaded && verified;
     }).length;
@@ -1175,7 +1175,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
             l.remote_source === p.source
           );
         });
-        if (found && typeof found === "object" && !!(found as any).is_downloaded) return false;
+        if (found && typeof found === "object" && !!(found as any).verified) return false;
         return true;
       }),
     );

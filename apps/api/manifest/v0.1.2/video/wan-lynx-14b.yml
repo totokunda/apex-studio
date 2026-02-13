@@ -69,6 +69,10 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 253806934
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -79,14 +83,26 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 11361851224
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 6731313000
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 7027437536
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     tokenizer_class: T5Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -102,22 +118,42 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 28577097168
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 14526212400
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
     - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q8_0.gguf
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 15404315680
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
     - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q6_k.gguf
       variant: GGUF_Q6_K
       precision: q6_k
       type: gguf
+      file_size: 12001358880
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     - path: totoku/apex-models/Wan2.1-T2V/transformer/transformer-q4_k_m.gguf
       variant: GGUF_Q4_K_M
       precision: q4_k_m
       type: gguf
+      file_size: 8378856480
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: extra_model_path
     label: Wan Lynx 14B
     component: transformer
@@ -127,14 +163,26 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 8568677816
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
     - path: totoku/apex-models/Lynx-Full/adapters/fp8_e4m3fn
       variant: FP8_E4M3FN
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 4374386144
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
     - path: totoku/apex-models/Lynx-Full/adapters/gguf_q8
       variant: GGUF_Q8_0
       precision: q8_0
       type: gguf
+      file_size: 4635070624
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   defaults:
     run:
       num_inference_steps: 8
@@ -319,7 +367,8 @@ spec:
       step: 0.5
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false
@@ -334,7 +383,7 @@ spec:
       - name: None
         value: none
       - name: Light
-        value: light  
+        value: light
       - name: Balanced
         value: balanced
       - name: Aggressive
