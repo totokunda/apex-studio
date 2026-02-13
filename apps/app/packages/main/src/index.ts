@@ -36,6 +36,7 @@ export async function initApp(initConfig: AppInitConfig) {
 
   let moduleRunner = createModuleRunner()
     // Ensure single instance lock before any window creation
+    .init(hardwareAccelerationMode({ enable: true}))
     .init(disallowMultipleAppInstance())
     // Settings must be loaded early (before other modules read them)
     .init(settingsModule())
@@ -61,7 +62,7 @@ export async function initApp(initConfig: AppInitConfig) {
       }),
     )
     .init(terminateAppOnLastWindowClose())
-    .init(hardwareAccelerationMode({ enable: true }))
+    
     .init(autoUpdater())
     .init(apexApiAutoUpdater())
     .init(chromeDevToolsExtension({ extension: "REACT_DEVELOPER_TOOLS" }))
