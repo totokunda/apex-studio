@@ -1,6 +1,6 @@
 import { useManifestStore } from "@/lib/manifest/store";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { LuCheck, LuChevronLeft, LuPlus, LuRefreshCw } from "react-icons/lu";
+import { LuChevronLeft, LuPlus, LuRefreshCw } from "react-icons/lu";
 import { ScrollArea } from "../ui/scroll-area";
 import { useControlsStore } from "@/lib/control";
 import {
