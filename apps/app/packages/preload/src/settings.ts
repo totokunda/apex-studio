@@ -31,6 +31,7 @@ export type BackendSyncedSettings = {
   renderImageSteps: boolean;
   renderVideoSteps: boolean;
   useFastDownload: boolean;
+  modelDownloadProfile: string;
   autoUpdateEnabled: boolean;
   disableAutoMemoryManagement: boolean;
 };
@@ -171,6 +172,16 @@ function setUseFastDownloadSetting(
   return ipcRenderer.invoke("settings:set-use-fast-download", enabled);
 }
 
+function getModelDownloadProfileSetting(): Promise<string> {
+  return ipcRenderer.invoke("settings:get-model-download-profile");
+}
+
+function setModelDownloadProfileSetting(
+  profile: string,
+): Promise<{ success: boolean }> {
+  return ipcRenderer.invoke("settings:set-model-download-profile", profile);
+}
+
 function getAutoUpdateEnabledSetting(): Promise<boolean> {
   return ipcRenderer.invoke("settings:get-auto-update-enabled");
 }
@@ -238,6 +249,8 @@ export {
   setRenderVideoStepsSetting,
   getUseFastDownloadSetting,
   setUseFastDownloadSetting,
+  getModelDownloadProfileSetting,
+  setModelDownloadProfileSetting,
   getAutoUpdateEnabledSetting,
   setAutoUpdateEnabledSetting,
   getDisableAutoMemoryManagementSetting,

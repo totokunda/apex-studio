@@ -14,6 +14,8 @@ import {
   setRenderVideoStepsSetting,
   getUseFastDownloadSetting,
   setUseFastDownloadSetting,
+  getModelDownloadProfileSetting,
+  setModelDownloadProfileSetting,
   getAutoUpdateEnabledSetting,
   setAutoUpdateEnabledSetting,
   getDisableAutoMemoryManagementSetting,
@@ -51,6 +53,7 @@ export type SettingsState = {
 
   // Downloads
   useFastDownload: boolean;
+  modelDownloadProfile: string;
 
   // API auto updates
   autoUpdateEnabled: boolean;
@@ -73,6 +76,7 @@ export type SettingsState = {
   setRenderImageSteps: (enabled: boolean) => Promise<void>;
   setRenderVideoSteps: (enabled: boolean) => Promise<void>;
   setUseFastDownload: (enabled: boolean) => Promise<void>;
+  setModelDownloadProfile: (profile: string) => Promise<void>;
   setAutoUpdateEnabled: (enabled: boolean) => Promise<void>;
   setDisableAutoMemoryManagement: (disabled: boolean) => Promise<void>;
 };
@@ -98,6 +102,7 @@ export const withSettingsPersistence =
           renderImageSteps,
           renderVideoSteps,
           useFastDownload,
+          modelDownloadProfile,
           autoUpdateEnabled,
           disableAutoMemoryManagement,
         ] = await Promise.all([
@@ -109,6 +114,7 @@ export const withSettingsPersistence =
           getRenderImageStepsSetting().catch(() => false),
           getRenderVideoStepsSetting().catch(() => false),
           getUseFastDownloadSetting().catch(() => true),
+          getModelDownloadProfileSetting().catch(() => "auto"),
           getAutoUpdateEnabledSetting().catch(() => true),
           getDisableAutoMemoryManagementSetting().catch(() => false),
         ]);
@@ -132,6 +138,7 @@ export const withSettingsPersistence =
           renderImageSteps: Boolean(renderImageSteps),
           renderVideoSteps: Boolean(renderVideoSteps),
           useFastDownload: Boolean(useFastDownload),
+          modelDownloadProfile: String(modelDownloadProfile || "auto"),
           autoUpdateEnabled: Boolean(autoUpdateEnabled),
           disableAutoMemoryManagement: Boolean(disableAutoMemoryManagement),
           initialized: true,
@@ -232,6 +239,11 @@ export const withSettingsPersistence =
         set({ useFastDownload: v } as Partial<T>);
         void setUseFastDownloadSetting(v).catch(() => undefined);
       },
+      setModelDownloadProfile: async (profile: string) => {
+        const v = String(profile || "auto");
+        set({ modelDownloadProfile: v } as Partial<T>);
+        void setModelDownloadProfileSetting(v).catch(() => undefined);
+      },
       setAutoUpdateEnabled: async (enabled: boolean) => {
         const v = Boolean(enabled);
         set({ autoUpdateEnabled: v } as Partial<T>);
@@ -246,5 +258,4 @@ export const withSettingsPersistence =
 
     return enhanced;
   };
-
 

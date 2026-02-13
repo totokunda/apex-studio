@@ -15,6 +15,10 @@ import {
   getManifestGroup as getManifestGroupPreload,
 } from "@app/preload";
 import { ClipType } from "../types";
+import {
+  normalizeModelDownloadProfile,
+  selectPreferredModelPathItem,
+} from "./model-variant-selection.js";
 
 export interface ConfigResponse<T> {
   success: boolean;
@@ -637,11 +641,17 @@ export async function resolveGroupVariantManifest(
 }
 
 
-export const extractAllDownloadableDefaultPaths = (manifest: ManifestDocument) => {
+export const extractAllDownloadableDefaultPaths = (
+  manifest: ManifestDocument,
+  options?: { modelDownloadProfile?: string },
+) => {
   const spec = manifest.spec;
   const components = spec.components ?? [];
   const loras = spec.loras ?? [];
   const allDownloadablePaths = new Set<{type: string, path: string | string[], index?: number}>();
+  const profile = normalizeModelDownloadProfile(
+    options?.modelDownloadProfile ?? "auto",
+  );
   for (const [index, component] of components.entries()) {
     const componentDownloadablePath = [];
     if (component.is_downloaded) continue;
@@ -649,10 +659,26 @@ export const extractAllDownloadableDefaultPaths = (manifest: ManifestDocument) =
       if (typeof component.model_path === "string") {
         componentDownloadablePath.push({type: "component", path: component.model_path, index});
       } else {
-        for (const pathItem of component.model_path) {
-          if (pathItem.path && !pathItem.is_downloaded && !pathItem.custom && (pathItem.variant ?? 'default').toLowerCase() == "default") {
-            componentDownloadablePath.push({type: "component", path: pathItem.path, index});
-          }
+        const candidates = component.model_path.filter(
+          (pathItem) =>
+            Boolean(pathItem?.path) &&
+            !pathItem.is_downloaded &&
+            !pathItem.custom,
+        );
+        const selected = selectPreferredModelPathItem(
+          candidates as ManifestComponentModelPathItem[],
+          {
+            profile,
+            componentType: component.type,
+            manifestMetadata: manifest.metadata,
+          },
+        );
+        if (selected?.path) {
+          componentDownloadablePath.push({
+            type: "component",
+            path: selected.path,
+            index,
+          });
         }
       }
       if (component.config_path) {

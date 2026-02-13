@@ -78,6 +78,11 @@ from src.memory_management.budget_offloading import (
     _maybe_remove_and_reapply_budget_offloading,
     _is_budget_offload_enabled,
 )
+from src.utils.model_variant_selection import (
+    detect_hardware_memory_profile,
+    get_effective_model_download_profile,
+    select_model_path_item,
+)
 import types
 
 try:
@@ -2133,10 +2138,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 video_for_hash = video_for_hash.to(dtype=vae_dtype)
             video_hash = _hash_tensor_content_cpu(video_for_hash)
             prompt_hash = self.hash(
-                {
+                {  
                     "fn": "vae_encode",
                     "component": component_name,
                     "vae_id": str(vae_id),
+                    "use_tiny_vae": str(use_tiny_vae),
                     "video_hash": video_hash,
                     "video_shape": tuple(video.shape),
                     "vae_dtype": str(vae_dtype),
@@ -2621,6 +2627,13 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         components_cfg = self.config.get("components", [])
         if not isinstance(components_cfg, list):
             return
+        model_download_profile = get_effective_model_download_profile()
+        hardware_profile = detect_hardware_memory_profile()
+        manifest_metadata = (
+            self.config.get("metadata")
+            if isinstance(self.config.get("metadata"), dict)
+            else {}
+        )
 
         # -------------------------------------------------------------
         # Pre-pass: resolve `type: extra_model_path` pseudo-components.
@@ -2651,44 +2664,32 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             raw_model_paths = pseudo.get("model_paths", pseudo.get("model_path"))
             selected_source: str | None = None
             selected_label = pseudo.get("name") or pseudo.get("label")
+            selected_spec = None
+            if selected_label:
+                selected_spec = self.selected_components.get(selected_label)
+            if selected_spec is None and isinstance(target_ref, str):
+                selected_spec = self.selected_components.get(target_ref)
 
-            if isinstance(raw_model_paths, str):
-                selected_source = raw_model_paths
-            elif isinstance(raw_model_paths, list) and raw_model_paths:
-                # Choose variant using selected_components keyed by label/name, then fallback.
-                selected_item = None
-                if selected_label:
-                    selected_item = self.selected_components.get(selected_label)
-                if not isinstance(selected_item, dict):
-                    selected_item = (
-                        raw_model_paths[0]
-                        if isinstance(raw_model_paths[0], dict)
-                        else None
-                    )
+            candidate_paths: list[Any]
+            if isinstance(raw_model_paths, list):
+                candidate_paths = raw_model_paths
+            elif raw_model_paths is None:
+                candidate_paths = []
+            else:
+                candidate_paths = [raw_model_paths]
 
-                if isinstance(selected_item, dict):
-                    desired_variant = selected_item.get("variant")
-                    # Find matching variant entry; fallback to first dict entry with a path.
-                    for item in raw_model_paths:
-                        if not isinstance(item, dict):
-                            continue
-                        if (
-                            desired_variant is None
-                            or item.get("variant") == desired_variant
-                        ):
-                            selected_source = selected_item.get(
-                                "path", item.get("path")
-                            )
-                            break
-                    if selected_source is None:
-                        for item in raw_model_paths:
-                            if isinstance(item, dict) and item.get("path"):
-                                selected_source = str(item.get("path"))
-                                break
-            elif isinstance(raw_model_paths, dict):
-                p = raw_model_paths.get("path")
-                if isinstance(p, str):
-                    selected_source = p
+            selected_item = select_model_path_item(
+                candidate_paths,
+                selected_model_spec=selected_spec,
+                component_type="extra_model_path",
+                manifest_metadata=manifest_metadata,
+                model_download_profile=model_download_profile,
+                hardware_profile=hardware_profile,
+            )
+            if isinstance(selected_item, dict):
+                selected_source_val = selected_item.get("path")
+                if isinstance(selected_source_val, str) and selected_source_val.strip():
+                    selected_source = selected_source_val
 
             if not selected_source:
                 continue
@@ -2921,41 +2922,48 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             else:
                 model_path = component.get("model_path")
                 if isinstance(model_path, list):
-                    selected_model_item = self.selected_components.get(
+                    selected_model_spec = self.selected_components.get(
                         component_name,
                         self.selected_components.get(component_type, None),
                     )
-                    if not selected_model_item:
-                        # take the first model path item
-                        selected_model_item = model_path[0]
+                    selected_model_item = select_model_path_item(
+                        model_path,
+                        selected_model_spec=selected_model_spec,
+                        component_type=str(component_type or ""),
+                        manifest_metadata=manifest_metadata,
+                        model_download_profile=model_download_profile,
+                        hardware_profile=hardware_profile,
+                    )
 
-                    for model_path_item in model_path:
-                        if selected_model_item.get("variant") == model_path_item.get(
-                            "variant"
-                        ):
-                            component["model_path"] = selected_model_item.get(
-                                "path", model_path_item.get("path")
+                    selected_model_path: Optional[str] = None
+                    if isinstance(selected_model_item, dict):
+                        p = selected_model_item.get("path")
+                        if isinstance(p, str) and p.strip():
+                            selected_model_path = p
+                        if isinstance(selected_model_item.get("key_map"), dict):
+                            component["key_map"] = selected_model_item.get("key_map")
+                        if isinstance(selected_model_item.get("extra_kwargs"), dict):
+                            component["extra_kwargs"] = selected_model_item.get(
+                                "extra_kwargs"
                             )
-                            if isinstance(model_path_item.get("key_map"), dict):
-                                component["key_map"] = model_path_item.get("key_map")
-                            if isinstance(model_path_item.get("extra_kwargs"), dict):
-                                component["extra_kwargs"] = model_path_item.get(
-                                    "extra_kwargs"
-                                )
 
-                    if isinstance(component["model_path"], list):
-                        # get the first item that is not None
-                        component["model_path"] = next(
-                            item.get("path")
-                            for item in component["model_path"]
-                            if item.get("path") is not None
-                        )
+                    if not selected_model_path:
+                        for item in model_path:
+                            if isinstance(item, dict) and isinstance(item.get("path"), str):
+                                selected_model_path = str(item.get("path"))
+                                break
+                            if isinstance(item, str) and item.strip():
+                                selected_model_path = item
+                                break
 
-                    path = self.is_downloaded(component["model_path"], components_path)
+                    if not selected_model_path:
+                        new_components_cfg.append(component)
+                        continue
 
+                    path = self.is_downloaded(selected_model_path, components_path)
                     if path is None:
                         component["model_path"] = self._download(
-                            component["model_path"],
+                            selected_model_path,
                             components_path,
                             progress_callback=_emit_download_progress,
                         )
