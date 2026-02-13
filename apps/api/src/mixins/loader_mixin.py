@@ -259,7 +259,24 @@ class LoaderMixin(DownloadMixin):
                 pydash.merge(config, self._load_json(config_path))
                 
         init_config = True
- 
+
+        @torch.compiler.disable()
+        def _create_model_from_config():
+            """Create model from config under init_empty_weights. Disable torch.compile to avoid
+            RecursionError when init_weights runs ops (e.g. clamp) on meta tensors."""
+            if expects_pretrained_config:
+                config_class = getattr(model_class, "config_class", _PretrainedConfig())
+                conf = config_class(**config)
+                if hasattr(model_class, "_from_config"):
+                    return model_class._from_config(conf, **extra_kwargs)
+                return model_class.from_config(conf, **extra_kwargs)
+            if hasattr(model_class, "_from_config"):
+                return model_class._from_config(config, **extra_kwargs)
+            try:
+                return model_class.from_config(config, **extra_kwargs)
+            except Exception as e:
+                return None
+
         with init_empty_weights():
             # Check the constructor signature to determine what it expects
             sig = inspect.signature(model_class.__init__)
@@ -286,30 +303,14 @@ class LoaderMixin(DownloadMixin):
                 ):
                     expects_pretrained_config = True
 
-            if expects_pretrained_config:
-                # Use the model's specific config class if available, otherwise fall back to PretrainedConfig
-                config_class = getattr(model_class, "config_class", PretrainedConfig)
-                conf = config_class(**config)
-                if hasattr(model_class, "_from_config"):
-                    model = model_class._from_config(conf, **extra_kwargs)
-                else:
-                    model = model_class.from_config(conf, **extra_kwargs)
-            else:
-                if hasattr(model_class, "_from_config"):
-                    model = model_class._from_config(config, **extra_kwargs)
-                else:
-                    try:
-                        model = model_class.from_config(config, **extra_kwargs)
-                    except Exception as e:
-                        traceback.print_exc()
-                        init_config = False
-                        # try just straight from_pretrained
+            model = _create_model_from_config()
+            if model is None:
+                init_config = False
                     
         if not init_config:
             try:
                 model = model_class.from_pretrained(model_path, **extra_kwargs)
             except Exception as e:
-                traceback.print_exc()
                 # as last resort just plug the wholr component into the model
                 model = model_class(**component)
                 

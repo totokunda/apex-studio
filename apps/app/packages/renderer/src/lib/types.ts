@@ -376,6 +376,8 @@ export type ModelClipProps = ClipProps & {
   previewPath?: string;
   type: "model";
   manifest: ManifestDocument;
+  // Currently selected manifest variant id for this clip.
+  variantId?: string;
   /** The parent model group (family) this clip belongs to.
    *  When present, enables variant selection in the properties panel. */
   group?: ManifestGroup;

@@ -2065,6 +2065,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             )
         else:
             denormalized_latents = latents
+        
+        if not vae_tile_kwargs or vae_tile_kwargs is None:
+            vae_tile_kwargs = {}
 
         self.enable_vae_tiling(component_name=component_name, **vae_tile_kwargs)
 
@@ -2162,7 +2165,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 return latents.to(dtype=dtype)
 
         video = video.to(dtype=getattr(self, component_name).dtype, device=self.device)
-
+        if not vae_tile_kwargs or vae_tile_kwargs is None:
+            vae_tile_kwargs = {}
         self.enable_vae_tiling(component_name=component_name, **vae_tile_kwargs)
 
         latents = getattr(self, component_name).encode(video, return_dict=False)[0]

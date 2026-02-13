@@ -45,7 +45,7 @@ class LTX2TI2VEngine(LTX2Shared):
         audio_rescale_scale: float = 0.0,
         audio_modality_scale: float = 1.0,
         audio_skip_step: int = 0,
-        tile_size: int = 512,
+        vae_tile_size: int = 512,
         image: Optional[InputImage] = None,
         last_image: Optional[InputImage] = None,
         audio: Optional[InputAudio] = None,
@@ -69,7 +69,7 @@ class LTX2TI2VEngine(LTX2Shared):
         
         num_frames = self._parse_num_frames(duration, fps)
 
-        tiling_config = _build_tiling_config(tile_size=tile_size, fps=fps)
+        tiling_config = _build_tiling_config(tile_size=vae_tile_size, fps=fps)
         
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
@@ -203,7 +203,6 @@ class LTX2TI2VEngine(LTX2Shared):
             self.load_component_by_type("transformer")
         self.to_device(self.transformer)
         dtype = self.component_dtypes["transformer"]
-        
         
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_1_output_shape,

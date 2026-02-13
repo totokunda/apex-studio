@@ -87,6 +87,7 @@ class WanSVIEngine(WanShared):
                 offload=offload,
                 dtype=torch.float32,
                 normalize_latents_dtype=torch.float32,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
             )[0]
         else:
             end_image_latent = None
@@ -97,6 +98,7 @@ class WanSVIEngine(WanShared):
             offload=offload,
             dtype=torch.float32,
             normalize_latents_dtype=torch.float32,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
         )[0]
         total_latents = (num_frames - 1) // 4 + 1
 
@@ -232,7 +234,10 @@ class WanSVIEngine(WanShared):
         )
         msk = msk.view(1, msk.shape[1] // 4, 4, height // 8, width // 8)
         msk = msk.transpose(1, 2)[0]
-        y = self.vae_encode(vae_input.unsqueeze(0))[0]
+        y = self.vae_encode(
+            vae_input.unsqueeze(0),
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+        )[0]
         y = torch.concat([msk, y])
         y = y.unsqueeze(0)
         return y
@@ -277,6 +282,10 @@ class WanSVIEngine(WanShared):
         easy_cache_cutoff_steps: int | None = None,
         chunking_profile: str = "none",
         rope_on_cpu: bool = False,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         """
@@ -287,6 +296,12 @@ class WanSVIEngine(WanShared):
         - [0.20, 0.95]: per-clip generation (mapped per clip; includes denoise + decode/stitch)
         - [0.95, 1.00]: finalization / return
         """
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
         if (
             high_noise_guidance_scale is not None
             and low_noise_guidance_scale is not None
@@ -595,7 +610,11 @@ class WanSVIEngine(WanShared):
                     0.90,
                     f"Clip {clip_idx_1}/{num_clips}: decoding latents to frames",
                 )
-                video = self.vae_decode(latents, offload=offload)
+                video = self.vae_decode(
+                    latents,
+                    offload=offload,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+                )
 
                 # ── Wavelet colour correction ──────────────────────────────
                 # Match each clip's colour palette to the original input image
