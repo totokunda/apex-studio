@@ -2511,7 +2511,13 @@ def _execute_preprocessor(
         result_path = cache.save_result(result)
         logger.info(f"Result saved to {result_path}")
 
-        send_progress(1.0, "Result saved")
+        # Check if any frames failed to decode and warn the user
+        failed_message = cache.get_failed_frames_message()
+        if failed_message:
+            logger.warning(failed_message)
+            send_progress(1.0, failed_message, {"status": "complete"})
+        else:
+            send_progress(1.0, "Result saved", {"status": "complete"})
 
         # Post-pass: make preprocessor MP4s more iframe/editor-friendly (best-effort).
         # (Only applies to MP4; alpha-channel preprocessors typically output WebM.)
@@ -3424,8 +3430,8 @@ def _run_engine_from_manifest_impl(
             else render_on_step_callback
         )
 
-        if _bool_env("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
-            _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
+        # if _bool_env("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
+        _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
 
         # get if the model is video or image
         if has_fps:

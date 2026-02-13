@@ -34,6 +34,11 @@ class QwenImageT2IEngine(QwenImageShared):
         **kwargs,
     ):
 
+        from loguru import logger
+        import os
+        logger.info(f"\n\nENABLE_IMAGE_RENDER_STEP: {os.environ.get('ENABLE_IMAGE_RENDER_STEP', 'true')}\n\n")
+        logger.info(f"\n\nrender_on_step: {render_on_step}\n\n")
+
         use_cfg_guidance = true_cfg_scale > 1.0 and negative_prompt is not None
         safe_emit_progress(progress_callback, 0.0, "Starting text-to-image pipeline")
         if not self.text_encoder:

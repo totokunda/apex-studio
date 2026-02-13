@@ -69,6 +69,7 @@ class AuxillaryCache:
         self._metadata = None
         self.cached_frames = set()
         self.non_cached_frames = dict()
+        self.failed_frames = []  # Track frames that couldn't be decoded
 
         os.makedirs(self.cache_path, exist_ok=True)
         if self.type == "video":
@@ -196,27 +197,32 @@ class AuxillaryCache:
             "frame_count": frame_count,
         }, cap
 
-    def _read_video_frame(self, frame_index: int) -> np.ndarray:
+    def _read_video_frame(self, frame_index: int) -> Optional[np.ndarray]:
         """
         Read a single frame as an RGB numpy array (H, W, C).
+        Returns None if frame cannot be read.
         """
         self._video.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
         ok, frame = self._video.read()
         if not ok or frame is None:
-            raise ValueError(f"Failed to read frame {frame_index} from video")
+            return None
         # OpenCV returns BGR; convert to RGB.
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    def _read_video_frames_batch(self, frame_indices: list[int]) -> list[np.ndarray]:
+    def _read_video_frames_batch(self, frame_indices: list[int]) -> list[tuple[int, Optional[np.ndarray]]]:
         """
         Read a list of frames (as RGB arrays) for the given indices.
+        Returns list of (frame_index, frame) tuples where frame may be None if unreadable.
         """
         if not frame_indices:
             return []
-        frames: list[np.ndarray] = []
+        results: list[tuple[int, Optional[np.ndarray]]] = []
         for i in frame_indices:
-            frames.append(self._read_video_frame(int(i)))
-        return frames
+            frame = self._read_video_frame(int(i))
+            results.append((int(i), frame))
+            if frame is None:
+                self.failed_frames.append(int(i))
+        return results
 
     def _read_cached_result_frames_first_n(self, n: int) -> list[np.ndarray]:
         """
@@ -403,6 +409,31 @@ class AuxillaryCache:
     def image(self):
         return self._image
 
+    def get_failed_frames_message(self) -> Optional[str]:
+        """
+        Get a warning message about frames that couldn't be decoded.
+        Returns None if no frames failed.
+        """
+        if not self.failed_frames:
+            return None
+        
+        frame_range = self._get_video_frame_range()
+        total_requested = len(list(frame_range))
+        failed_count = len(self.failed_frames)
+        
+        if failed_count <= 5:
+            frames_list = ", ".join(str(f) for f in sorted(self.failed_frames))
+            return (
+                f"Warning: {failed_count} of {total_requested} frames could not be decoded: "
+                f"frames {frames_list}. Video metadata may be incorrect or frames may be corrupted."
+            )
+        else:
+            frames_sample = ", ".join(str(f) for f in sorted(self.failed_frames)[:5])
+            return (
+                f"Warning: {failed_count} of {total_requested} frames could not be decoded "
+                f"(first 5: {frames_sample}...). Video metadata may be incorrect or frames may be corrupted."
+            )
+
     def video_frames(self, batch_size: int = 1):
         """Generator that yields frames iteratively to avoid memory overload"""
         frame_range = self._get_video_frame_range()
@@ -427,7 +458,9 @@ class AuxillaryCache:
                 raise ValueError(f"Failed to read frames from video") from e
 
             # Map frame indices to output positions and yield frames
-            for idx, frame_idx in enumerate(batch_indices):
-                output_idx = len(self.non_cached_frames)
-                self.non_cached_frames[frame_idx] = output_idx
-                yield frames_batch[idx]
+            # Skip frames that couldn't be read (None)
+            for frame_idx, frame in frames_batch:
+                if frame is not None:
+                    output_idx = len(self.non_cached_frames)
+                    self.non_cached_frames[frame_idx] = output_idx
+                    yield frame
