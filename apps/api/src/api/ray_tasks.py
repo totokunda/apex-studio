@@ -1970,11 +1970,6 @@ def download_unified(
                 overall_progress = max(0.0, min(1.0, overall_progress))
                 self.last_overall = overall_progress
 
-                if filename:
-                    filename_parts = filename.split("_")
-                    if len(filename_parts) > 1:
-                        filename_parts = filename_parts[1:]
-                    filename = "_".join(filename_parts)
 
                 meta = {"label": label, "bucket": norm_type}
                 if downloaded is not None:
