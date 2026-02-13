@@ -11,6 +11,7 @@ export class HardwareAccelerationModule implements AppModule {
   enable({ app }: ModuleContext): Promise<void> | void {
     if (this.#shouldBeDisabled) {
       app.disableHardwareAcceleration();
+      app.getGPUInfo("complete").then(console.log);
     }
   }
 
