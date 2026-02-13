@@ -137,14 +137,6 @@ spec:
       chunking_profile: balanced
   ui:
     panels:
-    - name: input
-      label: Input
-      collapsible: true
-      default_open: true
-      layout:
-        flow: column
-        rows:
-        - - image
     - name: prompting
       label: Prompting
       collapsible: true
@@ -205,25 +197,16 @@ spec:
         - - vae_tile_sample_stride_height
         - - vae_tile_sample_stride_width
     inputs:
-    - id: image
-      label: Image
-      description: The input image to generate a video from.
-      type: image
-      panel: input
-      required: false
-      map_h: height
-      map_w: width
-      scale_by: resolution
     - id: prompt
       label: Prompt
-      description: Describe the image you want to generate.
+      description: Describe the video you want to generate.
       placeholder: A beautiful landscape at golden hour.
       type: text
       panel: prompting
       required: true
     - id: negative_prompt
       label: Negative Prompt
-      description: Describe the image you don't want to generate.
+      description: Describe the video you don't want to generate.
       placeholder: blurry, low quality, distorted, artifacts
       type: text
       panel: advanced_prompting
