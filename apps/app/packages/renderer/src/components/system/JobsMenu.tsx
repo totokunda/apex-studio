@@ -197,6 +197,41 @@ const JobsMenu: React.FC = () => {
     }
   }, [jobsById]);
 
+  // Toast on completed jobs with warnings (e.g., frame decoding issues).
+  useEffect(() => {
+    const capitalizeWords = (s: string) =>
+      String(s || "")
+        .split(/[\s_-]+/g)
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+
+    try {
+      for (const [jobId, job] of Object.entries(jobsById || {})) {
+        const status = (job?.status || "").toLowerCase();
+        // Only check completed jobs
+        if (status !== "complete" && status !== "completed") continue;
+        
+        const msg = (typeof job?.message === "string" && job.message) || "";
+        // Check if message contains a warning
+        if (!msg.toLowerCase().includes("warning:")) continue;
+        
+        const last = lastToastedWarningByJobIdRef.current.get(jobId);
+        if (last === msg) continue;
+        lastToastedWarningByJobIdRef.current.set(jobId, msg);
+        
+        const category = String((job as any)?.category || "job");
+        toast.warning(`${capitalizeWords(category)} Completed with Warnings`, {
+          id: `job-warning-${jobId}`,
+          description: msg,
+          duration: 10000,
+        });
+      }
+    } catch {
+      // best-effort only
+    }
+  }, [jobsById]);
+
   useEngineJobClipSync({
     jobsById,
     setJobsById,
