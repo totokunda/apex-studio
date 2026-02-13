@@ -5,12 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-<<<<<<< Updated upstream
-    "build": "tsc && vite build",
-    "postbuild": "node scripts/prune-filters.mjs",
-=======
     "build": "tsc && NODE_OPTIONS='--max-old-space-size=8192' vite build",
->>>>>>> Stashed changes
     "preview": "vite preview"
   },
   "dependencies": {

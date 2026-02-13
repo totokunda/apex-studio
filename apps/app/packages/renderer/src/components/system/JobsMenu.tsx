@@ -216,9 +216,9 @@ const JobsMenu: React.FC = () => {
         // Check if message contains a warning
         if (!msg.toLowerCase().includes("warning:")) continue;
         
-        const last = lastToastedWarningByJobIdRef.current.get(jobId);
+        const last = lastToastedErrorByJobIdRef.current.get(jobId);
         if (last === msg) continue;
-        lastToastedWarningByJobIdRef.current.set(jobId, msg);
+        lastToastedErrorByJobIdRef.current.set(jobId, msg);
         
         const category = String((job as any)?.category || "job");
         toast.warning(`${capitalizeWords(category)} Completed with Warnings`, {
