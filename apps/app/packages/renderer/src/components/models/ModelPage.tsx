@@ -432,6 +432,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
                       trimStart: Infinity,
                       speed: 1.0,
                       manifest: variantManifest,
+                      variantId: activeVariant?.id ? String(activeVariant.id) : undefined,
                     };
                     if (parentGroup) {
                       clipBase.group = parentGroup;

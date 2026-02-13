@@ -49,6 +49,7 @@ import { getOffloadDefaultsForManifest } from "@app/preload";
 
 import { ManifestWithType } from "@/lib/manifest/api";
 import { useViewportStore } from "@/lib/viewport";
+import { resolveManifestVariantId } from "@/lib/manifest/variantStorageKey";
 
 interface TimelineEditorProps {}
 
@@ -981,6 +982,10 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
         // Carry the parent group so the properties panel can offer variant selection
         if ((manifest as any)._group) {
           (newClip as ModelClipProps).group = (manifest as any)._group;
+          (newClip as ModelClipProps).variantId = resolveManifestVariantId({
+            group: (manifest as any)._group,
+            manifest,
+          });
         }
         addClip(newClip as AnyClipProps);
         controlStore.toggleClipSelection((newClip as AnyClipProps).clipId);

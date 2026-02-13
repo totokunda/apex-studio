@@ -43,6 +43,10 @@ class WanSCAILEngine(WanShared):
         expand_timesteps: bool = False,
         rope_on_cpu: bool = False,
         enhance_kwargs: Dict[str, Any] = {},
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         """
@@ -51,6 +55,13 @@ class WanSCAILEngine(WanShared):
         Segments overlap by `segment_overlap_frames` (dropped from later segments)
         to keep temporal alignment stable.
         """
+        
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         def _pad_video_frames(frames: List[Image.Image], num_target_frames: int):
             if len(frames) >= num_target_frames:
@@ -320,6 +331,7 @@ class WanSCAILEngine(WanShared):
                 dtype=torch.float32,
                 normalize_latents_dtype=torch.float32,
                 offload_type="cpu",
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None)
             )
 
             if reference_latents.shape[0] == 1 and batch_size > 1:
@@ -361,6 +373,7 @@ class WanSCAILEngine(WanShared):
                 dtype=latents.dtype,
                 normalize_latents_dtype=latents.dtype,
                 offload_type="cpu" if do_segment else "discard",
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None)
             )
 
             if pose_latents.shape[0] == 1 and batch_size > 1:
@@ -415,7 +428,7 @@ class WanSCAILEngine(WanShared):
                     num_inference_steps=num_inference_steps_segment,
                     chunking_profile=chunking_profile,
                 )
-            out_frames = self.vae_decode(latents, offload=offload)
+            out_frames = self.vae_decode(latents, offload=offload, vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None))
             if do_segment:
                 out_frames = out_frames.detach().to("cpu")
             if do_segment and i > 0 and segment_overlap_frames > 0:

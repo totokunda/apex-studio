@@ -40,12 +40,22 @@ class WanFFLFEngine(WanShared):
         boundary_ratio: float | None = None,
         ip_image: Image.Image | str | np.ndarray | torch.Tensor = None,
         enhance_kwargs: Dict[str, Any] = {},
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         """
         First Frame Last Frame generation method.
         Generates video content conditioned on both first and last frames.
         """
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         safe_emit_progress(progress_callback, 0.0, "Starting FFLF pipeline")
 
@@ -231,6 +241,7 @@ class WanFFLFEngine(WanShared):
             sample_mode="mode",
             dtype=latents.dtype,
             normalize_latents_dtype=latents.dtype,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
         )
 
         batch_size, _, _, latent_height, latent_width = latents.shape
@@ -316,7 +327,11 @@ class WanFFLFEngine(WanShared):
             return latents
         else:
             safe_emit_progress(progress_callback, 0.94, "Decoding latents to video")
-            video = self.vae_decode(latents, offload=offload)
+            video = self.vae_decode(
+                latents,
+                offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+            )
             safe_emit_progress(progress_callback, 0.96, "Decoded latents to video")
             postprocessed_video = self._tensor_to_frames(video)
             safe_emit_progress(progress_callback, 1.0, "Completed FFLF pipeline")

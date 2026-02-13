@@ -1342,17 +1342,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 >
                   <SelectTrigger
                     size="sm"
-                    className="w-full h-7.5! text-[11px] bg-brand-background/70 rounded-[6px]"
+                    className="w-full h-7.5! text-[11px] font-medium! bg-brand-background/70 rounded-[6px]"
                   >
                     <SelectValue placeholder="Select profile" />
                   </SelectTrigger>
                   <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
-                    <SelectItem value="auto" className="text-[11px] font-medium">
+                    <SelectItem value="auto" className="text-[10.5px] font-medium!">
                       Automatic (Recommended)
                     </SelectItem>
                     <SelectItem
                       value="maximum_performance"
-                      className="text-[11px] font-medium"
+                      className="text-[10.5px] font-medium!"
                     >
                       Maximum Performance (Full Models)
                     </SelectItem>

@@ -67,7 +67,7 @@ spec:
         min_vram_gb: 10
         recommended_vram_gb: 14
     - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 3452498544
@@ -75,7 +75,7 @@ spec:
         min_vram_gb: 8
         recommended_vram_gb: 12
     - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 3660614016
@@ -83,7 +83,7 @@ spec:
         min_vram_gb: 7
         recommended_vram_gb: 11
     - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q6_k.gguf
-      variant: GGUF_Q6_K
+      variant: Q6
       precision: q6_k
       type: gguf
       file_size: 2853998976
@@ -91,7 +91,7 @@ spec:
         min_vram_gb: 6
         recommended_vram_gb: 10
     - path: totoku/apex-models/SeedVR2-3B/transformer/transformer-q4_k_m.gguf
-      variant: GGUF_Q4_K_M
+      variant: Q4
       precision: q4_k_m
       type: gguf
       file_size: 1995344256

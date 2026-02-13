@@ -12,21 +12,21 @@ import { generatePosterCanvas } from "@/lib/media/timeline";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import { pathToFileURLString } from "@app/preload";
 import { useControlsStore } from "@/lib/control";
-
-const getManifestStorageKey = (manifest: any): string => {
-  const mfId = String(manifest?.metadata?.id || "").trim();
-  if (mfId) return mfId;
-  const fallbackId = String(manifest?.id || "").trim();
-  if (fallbackId) return fallbackId;
-  return "__default__";
-};
+import {
+  getVariantScopedValue,
+  getVariantStorageKey,
+  getVariantStorageLookupKeys,
+} from "@/lib/manifest/variantStorageKey";
 
 const extractManifestInputValues = (manifest: any): Record<string, any> => {
   const ui = manifest?.spec?.ui || manifest?.ui;
   const inputs = Array.isArray(ui?.inputs) ? ui.inputs : [];
   const out: Record<string, any> = {};
+  const seen = new Set<string>();
   for (const inp of inputs) {
     if (!inp || typeof inp.id !== "string") continue;
+    if (seen.has(inp.id)) continue;
+    seen.add(inp.id);
     if (inp.value !== undefined) out[inp.id] = inp.value;
   }
   return out;
@@ -42,13 +42,15 @@ const cloneManifestWithInputValues = (
   } catch {
     cloned = { ...manifest };
   }
-  if (!values || Object.keys(values).length === 0) return cloned;
   const ui = cloned?.spec?.ui || cloned?.ui;
   if (!ui || !Array.isArray(ui.inputs)) return cloned;
   ui.inputs = ui.inputs.map((inp: any) => {
     if (!inp || typeof inp.id !== "string") return inp;
-    if (!Object.prototype.hasOwnProperty.call(values, inp.id)) return inp;
-    return { ...inp, value: values[inp.id] };
+    const { value: _existingValue, ...rest } = inp;
+    if (!values || !Object.prototype.hasOwnProperty.call(values, inp.id)) {
+      return rest;
+    }
+    return { ...rest, value: values[inp.id] };
   });
   return cloned;
 };
@@ -174,7 +176,11 @@ export const ModelGenerationProperties: React.FC<
         if (!currentClip) return;
 
         const currentManifest = currentClip.manifest;
-        const currentKey = getManifestStorageKey(currentManifest);
+        const currentKey = getVariantStorageKey({
+          group: currentClip.group,
+          manifest: currentManifest,
+          preferredVariantId: currentClip.variantId,
+        });
         const currentValues = extractManifestInputValues(currentManifest);
         const nextInputValuesByVariant = {
           ...(currentClip.modelInputValuesByVariant || {}),
@@ -191,21 +197,40 @@ export const ModelGenerationProperties: React.FC<
         const targetVariant = resolveVariantForGeneration(currentClip, gen);
         let targetManifest = currentManifest;
         let targetKey = currentKey;
+        let targetValues = getVariantScopedValue(nextInputValuesByVariant, [
+          currentKey,
+        ]);
+        let targetVariantId = currentClip.variantId;
         if (targetVariant?.manifest) {
-          targetKey = getManifestStorageKey(targetVariant.manifest);
+          targetVariantId = String((targetVariant as any)?.id || "").trim() || undefined;
+          targetKey = getVariantStorageKey({
+            group: currentClip.group,
+            manifest: targetVariant.manifest,
+            preferredVariantId: targetVariantId,
+          });
+          targetValues = getVariantScopedValue(
+            nextInputValuesByVariant,
+            getVariantStorageLookupKeys({
+              group: currentClip.group,
+              manifest: targetVariant.manifest,
+              preferredVariantId: targetVariantId,
+              includeLegacy: false,
+            }),
+          );
           targetManifest = cloneManifestWithInputValues(
             targetVariant.manifest,
-            nextInputValuesByVariant[targetKey],
+            targetValues,
           );
         }
 
         // Persist current clip transform into the previously selected generation entry (if any)
         let updates: Partial<ModelClipProps> = {
           assetId: gen.assetId,
+          variantId: targetVariantId,
           manifest: targetManifest,
           modelInputValuesByVariant: nextInputValuesByVariant,
           selectedComponentsByVariant: nextSelectedComponentsByVariant,
-          modelInputValues: nextInputValuesByVariant[targetKey],
+          modelInputValues: targetValues,
         };
         try {
           const prevVisibleGen = selectedIndex >= 0 ? visibleGenerations[selectedIndex] : null;
@@ -278,8 +303,19 @@ export const ModelGenerationProperties: React.FC<
           updates.selectedComponents = gen.selectedComponents;
           nextSelectedComponentsByVariant[targetKey] = gen.selectedComponents;
           updates.selectedComponentsByVariant = nextSelectedComponentsByVariant;
-        } else if (nextSelectedComponentsByVariant[targetKey]) {
-          updates.selectedComponents = nextSelectedComponentsByVariant[targetKey];
+        } else {
+          const selectedForVariant = getVariantScopedValue(
+            nextSelectedComponentsByVariant,
+            getVariantStorageLookupKeys({
+              group: currentClip.group,
+              manifest: targetManifest,
+              preferredVariantId: targetVariantId,
+              includeLegacy: !targetVariantId,
+            }),
+          );
+          if (selectedForVariant) {
+            updates.selectedComponents = selectedForVariant;
+          }
         }
         updateClip(clipId, updates);
       } catch {}

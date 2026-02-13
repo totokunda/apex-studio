@@ -98,7 +98,7 @@ spec:
         min_vram_gb: 17
         recommended_vram_gb: 23
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 6731313000
@@ -106,7 +106,7 @@ spec:
         min_vram_gb: 15
         recommended_vram_gb: 20
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 7027437536
@@ -131,7 +131,7 @@ spec:
         min_vram_gb: 16
         recommended_vram_gb: 22
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 5092350248
@@ -139,7 +139,7 @@ spec:
         min_vram_gb: 13
         recommended_vram_gb: 18
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 5398999872
@@ -147,7 +147,7 @@ spec:
         min_vram_gb: 13
         recommended_vram_gb: 18
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q6_k.gguf
-      variant: GGUF_Q6_K
+      variant: Q6
       precision: q6_k
       type: gguf
       file_size: 4210504512
@@ -155,7 +155,7 @@ spec:
         min_vram_gb: 11
         recommended_vram_gb: 15
     - path: totoku/apex-models/Wan2.2-TI2V-5B/transformer/transformer-q4_k_m.gguf
-      variant: GGUF_Q4_K_M
+      variant: Q4
       precision: q4_k_m
       type: gguf
       file_size: 2945332032
@@ -172,6 +172,10 @@ spec:
       text_encoder_kwargs:
         use_attention_mask: true
       attention_kwargs: {}
+      vae_tile_sample_min_height: 256
+      vae_tile_sample_min_width: 256
+      vae_tile_sample_stride_height: 192
+      vae_tile_sample_stride_width: 192
       rope_on_cpu: false
       chunking_profile: balanced
   ui:

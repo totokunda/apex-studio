@@ -102,7 +102,11 @@ class WanAnimateEngine(WanShared):
             # Like in prepare_latents, assume len(generator) == batch_size
             ref_image_latents = [
                 self.vae_encode(
-                    image, sample_generator=g, sample_mode=sample_mode, offload=offload
+                    image,
+                    sample_generator=g,
+                    sample_mode=sample_mode,
+                    offload=offload,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
                 )
                 for g in generator
             ]
@@ -113,6 +117,7 @@ class WanAnimateEngine(WanShared):
                 sample_generator=generator,
                 sample_mode=sample_mode,
                 offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
             )
         # Handle the case where we supply one image and one generator, but batch_size > 1 (e.g. generating multiple
         # videos per prompt)
@@ -226,6 +231,7 @@ class WanAnimateEngine(WanShared):
                         sample_generator=g,
                         sample_mode=sample_mode,
                         offload=offload,
+                        vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
                     )
                     for i, g in enumerate(generator)
                 ]
@@ -237,6 +243,7 @@ class WanAnimateEngine(WanShared):
                         sample_mode=sample_mode,
                         generator=g,
                         offload=offload,
+                        vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
                     )
                     for g in generator
                 ]
@@ -252,6 +259,7 @@ class WanAnimateEngine(WanShared):
                 sample_generator=generator,
                 sample_mode=sample_mode,
                 offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
             )
 
         # Prepare I2V mask
@@ -317,6 +325,7 @@ class WanAnimateEngine(WanShared):
                     sample_generator=g,
                     sample_mode=sample_mode,
                     offload=offload,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
                 )
                 for g in generator
             ]
@@ -327,6 +336,7 @@ class WanAnimateEngine(WanShared):
                 sample_generator=generator,
                 sample_mode=sample_mode,
                 offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
             )
         if pose_latents.shape[0] == 1 and batch_size > 1:
             pose_latents = pose_latents.expand(batch_size, -1, -1, -1, -1)
@@ -421,8 +431,18 @@ class WanAnimateEngine(WanShared):
         render_step_interval: int = 3,
         attention_kwargs: Dict[str, Any] = None,
         chunking_profile: str = "none",
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ) -> OutputVideo:
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         safe_emit_progress(progress_callback, 0.0, "Starting animate pipeline")
         if mode == "animate":
@@ -733,7 +753,11 @@ class WanAnimateEngine(WanShared):
                 render_on_step=render_on_step,
             )
 
-            out_frames = self.vae_decode(latents[:, :, 1:], offload=offload)
+            out_frames = self.vae_decode(
+                latents[:, :, 1:],
+                offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+            )
             video = self._tensor_to_frames(out_frames)
             if start > 0:
                 out_frames = out_frames[:, :, prev_segment_conditioning_frames:]
@@ -764,7 +788,10 @@ class WanAnimateEngine(WanShared):
         return video
 
     def _render_step(self, latents, render_on_step_callback):
-        video = self.vae_decode(latents)
+        video = self.vae_decode(
+            latents,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+        )
         total_video = torch.cat(self._preview_all_out_frames + [video], dim=2)[
             :, :, : self._cond_video_frames
         ]

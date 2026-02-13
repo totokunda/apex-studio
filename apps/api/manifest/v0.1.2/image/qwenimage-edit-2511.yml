@@ -82,7 +82,7 @@ spec:
         min_vram_gb: 19
         recommended_vram_gb: 26
     - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 8839637196
@@ -90,7 +90,7 @@ spec:
         min_vram_gb: 15
         recommended_vram_gb: 20
     - path: totoku/apex-models/Qwen-Image/text_encoder/text_encoder-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 9452685216
@@ -115,7 +115,7 @@ spec:
         min_vram_gb: 35
         recommended_vram_gb: 47
     - path: totoku/apex-models/Qwen-Image-Edit-2511/transformer/transformer-fp8_e4m3fn.safetensors
-      variant: FP8_E4M3FN
+      variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
       file_size: 20476801832
@@ -123,7 +123,7 @@ spec:
         min_vram_gb: 24
         recommended_vram_gb: 32
     - path: totoku/apex-models/Qwen-Image-Edit-2511/transformer/transformer-q8_0.gguf
-      variant: GGUF_Q8_0
+      variant: Q8
       precision: q8_0
       type: gguf
       file_size: 21761817184
@@ -131,7 +131,7 @@ spec:
         min_vram_gb: 22
         recommended_vram_gb: 30
     - path: totoku/apex-models/Qwen-Image-Edit-2511/transformer/transformer-q6_k.gguf
-      variant: GGUF_Q6_K
+      variant: Q6
       precision: q6_k
       type: gguf
       file_size: 16824990304
@@ -139,7 +139,7 @@ spec:
         min_vram_gb: 15
         recommended_vram_gb: 20
     - path: totoku/apex-models/Qwen-Image-Edit-2511/transformer/transformer-q4_k_m.gguf
-      variant: GGUF_Q4_K_M
+      variant: Q4
       precision: q4_k_m
       type: gguf
       file_size: 11569658464

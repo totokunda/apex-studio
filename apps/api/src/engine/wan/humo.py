@@ -47,7 +47,10 @@ class HuMoEngine(WanShared):
                 img = self._load_image(_image)
                 img, height, width = self._aspect_ratio_resize(img, max_area=h * w)
                 new_img = self.video_processor.preprocess(img).unsqueeze(2)
-                img_vae_latent = self.vae_encode(new_img)[0]
+                img_vae_latent = self.vae_encode(
+                    new_img,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+                )[0]
                 ref_vae_latents.append(img_vae_latent)
 
             return [torch.cat(ref_vae_latents, dim=1)], height, width
@@ -56,7 +59,10 @@ class HuMoEngine(WanShared):
             # Calculate the required size to keep aspect ratio and fill the rest with padding.
             img, height, width = self._aspect_ratio_resize(img, max_area=h * w)
             new_img = self.video_processor.preprocess(img).unsqueeze(2)
-            img_vae_latent = self.vae_encode(new_img)[0]
+            img_vae_latent = self.vae_encode(
+                new_img,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+            )[0]
             return [img_vae_latent], height, width
 
     def get_audio_emb_window(self, audio_emb, frame_num, frame0_idx, audio_shift=2):
@@ -379,8 +385,18 @@ class HuMoEngine(WanShared):
         aspect_ratio: str | None = None,
         chunking_profile: str = "none",
         rope_on_cpu: bool = False,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         use_cfg_guidance = guidance_scale_t > 1.0 and negative_prompt is not None
 
@@ -484,7 +500,10 @@ class HuMoEngine(WanShared):
             progress_callback, 0.17, "Encoding zero VAE latent (reference)"
         )
         zero_vae = self.vae_encode(
-            zero_video_tensor, offload=offload, sample_mode="mode"
+            zero_video_tensor,
+            offload=offload,
+            sample_mode="mode",
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
         )[0].squeeze(0)
         transformer_config = self.load_config_by_type("transformer")
         noise_shape = noise.shape[2:]
@@ -785,7 +804,11 @@ class HuMoEngine(WanShared):
             return x0
 
         safe_emit_progress(progress_callback, 0.96, "Decoding video")
-        video = self.vae_decode(x0, offload=offload)
+        video = self.vae_decode(
+            x0,
+            offload=offload,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+        )
         video = self._tensor_to_frames(video)
         safe_emit_progress(progress_callback, 1.0, "Completed HuMo pipeline")
         return video
