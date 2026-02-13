@@ -1223,9 +1223,34 @@ const VideoPreview: React.FC<
     ],
   );
 
+  // Debounced worker seek for fast scrubbing (non-accurate seeks).
+  // On Windows, each worker seek message triggers expensive D3D11VA decoder
+  // operations. Without debouncing, rapid focusFrame updates (10-60/sec during
+  // timeline scrubbing) flood the worker with seeks, each partially initialising
+  // before being cancelled. A 60ms window collapses rapid scrub events into a
+  // single seek call, dramatically reducing churn while still feeling responsive.
+  // Accurate seeks (settle / explicit frame locks) bypass the debounce entirely.
+  const debouncedSeekRef = useRef<ReturnType<typeof _.debounce> | null>(null);
+  useEffect(() => {
+    debouncedSeekRef.current = _.debounce(
+      (logicalId: string, timestamp: number) => {
+        // Guard: if playback started during the debounce window, skip the seek.
+        if (isPlayingRef.current) return;
+        decoderManager.seek(logicalId, timestamp, false).catch(() => {});
+      },
+      60,
+      { leading: false, trailing: true },
+    );
+    return () => {
+      debouncedSeekRef.current?.cancel();
+    };
+    // Re-create whenever the decoder manager instance changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decoderManager]);
+
   const seekToCurrentFrame = useCallback(
     async (isAccurateSeekNeededInput: boolean = false) => {
-      
+
 
       // NOTE: Do NOT use `useInputControlsStore.getState()` here:
       // it reads the global fallback store (wrong clip scope) and will return false
@@ -1282,7 +1307,16 @@ const VideoPreview: React.FC<
 
       const logicalId = makeDecoderId(targetAssetId);
 
-      await decoderManager.seek(logicalId, timestamp, isAccurateSeekNeededInput);
+      if (isAccurateSeekNeededInput) {
+        // Accurate seeks (settle / explicit frame lock) fire immediately so the
+        // user gets a sharp frame as soon as they stop scrubbing.
+        debouncedSeekRef.current?.cancel();
+        await decoderManager.seek(logicalId, timestamp, true);
+      } else {
+        // Fast scrub: collapse rapid seek requests into a single worker message
+        // to avoid flooding the D3D11VA decode pipeline on Windows.
+        debouncedSeekRef.current?.(logicalId, timestamp);
+      }
 
       activeDecoderAssetIdRef.current = logicalId;
 
@@ -1362,7 +1396,7 @@ const VideoPreview: React.FC<
             }
           } else {
             const activeProject = getActiveProject();
-            decoderManager.addAsset(asset, {
+            await decoderManager.addAsset(asset, {
               mediaInfo: info,
               videoDecoderConfig: config,
               folderUuid: activeProject?.folderUuid,
@@ -1535,12 +1569,30 @@ const VideoPreview: React.FC<
               skipDrawRef.current = true;
               return;
             }
-            // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
-            while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
-              if (!checkCancel()) return;
-              await new Promise<void>((resolve) =>
-                requestAnimationFrame(() => resolve()),
-              );
+            // If we're ahead of the timeline, wait until the timeline catches up.
+            // On Windows the DWM compositor can delay RAF callbacks by one or
+            // more vsync intervals (16-33ms), causing the decoder to stall
+            // indefinitely when a frame arrives just before a compositor pause.
+            // We use a deadline-aware loop: if the RAF hasn't fired within
+            // 1.5× the expected frame interval, we break out anyway so playback
+            // never stalls under compositor jitter.
+            if (sampleIdx > (localFocus = computeLocalFocusMedia())) {
+              const frameBudgetMs = (1000 / Math.max(1, projectFps)) * 1.5;
+              const deadline = performance.now() + frameBudgetMs;
+              await new Promise<void>((resolve) => {
+                const check = () => {
+                  if (
+                    !checkCancel() ||
+                    sampleIdx <= computeLocalFocusMedia() ||
+                    performance.now() >= deadline
+                  ) {
+                    resolve();
+                  } else {
+                    requestAnimationFrame(check);
+                  }
+                };
+                requestAnimationFrame(check);
+              });
             }
           }
 
