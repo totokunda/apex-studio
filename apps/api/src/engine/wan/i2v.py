@@ -41,6 +41,11 @@ class WanI2VEngine(WanShared):
         enhance_kwargs: Dict[str, Any] = {},
         chunking_profile: str = "none",
         rope_on_cpu: bool = False,
+        use_tiny_vae: bool = False,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         
@@ -312,7 +317,13 @@ class WanI2VEngine(WanShared):
             safe_emit_progress(progress_callback, 1.0, "Returning latents")
             return latents
         else:
-            video = self.vae_decode(latents, offload=offload)
+            video = self.vae_decode(latents, offload=offload,
+                                    use_tiny_vae=use_tiny_vae,
+                                    vae_tile_kwargs={"sample_min_height": 
+                                        vae_tile_sample_min_height, "sample_min_width": 
+                                            vae_tile_sample_min_width, "sample_stride_height":
+                                                vae_tile_sample_stride_height, "sample_stride_width": 
+                                                    vae_tile_sample_stride_width})
             safe_emit_progress(progress_callback, 0.96, "Decoded latents to video")
             postprocessed_video = self._tensor_to_frames(video)
             safe_emit_progress(
