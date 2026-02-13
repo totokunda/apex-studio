@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useClipStore } from "@/lib/clip";
-import { ModelClipProps } from "@/lib/types";
+import { GenerationModelClipProps, ModelClipProps } from "@/lib/types";
 import { ModelInputsPanel } from "./ModelInputsPanel";
 import type {
   UIPanel,
@@ -63,6 +63,72 @@ const cloneManifestWithInputValues = (
     return { ...rest, value: values[inp.id] };
   });
   return cloned as ManifestDocument;
+};
+
+const normalizeId = (value: unknown): string => String(value ?? "").trim();
+
+const resolveVariantIdForGeneration = (
+  generation: GenerationModelClipProps,
+  group: ManifestGroup | undefined,
+): string | undefined => {
+  const byVariantId = normalizeId(generation?.variantId);
+  if (byVariantId) return byVariantId;
+
+  const manifestId = normalizeId(generation?.manifestId);
+  if (!manifestId || !group?.variants?.length) return undefined;
+
+  const matched = group.variants.find((variant) => {
+    const variantId = normalizeId((variant as any)?.id);
+    const metaId = normalizeId((variant as any)?.manifest?.metadata?.id);
+    const manifestDocId = normalizeId((variant as any)?.manifest?.id);
+    return (
+      variantId === manifestId ||
+      metaId === manifestId ||
+      manifestDocId === manifestId
+    );
+  });
+  return normalizeId((matched as any)?.id) || undefined;
+};
+
+const pickLatestGenerationForVariant = (args: {
+  generations?: GenerationModelClipProps[];
+  group?: ManifestGroup;
+  targetVariantId: string;
+  targetManifest?: ManifestDocument;
+}): GenerationModelClipProps | undefined => {
+  const candidates = (args.generations || []).filter(
+    (generation) => !!generation && !!generation.assetId,
+  );
+  if (!candidates.length) return undefined;
+
+  const byVariant = candidates
+    .filter(
+      (generation) =>
+        resolveVariantIdForGeneration(generation, args.group) ===
+        args.targetVariantId,
+    )
+    .sort((a, b) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0));
+  if (byVariant.length) return byVariant[0];
+
+  const targetIds = new Set(
+    [
+      normalizeId(args.targetManifest?.metadata?.id),
+      normalizeId((args.targetManifest as any)?.id),
+      normalizeId(args.targetVariantId),
+    ].filter((id) => id.length > 0),
+  );
+
+  if (targetIds.size === 0) return undefined;
+
+  const byManifest = candidates
+    .filter((generation) => {
+      const manifestId = normalizeId(generation?.manifestId);
+      if (manifestId && targetIds.has(manifestId)) return true;
+      const variantId = normalizeId(generation?.variantId);
+      return variantId ? targetIds.has(variantId) : false;
+    })
+    .sort((a, b) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0));
+  return byManifest[0];
 };
 
 // ── Variant selector ────────────────────────────────────────────────
@@ -170,7 +236,14 @@ const VariantSelector: React.FC<{
   group: ManifestGroup;
   currentManifestId: string | undefined;
   currentVariantId?: string;
-}> = ({ clipId, group, currentManifestId, currentVariantId }) => {
+  isGenerating?: boolean;
+}> = ({
+  clipId,
+  group,
+  currentManifestId,
+  currentVariantId,
+  isGenerating = false,
+}) => {
   const updateClip = useClipStore((s) => s.updateClip);
   const switchingRef = useRef(false);
   const [isVariantDropdownOpen, setIsVariantDropdownOpen] = useState(false);
@@ -225,6 +298,11 @@ const VariantSelector: React.FC<{
           [currentKey]: currentSelectedComponents,
         };
 
+        const targetStorageKey = getVariantStorageKey({
+          group: currentClip.group || group,
+          manifest: targetManifest,
+          preferredVariantId: selectedId,
+        });
         const targetLookupKeys = getVariantStorageLookupKeys({
           group: currentClip.group || group,
           manifest: targetManifest,
@@ -239,6 +317,20 @@ const VariantSelector: React.FC<{
           nextSelectedComponentsByVariant,
           targetLookupKeys,
         );
+        const generationForVariant = pickLatestGenerationForVariant({
+          generations: currentClip.generations,
+          group: currentClip.group || group,
+          targetVariantId: selectedId,
+          targetManifest,
+        });
+        const selectedComponentsForTarget =
+          generationForVariant?.selectedComponents || targetSelectedComponents;
+        const nextSelectedByVariant = selectedComponentsForTarget
+          ? {
+              ...nextSelectedComponentsByVariant,
+              [targetStorageKey]: selectedComponentsForTarget,
+            }
+          : nextSelectedComponentsByVariant;
         const hydratedTargetManifest = cloneManifestWithInputValues(
           targetManifest,
           targetValues,
@@ -247,14 +339,33 @@ const VariantSelector: React.FC<{
         // Swap manifest and clear stale generation/asset state
         const patch: Partial<ModelClipProps> = {
           manifest: hydratedTargetManifest,
-          modelStatus: undefined,
-          assetId: undefined,
+          modelStatus: generationForVariant?.modelStatus ?? undefined,
+          assetId: generationForVariant?.assetId ?? undefined,
           previewPath: undefined,
           variantId: selectedId,
-          selectedComponents: targetSelectedComponents,
+          selectedComponents: selectedComponentsForTarget,
           modelInputValues: targetValues,
           modelInputValuesByVariant: nextInputValuesByVariant,
-          selectedComponentsByVariant: nextSelectedComponentsByVariant,
+          selectedComponentsByVariant: nextSelectedByVariant,
+          transform: generationForVariant?.transform
+            ? { ...(generationForVariant.transform as any) }
+            : (currentClip as any)?.transform,
+          startFrame:
+            typeof generationForVariant?.startFrame === "number"
+              ? generationForVariant.startFrame
+              : (currentClip as any)?.startFrame,
+          endFrame:
+            typeof generationForVariant?.endFrame === "number"
+              ? generationForVariant.endFrame
+              : (currentClip as any)?.endFrame,
+          trimStart:
+            typeof generationForVariant?.trimStart === "number"
+              ? generationForVariant.trimStart
+              : (currentClip as any)?.trimStart,
+          trimEnd:
+            typeof generationForVariant?.trimEnd === "number"
+              ? generationForVariant.trimEnd
+              : (currentClip as any)?.trimEnd,
         } as any;
 
         // Best-effort: fetch offload defaults for the new manifest
@@ -288,6 +399,30 @@ const VariantSelector: React.FC<{
     group?.demo_path;
 
   if (variants.length < 2) return null;
+
+  if (isGenerating) {
+    return (
+      <div className="px-3 pt-3 pb-3 w-full min-w-0 max-w-full overflow-hidden border-b border-brand-light/5 bg-brand-background">
+        <div className="w-full min-h-9 px-3 py-2.5 rounded-[6px] border shadow border-brand-light/5 bg-brand-background-light/80 text-brand-light grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 overflow-hidden">
+          <VariantPreview
+            src={activeVariantPreviewPath}
+            alt={activeVariant?.label || "Variant"}
+            className="h-12 w-12"
+          />
+          <div className="min-w-0 text-left">
+            <p className="text-[12px] font-medium truncate">
+              {activeVariant?.label || "Select variant"}
+            </p>
+            {activeVariant?.description ? (
+              <p className="truncate text-[11px] text-brand-light/80 leading-tight mt-0.5">
+                {activeVariant.description}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-3 pt-3 pb-3 w-full min-w-0 max-w-full overflow-hidden border-b border-brand-light/5 bg-brand-background">
@@ -395,6 +530,8 @@ export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({
   panelSize,
 }) => {
   const clip = useClipStore((s) => s.getClipById(clipId)) as ModelClipProps;
+  const isGenerating =
+    clip?.modelStatus === "pending" || clip?.modelStatus === "running";
 
   // IMPORTANT: use clip.manifest (which carries per-clip input values) for
   // rendering panels/inputs. Using useManifestQuery here would return the
@@ -419,6 +556,7 @@ export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({
                 .trim() || undefined
             }
             currentVariantId={clip?.variantId}
+            isGenerating={isGenerating}
           />
         )}
 
