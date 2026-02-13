@@ -1049,11 +1049,6 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     const activeProject = useProjectsStore.getState().getActiveProject();
     const folderUuid = activeProject?.folderUuid;
 
-
-    console.log("Engine inputs: ", engineInputs);
-    return;
-
-
     const res = await runEngine({
       manifest_id: manifestId,
       inputs: engineInputs,

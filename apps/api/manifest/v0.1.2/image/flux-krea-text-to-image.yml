@@ -60,6 +60,7 @@ spec:
     name: text_encoder
     label: CLIP Text Encoder
     base: CLIPTextModel
+    config_id: FLUX.1-dev/text_encoder
     model_path:
     - path: totoku/apex-models/FLUX.1-dev/text_encoder
       variant: default
