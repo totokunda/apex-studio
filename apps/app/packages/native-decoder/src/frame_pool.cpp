@@ -58,7 +58,7 @@ void FramePool::release(int index) {
             available_[index] = true;
         }
     }
-    cv_.notify_one();
+    cv_.notify_all();
 }
 
 uint8_t* FramePool::getBuffer(int index) const {
@@ -77,6 +77,17 @@ void FramePool::shutdown() {
         shutdown_ = true;
     }
     cv_.notify_all();
+}
+
+bool FramePool::waitUntilAllAvailableFor(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return cv_.wait_for(lock, timeout, [this] {
+        if (shutdown_) return true;
+        for (int i = 0; i < poolSize_; i++) {
+            if (!available_[i]) return false;
+        }
+        return true;
+    });
 }
 
 void FramePool::reset() {

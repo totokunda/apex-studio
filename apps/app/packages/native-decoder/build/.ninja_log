@@ -1,0 +1,21 @@
+# ninja log v5
+7	1479	1770941444510249240	CMakeFiles/native_decoder.dir/src/addon.cpp.o	5388bc3232a712f0
+5	1171	1770941860433110803	CMakeFiles/native_decoder.dir/src/decoder_instance.cpp.o	1d8e9f7cec44e971
+2	846	1770929800026666164	CMakeFiles/native_decoder.dir/src/thread_pool.cpp.o	9f40279aae7ca0cf
+10	644	1770933967680094158	CMakeFiles/native_decoder.dir/src/frame_pool.cpp.o	d8a12f9c770c35e8
+1171	1437	1770941860493518941	Release/native_decoder.node	bad2692d233be984
+3	599	1770929799779038372	CMakeFiles/native_decoder.dir/src/seek_engine.cpp.o	c131d350fd02b7ba
+1	683	1770929799863118838	CMakeFiles/native_decoder.dir/src/hwaccel.cpp.o	4314ccebedcebb60
+2	260	1770929799442365509	CMakeFiles/native_decoder.dir/src/alpha_merger.cpp.o	970e849630eac04a
+1	450	1770942104683520924	build.ninja	fe46b50e2f5a0a39
+1	450	1770942104683520924	/Users/tosinkuye/apex-workspace/apex-studio/apps/app/packages/native-decoder/build/cmake_install.cmake	fe46b50e2f5a0a39
+5	1098	1770942105780490893	CMakeFiles/native_decoder.dir/src/addon.cpp.o	5388bc3232a712f0
+5	1209	1770942105892172656	CMakeFiles/native_decoder.dir/src/decoder_instance.cpp.o	1d8e9f7cec44e971
+5	964	1770942151378246670	CMakeFiles/native_decoder.dir/src/apple_vt_reader.mm.o	dcd55b626692d05f
+5	1160	1770942151577645319	CMakeFiles/native_decoder.dir/src/decoder_instance.cpp.o	1d8e9f7cec44e971
+1161	1415	1770942151640136604	Release/native_decoder.node	9b93570a0a2c432b
+13	1205	1770942261985386501	CMakeFiles/native_decoder.dir/src/decoder_instance.cpp.o	1d8e9f7cec44e971
+1205	1458	1770942262046773859	Release/native_decoder.node	9b93570a0a2c432b
+49	1197	1770942977378775044	CMakeFiles/native_decoder.dir/src/addon.cpp.o	5388bc3232a712f0
+49	1308	1770942977491528484	CMakeFiles/native_decoder.dir/src/decoder_instance.cpp.o	1d8e9f7cec44e971
+1308	1678	1770942977640692353	Release/native_decoder.node	9b93570a0a2c432b

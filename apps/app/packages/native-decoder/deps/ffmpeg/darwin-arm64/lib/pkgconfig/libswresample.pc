@@ -1,0 +1,14 @@
+prefix=/opt/homebrew/Cellar/ffmpeg/7.1.1_1
+exec_prefix=${prefix}
+libdir=/opt/homebrew/Cellar/ffmpeg/7.1.1_1/lib
+includedir=/opt/homebrew/Cellar/ffmpeg/7.1.1_1/include
+
+Name: libswresample
+Description: FFmpeg audio resampling library
+Version: 5.3.100
+Requires: 
+Requires.private: libavutil >= 59.39.100
+Conflicts:
+Libs: -L${libdir}  -lswresample 
+Libs.private: -lm -lsoxr
+Cflags: -I${includedir}

@@ -1,0 +1,3 @@
+/Users/tosinkuye/apex-workspace/apex-studio/apps/app/packages/native-decoder/build/CMakeFiles/native_decoder.dir
+/Users/tosinkuye/apex-workspace/apex-studio/apps/app/packages/native-decoder/build/CMakeFiles/edit_cache.dir
+/Users/tosinkuye/apex-workspace/apex-studio/apps/app/packages/native-decoder/build/CMakeFiles/rebuild_cache.dir

@@ -5,6 +5,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <chrono>
 
 namespace apex {
 
@@ -56,6 +57,12 @@ public:
      * Signal shutdown — unblocks any threads waiting in acquire().
      */
     void shutdown();
+
+    /**
+     * Wait until all buffers have been released back to the pool.
+     * Returns true when all buffers are available, false on timeout.
+     */
+    bool waitUntilAllAvailableFor(std::chrono::milliseconds timeout);
 
     /**
      * Reset pool state (called before re-init).

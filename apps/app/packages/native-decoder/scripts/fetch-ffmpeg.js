@@ -2,8 +2,8 @@
 /**
  * fetch-ffmpeg.js
  *
- * Downloads pre-built FFmpeg static development libraries for the current
- * platform. These include headers and static .a / .lib archives needed to
+ * Downloads pre-built FFmpeg development libraries for the current
+ * platform. These include headers and linkable runtime libs needed to
  * compile the native-decoder addon.
  *
  * Sources:
@@ -21,6 +21,7 @@ const { execSync } = require("child_process");
 const os = require("os");
 
 const DEPS_DIR = path.resolve(__dirname, "..", "deps", "ffmpeg");
+const VALID_PLATFORM_KEYS = new Set(["win-x64", "darwin-arm64", "darwin-x64", "linux-x64"]);
 
 // FFmpeg version to fetch
 const FFMPEG_VERSION = "7.1";
@@ -28,15 +29,37 @@ const FFMPEG_VERSION = "7.1";
 // BtbN release tag (win/linux)
 const BTBN_TAG = `n${FFMPEG_VERSION}-latest`;
 
+function normalizeArch(arch) {
+  if (!arch) return null;
+  const value = arch.toLowerCase();
+  if (value === "x86_64" || value === "amd64" || value === "x64") return "x64";
+  if (value === "arm64" || value === "aarch64") return "arm64";
+  return null;
+}
+
 function getPlatformKey() {
+  const platformOverride = process.env.FFMPEG_PLATFORM_KEY;
+  if (platformOverride) {
+    if (!VALID_PLATFORM_KEYS.has(platformOverride)) {
+      throw new Error(`Invalid FFMPEG_PLATFORM_KEY: ${platformOverride}`);
+    }
+    return platformOverride;
+  }
+
   const platform = os.platform();
-  const arch = os.arch();
+  const arch =
+    normalizeArch(process.env.FFMPEG_ARCH) ||
+    normalizeArch(process.env.npm_config_arch) ||
+    normalizeArch(process.env.npm_config_target_arch) ||
+    normalizeArch(os.arch());
 
   if (platform === "win32") return "win-x64";
   if (platform === "darwin" && arch === "arm64") return "darwin-arm64";
-  if (platform === "darwin") return "darwin-x64";
+  if (platform === "darwin" && arch === "x64") return "darwin-x64";
   if (platform === "linux") return "linux-x64";
-  throw new Error(`Unsupported platform: ${platform}-${arch}`);
+  throw new Error(
+    `Unsupported platform/arch: ${platform}-${arch || "unknown"} (set FFMPEG_ARCH=arm64|x64 if needed)`
+  );
 }
 
 function alreadyFetched(destDir) {
@@ -128,13 +151,29 @@ async function fetchLinux(destDir) {
   console.log(`FFmpeg dev files installed to ${destDir}`);
 }
 
+function resolveBrewBinary(targetArch) {
+  const candidates =
+    targetArch === "x64" ? ["/usr/local/bin/brew", "brew"] : ["/opt/homebrew/bin/brew", "brew"];
+  for (const candidate of candidates) {
+    if (candidate === "brew" || fs.existsSync(candidate)) return candidate;
+  }
+  return "brew";
+}
+
+function brewCommand(targetArch, args) {
+  const brew = resolveBrewBinary(targetArch);
+  const runViaRosetta = os.platform() === "darwin" && os.arch() === "arm64" && targetArch === "x64";
+  return runViaRosetta ? `arch -x86_64 ${brew} ${args}` : `${brew} ${args}`;
+}
+
 async function fetchDarwin(destDir, arch) {
   console.log(`Fetching FFmpeg for macOS (${arch}) via Homebrew...`);
   fs.mkdirSync(destDir, { recursive: true });
+  const prefixCmd = brewCommand(arch, "--prefix ffmpeg");
 
   // Check if Homebrew FFmpeg is installed
   try {
-    const prefix = execSync("brew --prefix ffmpeg", { encoding: "utf8" }).trim();
+    const prefix = execSync(prefixCmd, { encoding: "utf8" }).trim();
     if (fs.existsSync(path.join(prefix, "include", "libavformat"))) {
       copyDirSync(path.join(prefix, "include"), path.join(destDir, "include"));
       copyDirSync(path.join(prefix, "lib"), path.join(destDir, "lib"));
@@ -145,8 +184,8 @@ async function fetchDarwin(destDir, arch) {
 
   // Fallback: install via Homebrew
   console.log("Installing FFmpeg via Homebrew...");
-  execSync("brew install ffmpeg", { stdio: "inherit" });
-  const prefix = execSync("brew --prefix ffmpeg", { encoding: "utf8" }).trim();
+  execSync(brewCommand(arch, "install ffmpeg"), { stdio: "inherit" });
+  const prefix = execSync(prefixCmd, { encoding: "utf8" }).trim();
   copyDirSync(path.join(prefix, "include"), path.join(destDir, "include"));
   copyDirSync(path.join(prefix, "lib"), path.join(destDir, "lib"));
   console.log(`FFmpeg dev files installed to ${destDir}`);

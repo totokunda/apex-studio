@@ -67,7 +67,8 @@
     "glob": "11.0.3",
     "playwright": "^1.55.0",
     "prettier": "^3.7.1",
-    "react-refresh": "^0.18.0"
+    "react-refresh": "^0.18.0",
+    "tsx": "^4.21.0"
   },
   "dependencies": {
     "@app/main": "*",

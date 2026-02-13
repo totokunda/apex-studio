@@ -1,0 +1,14 @@
+prefix=/opt/homebrew/Cellar/ffmpeg/7.1.1_1
+exec_prefix=${prefix}
+libdir=/opt/homebrew/Cellar/ffmpeg/7.1.1_1/lib
+includedir=/opt/homebrew/Cellar/ffmpeg/7.1.1_1/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 59.39.100
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil 
+Libs.private: -pthread -lm -framework VideoToolbox -L/opt/homebrew/Cellar/libx11/1.8.11/lib -lX11 -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework CoreServices
+Cflags: -I${includedir}

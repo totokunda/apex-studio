@@ -551,6 +551,12 @@ class AppDirProtocol implements AppModule {
       "Cache-Control": "public, max-age=31536000, immutable",
     });
 
+    // Cross-origin isolation enables SharedArrayBuffer (required for native video decoder).
+    if (String(ct).includes("html")) {
+      headers.set("Cross-Origin-Opener-Policy", "same-origin");
+      headers.set("Cross-Origin-Embedder-Policy", "require-corp");
+    }
+
     if (request.method === "HEAD") {
       return new Response(null, { status: 200, headers });
     }

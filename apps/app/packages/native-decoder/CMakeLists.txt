@@ -15,10 +15,25 @@ include_directories(${CMAKE_JS_INC})
 if(WIN32)
     set(FFMPEG_DIR "${CMAKE_SOURCE_DIR}/deps/ffmpeg/win-x64")
 elseif(APPLE)
-    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    # Resolve against the target arch (not host arch) so cross-builds on macOS work.
+    set(TARGET_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+    if(CMAKE_OSX_ARCHITECTURES)
+        list(LENGTH CMAKE_OSX_ARCHITECTURES OSX_ARCH_COUNT)
+        if(OSX_ARCH_COUNT GREATER 1)
+            message(FATAL_ERROR
+                "Universal macOS build is not supported in a single pass. "
+                "Build each arch separately (arm64 and x64).")
+        endif()
+        list(GET CMAKE_OSX_ARCHITECTURES 0 TARGET_ARCH)
+    endif()
+    string(TOLOWER "${TARGET_ARCH}" TARGET_ARCH)
+
+    if(TARGET_ARCH STREQUAL "arm64" OR TARGET_ARCH STREQUAL "aarch64")
         set(FFMPEG_DIR "${CMAKE_SOURCE_DIR}/deps/ffmpeg/darwin-arm64")
-    else()
+    elseif(TARGET_ARCH STREQUAL "x86_64" OR TARGET_ARCH STREQUAL "amd64" OR TARGET_ARCH STREQUAL "x64")
         set(FFMPEG_DIR "${CMAKE_SOURCE_DIR}/deps/ffmpeg/darwin-x64")
+    else()
+        message(FATAL_ERROR "Unsupported macOS target arch: ${TARGET_ARCH}")
     endif()
 else()
     set(FFMPEG_DIR "${CMAKE_SOURCE_DIR}/deps/ffmpeg/linux-x64")
@@ -27,7 +42,8 @@ endif()
 if(NOT EXISTS "${FFMPEG_DIR}/include")
     message(FATAL_ERROR
         "FFmpeg headers not found at ${FFMPEG_DIR}/include. "
-        "Run 'node scripts/fetch-ffmpeg.js' first.")
+        "Run 'node scripts/fetch-ffmpeg.js' first "
+        "(or set FFMPEG_ARCH=arm64/x64 on macOS).")
 endif()
 
 include_directories("${FFMPEG_DIR}/include")
@@ -57,6 +73,9 @@ set(SOURCES
     src/thread_pool.cpp
     src/seek_engine.cpp
 )
+if(APPLE)
+    list(APPEND SOURCES src/apple_vt_reader.mm)
+endif()
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES} ${CMAKE_JS_SRC})
 
@@ -67,12 +86,12 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# Link FFmpeg static libraries (order matters for static linking)
+# Link FFmpeg libraries
 # ---------------------------------------------------------------------------
 set(FFMPEG_LIBS avformat avcodec swscale swresample avutil)
 
 if(WIN32)
-    # Static FFmpeg on Windows needs these system libraries
+    # FFmpeg import libs on Windows need these system libraries
     foreach(lib ${FFMPEG_LIBS})
         target_link_libraries(${PROJECT_NAME} PRIVATE
             "${FFMPEG_DIR}/lib/${lib}.lib"
@@ -86,9 +105,11 @@ if(WIN32)
 elseif(APPLE)
     foreach(lib ${FFMPEG_LIBS})
         target_link_libraries(${PROJECT_NAME} PRIVATE
-            "${FFMPEG_DIR}/lib/lib${lib}.a"
+            "${FFMPEG_DIR}/lib/lib${lib}.dylib"
         )
     endforeach()
+    # Keep runtime lookup local first when FFmpeg dylibs are copied next to the addon.
+    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,-rpath,@loader_path")
     find_library(COREMEDIA CoreMedia REQUIRED)
     find_library(COREVIDEO CoreVideo REQUIRED)
     find_library(VIDEOTOOLBOX VideoToolbox REQUIRED)
@@ -131,9 +152,14 @@ if(MSVC)
 else()
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -O2)
     # Enable SIMD for alpha merger
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(SIMD_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+    if(APPLE AND DEFINED TARGET_ARCH)
+        set(SIMD_ARCH "${TARGET_ARCH}")
+    endif()
+    string(TOLOWER "${SIMD_ARCH}" SIMD_ARCH)
+    if(SIMD_ARCH MATCHES "x86_64|amd64|x64")
         target_compile_options(${PROJECT_NAME} PRIVATE -msse2 -msse4.1)
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    elseif(SIMD_ARCH MATCHES "aarch64|arm64")
         # NEON is enabled by default on ARM64
     endif()
 endif()
@@ -148,6 +174,16 @@ if(WIN32)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${dll}"
+                "${CMAKE_SOURCE_DIR}/build/Release/"
+        )
+    endforeach()
+elseif(APPLE)
+    # macOS: copy FFmpeg dylibs alongside the addon for local runtime resolution.
+    file(GLOB FFMPEG_DYLIBS "${FFMPEG_DIR}/lib/lib*.dylib*")
+    foreach(dylib ${FFMPEG_DYLIBS})
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${dylib}"
                 "${CMAKE_SOURCE_DIR}/build/Release/"
         )
     endforeach()

@@ -1,8 +1,8 @@
 /**
  * NativeFrameUploader
  *
- * Efficiently uploads raw RGBA pixel buffers (from SharedArrayBuffers)
- * to the GPU via WebGL texImage2D and renders them to an HTMLCanvasElement.
+ * Efficiently uploads raw RGBA/NV12 pixel buffers (from SharedArrayBuffers)
+ * to the GPU via WebGL textures and renders them to an HTMLCanvasElement.
  *
  * This avoids the overhead of constructing VideoFrame objects and leverages
  * direct GPU texture upload for maximum throughput.
@@ -19,8 +19,8 @@ const VERTEX_SHADER_SRC = `
   }
 `;
 
-// Fragment shader: sample texture and flip Y (WebGL Y-axis is inverted)
-const FRAGMENT_SHADER_SRC = `
+// Fragment shader: sample RGBA texture and flip Y (WebGL Y-axis is inverted)
+const RGBA_FRAGMENT_SHADER_SRC = `
   precision mediump float;
   varying vec2 v_texCoord;
   uniform sampler2D u_texture;
@@ -32,17 +32,49 @@ const FRAGMENT_SHADER_SRC = `
   }
 `;
 
+// Fragment shader: convert NV12 (Y + interleaved UV) to RGB.
+const NV12_FRAGMENT_SHADER_SRC = `
+  precision mediump float;
+  varying vec2 v_texCoord;
+  uniform sampler2D u_textureY;
+  uniform sampler2D u_textureUV;
+  void main() {
+    vec2 flippedCoord = vec2(v_texCoord.x, 1.0 - v_texCoord.y);
+    float ySample = texture2D(u_textureY, flippedCoord).r;
+    vec2 uvSample = texture2D(u_textureUV, flippedCoord).ra - vec2(0.5, 0.5);
+
+    // BT.709 limited-range conversion.
+    float y = max(0.0, 1.16438356 * (ySample - 0.0625));
+    float r = y + 1.79274107 * uvSample.y;
+    float g = y - 0.21324861 * uvSample.x - 0.53290933 * uvSample.y;
+    float b = y + 2.11240179 * uvSample.x;
+
+    gl_FragColor = vec4(clamp(vec3(r, g, b), 0.0, 1.0), 1.0);
+  }
+`;
+
 export class NativeFrameUploader {
   private canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext;
-  private program: WebGLProgram;
-  private texture: WebGLTexture;
+  private rgbaProgram: WebGLProgram;
+  private nv12Program: WebGLProgram;
+  private rgbaTexture: WebGLTexture;
+  private yTexture: WebGLTexture;
+  private uvTexture: WebGLTexture;
+  private positionBuffer: WebGLBuffer;
+  private texCoordBuffer: WebGLBuffer;
+  private rgbaTextureUniform: WebGLUniformLocation | null;
+  private nv12YUniform: WebGLUniformLocation | null;
+  private nv12UVUniform: WebGLUniformLocation | null;
   private currentWidth = 0;
   private currentHeight = 0;
+  private rgbaTextureAllocated = false;
+  private yTextureAllocated = false;
+  private uvTextureAllocated = false;
   private disposed = false;
 
-  constructor() {
-    this.canvas = document.createElement("canvas");
+  constructor(targetCanvas?: HTMLCanvasElement) {
+    this.canvas = targetCanvas ?? document.createElement("canvas");
 
     const gl = this.canvas.getContext("webgl", {
       alpha: true,
@@ -50,7 +82,7 @@ export class NativeFrameUploader {
       antialias: false,
       depth: false,
       stencil: false,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
     });
 
     if (!gl) {
@@ -58,9 +90,31 @@ export class NativeFrameUploader {
     }
 
     this.gl = gl;
-    this.program = this.createProgram();
-    this.texture = this.createTexture();
-    this.setupGeometry();
+    this.rgbaProgram = this.createProgram(RGBA_FRAGMENT_SHADER_SRC);
+    this.nv12Program = this.createProgram(NV12_FRAGMENT_SHADER_SRC);
+    this.rgbaTexture = this.createTexture();
+    this.yTexture = this.createTexture();
+    this.uvTexture = this.createTexture();
+    this.positionBuffer = this.createStaticBuffer(
+      new Float32Array([
+        -1, -1, // bottom-left
+         1, -1, // bottom-right
+        -1,  1, // top-left
+         1,  1, // top-right
+      ]),
+    );
+    this.texCoordBuffer = this.createStaticBuffer(
+      new Float32Array([
+        0, 0,
+        1, 0,
+        0, 1,
+        1, 1,
+      ]),
+    );
+
+    this.rgbaTextureUniform = gl.getUniformLocation(this.rgbaProgram, "u_texture");
+    this.nv12YUniform = gl.getUniformLocation(this.nv12Program, "u_textureY");
+    this.nv12UVUniform = gl.getUniformLocation(this.nv12Program, "u_textureUV");
   }
 
   /**
@@ -77,32 +131,141 @@ export class NativeFrameUploader {
     }
 
     const gl = this.gl;
+    this.ensureCanvasSize(width, height);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 
-    // Resize canvas if dimensions changed
-    if (this.currentWidth !== width || this.currentHeight !== height) {
-      this.canvas.width = width;
-      this.canvas.height = height;
-      this.currentWidth = width;
-      this.currentHeight = height;
-      gl.viewport(0, 0, width, height);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.rgbaTexture);
+    if (!this.rgbaTextureAllocated) {
+      // Allocate storage once when dimensions change; update contents via texSubImage2D.
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        width,
+        height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
+      this.rgbaTextureAllocated = true;
     }
-
-    // Upload texture data
-    gl.bindTexture(gl.TEXTURE_2D, this.texture);
-    gl.texImage2D(
+    gl.texSubImage2D(
       gl.TEXTURE_2D,
       0,
-      gl.RGBA,
+      0,
+      0,
       width,
       height,
-      0,
       gl.RGBA,
       gl.UNSIGNED_BYTE,
       rgbaBuffer,
     );
 
-    // Draw full-screen quad
-    gl.useProgram(this.program);
+    gl.useProgram(this.rgbaProgram);
+    this.bindGeometry(this.rgbaProgram);
+    if (this.rgbaTextureUniform) {
+      gl.uniform1i(this.rgbaTextureUniform, 0);
+    }
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    return this.canvas;
+  }
+
+  /**
+   * Upload an NV12 buffer to the GPU and render it to the internal canvas.
+   * Buffer layout: [Y plane][UV plane interleaved].
+   */
+  uploadNV12(
+    nv12Buffer: Uint8Array | Uint8ClampedArray,
+    width: number,
+    height: number,
+  ): HTMLCanvasElement {
+    if (this.disposed) {
+      throw new Error("NativeFrameUploader has been disposed");
+    }
+
+    const ySize = width * height;
+    const uvWidth = Math.floor((width + 1) / 2);
+    const uvHeight = Math.floor((height + 1) / 2);
+    const uvSize = uvWidth * uvHeight * 2;
+    if (nv12Buffer.byteLength < ySize + uvSize) {
+      throw new Error("NV12 buffer is too small for frame dimensions");
+    }
+
+    const gl = this.gl;
+    this.ensureCanvasSize(width, height);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
+    const src = nv12Buffer as Uint8Array;
+    const yPlane = src.subarray(0, ySize);
+    const uvPlane = src.subarray(ySize, ySize + uvSize);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.yTexture);
+    if (!this.yTextureAllocated) {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.LUMINANCE,
+        width,
+        height,
+        0,
+        gl.LUMINANCE,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
+      this.yTextureAllocated = true;
+    }
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      0,
+      width,
+      height,
+      gl.LUMINANCE,
+      gl.UNSIGNED_BYTE,
+      yPlane,
+    );
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.uvTexture);
+    if (!this.uvTextureAllocated) {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.LUMINANCE_ALPHA,
+        uvWidth,
+        uvHeight,
+        0,
+        gl.LUMINANCE_ALPHA,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
+      this.uvTextureAllocated = true;
+    }
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      0,
+      uvWidth,
+      uvHeight,
+      gl.LUMINANCE_ALPHA,
+      gl.UNSIGNED_BYTE,
+      uvPlane,
+    );
+
+    gl.useProgram(this.nv12Program);
+    this.bindGeometry(this.nv12Program);
+    if (this.nv12YUniform) {
+      gl.uniform1i(this.nv12YUniform, 0);
+    }
+    if (this.nv12UVUniform) {
+      gl.uniform1i(this.nv12UVUniform, 1);
+    }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     return this.canvas;
@@ -116,8 +279,13 @@ export class NativeFrameUploader {
     this.disposed = true;
 
     const gl = this.gl;
-    gl.deleteTexture(this.texture);
-    gl.deleteProgram(this.program);
+    gl.deleteTexture(this.rgbaTexture);
+    gl.deleteTexture(this.yTexture);
+    gl.deleteTexture(this.uvTexture);
+    gl.deleteProgram(this.rgbaProgram);
+    gl.deleteProgram(this.nv12Program);
+    gl.deleteBuffer(this.positionBuffer);
+    gl.deleteBuffer(this.texCoordBuffer);
 
     // Force context loss to free GPU memory
     const ext = gl.getExtension("WEBGL_lose_context");
@@ -145,10 +313,10 @@ export class NativeFrameUploader {
     return shader;
   }
 
-  private createProgram(): WebGLProgram {
+  private createProgram(fragmentShaderSource: string): WebGLProgram {
     const gl = this.gl;
     const vs = this.createShader(gl.VERTEX_SHADER, VERTEX_SHADER_SRC);
-    const fs = this.createShader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER_SRC);
+    const fs = this.createShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
 
     const program = gl.createProgram();
     if (!program) throw new Error("Failed to create program");
@@ -170,12 +338,22 @@ export class NativeFrameUploader {
     return program;
   }
 
+  private createStaticBuffer(data: Float32Array): WebGLBuffer {
+    const gl = this.gl;
+    const buffer = gl.createBuffer();
+    if (!buffer) throw new Error("Failed to create WebGL buffer");
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    return buffer;
+  }
+
   private createTexture(): WebGLTexture {
     const gl = this.gl;
     const texture = gl.createTexture();
     if (!texture) throw new Error("Failed to create texture");
 
     gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 
     // Set texture parameters for non-power-of-2 textures
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -186,46 +364,35 @@ export class NativeFrameUploader {
     return texture;
   }
 
-  private setupGeometry(): void {
+  private ensureCanvasSize(width: number, height: number): void {
     const gl = this.gl;
-    gl.useProgram(this.program);
+    if (this.currentWidth !== width || this.currentHeight !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+      this.currentWidth = width;
+      this.currentHeight = height;
+      this.rgbaTextureAllocated = false;
+      this.yTextureAllocated = false;
+      this.uvTextureAllocated = false;
+      gl.viewport(0, 0, width, height);
+    }
+  }
 
-    // Full-screen quad (triangle strip)
-    const positions = new Float32Array([
-      -1, -1,  // bottom-left
-       1, -1,  // bottom-right
-      -1,  1,  // top-left
-       1,  1,  // top-right
-    ]);
+  private bindGeometry(program: WebGLProgram): void {
+    const gl = this.gl;
+    const posLoc = gl.getAttribLocation(program, "a_position");
+    if (posLoc >= 0) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+      gl.enableVertexAttribArray(posLoc);
+      gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    }
 
-    const texCoords = new Float32Array([
-      0, 0,
-      1, 0,
-      0, 1,
-      1, 1,
-    ]);
-
-    // Position buffer
-    const posBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-
-    const posLoc = gl.getAttribLocation(this.program, "a_position");
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-
-    // Tex coord buffer
-    const texBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, texBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
-
-    const texLoc = gl.getAttribLocation(this.program, "a_texCoord");
-    gl.enableVertexAttribArray(texLoc);
-    gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0);
-
-    // Set texture uniform
-    const texUniform = gl.getUniformLocation(this.program, "u_texture");
-    gl.uniform1i(texUniform, 0);
+    const texLoc = gl.getAttribLocation(program, "a_texCoord");
+    if (texLoc >= 0) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer);
+      gl.enableVertexAttribArray(texLoc);
+      gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0);
+    }
   }
 }
 

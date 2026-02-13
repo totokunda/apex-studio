@@ -14,20 +14,18 @@ import {
 } from "mediabunny";
 import {
     getUserDataPath as getUserDataPathPreload,
-    fileURLToPath,
     createNativeDecoder,
     configureNativeDecoder,
     seekNativeDecoder,
     iterateNativeDecoder,
+    ackNativeFrame,
     cancelNativeDecoder,
     disposeNativeDecoder,
     disposeAllNativeDecoders,
-    ackNativeFrame,
     isNativeDecoderAvailable,
     resolveNativeDecoderPath,
 } from "@app/preload";
 import { NativeFrameUploader } from "./native-frame-uploader";
-import { createBufferPool } from "./native-buffer-pool";
 
 // ---------------------------------------------------------------------------
 // Shared canvas type used by both native (HTMLCanvasElement) and worker
@@ -88,15 +86,15 @@ function normalizeDimensions(
 
 interface NativeDecoderAssetState {
     nativeHandle: number;
-    bufferPool: SharedArrayBuffer[];
-    poolViews: Uint8Array[];
     uploader: NativeFrameUploader;
 }
+
+type NativePixelFormat = "rgba" | "nv12";
 
 // Detect once at module load whether the native path is usable.
 const nativeAvailable: boolean = (() => {
     try {
-        return typeof SharedArrayBuffer !== "undefined" && isNativeDecoderAvailable();
+        return isNativeDecoderAvailable();
     } catch {
         return false;
     }
@@ -172,24 +170,34 @@ export class VideoFrameDecoder {
         targetHeight: number,
     ): Promise<void> {
         try {
+            if (targetWidth <= 0 || targetHeight <= 0) {
+                throw new Error("Native decoder requires non-zero target dimensions");
+            }
             const handle = createNativeDecoder();
-            const pool = createBufferPool(targetWidth, targetHeight);
-            const poolViews = pool.map((sab) => new Uint8Array(sab));
             const uploader = new NativeFrameUploader();
 
-            this.native = { nativeHandle: handle, bufferPool: pool, poolViews, uploader };
+            this.native = { nativeHandle: handle, uploader };
 
             const filePath = await resolveNativeDecoderPath(options.mediaInfo.path);
 
-            configureNativeDecoder(handle, {
+            configureNativeDecoder(
+                handle,
                 filePath,
-                width: targetWidth,
-                height: targetHeight,
-                bufferPool: pool,
-                onFrame: (bufferIndex, width, height, timestamp, duration, requestId) => {
-                    this.handleNativeFrame(bufferIndex, width, height, timestamp, duration, requestId);
+                targetWidth,
+                targetHeight,
+                (frameBytes, width, height, timestamp, duration, requestId, bufferIndex, pixelFormat) => {
+                    this.handleNativeFrame(
+                        frameBytes,
+                        width,
+                        height,
+                        timestamp,
+                        duration,
+                        requestId,
+                        bufferIndex,
+                        pixelFormat ?? "rgba",
+                    );
                 },
-                onError: (message) => {
+                (message) => {
                     if (this.activeIteration) {
                         this.activeIteration.reject(new Error(message));
                         this.activeIteration = null;
@@ -197,7 +205,7 @@ export class VideoFrameDecoder {
                         this.onErrorCallback(new Error(message));
                     }
                 },
-                onReady: () => {
+                () => {
                     if (this.initializedResolve) {
                         this.initializedResolve();
                         this.initializedResolve = null;
@@ -207,7 +215,14 @@ export class VideoFrameDecoder {
                         this.onReadyCallback = undefined;
                     }
                 },
-            });
+                {
+                    outputFormat: "nv12",
+                    copyFrameData: false,
+                    manualAck: true,
+                    preferSharedBufferPool:
+                        typeof window !== "undefined" && window.crossOriginIsolated,
+                },
+            );
         } catch (err) {
             // eslint-disable-next-line no-console
             console.warn("[VideoFrameDecoder] Native decoder init failed, falling back to worker:", err);
@@ -218,14 +233,27 @@ export class VideoFrameDecoder {
     }
 
     private handleNativeFrame(
-        bufferIndex: number,
+        frameBytes: Uint8Array,
         width: number,
         height: number,
         timestamp: number,
         duration: number,
         requestId: number,
+        bufferIndex?: number,
+        pixelFormat: NativePixelFormat = "rgba",
     ): void {
         const native = this.native!;
+        const ack = () => {
+            if (typeof bufferIndex === "number" && bufferIndex >= 0) {
+                ackNativeFrame(native.nativeHandle, bufferIndex);
+            }
+        };
+        const upload = (): HTMLCanvasElement => {
+            if (pixelFormat === "nv12") {
+                return native.uploader.uploadNV12(frameBytes, width, height);
+            }
+            return native.uploader.upload(frameBytes, width, height);
+        };
 
         // Iteration frames
         if (this.activeIteration && requestId === this.activeIteration.requestId) {
@@ -233,38 +261,41 @@ export class VideoFrameDecoder {
 
             iteration.frameProcessingPromise = iteration.frameProcessingPromise
                 .then(async () => {
-                    if (iteration.checkCancel && !iteration.checkCancel()) {
-                        ackNativeFrame(native.nativeHandle, bufferIndex);
-                        return;
-                    }
-                    if (iteration.shouldDelay) {
-                        await iteration.shouldDelay(timestamp);
-                    }
-                    if (iteration.checkCancel && !iteration.checkCancel()) {
-                        ackNativeFrame(native.nativeHandle, bufferIndex);
-                        return;
-                    }
+                    try {
+                        if (iteration.checkCancel && !iteration.checkCancel()) {
+                            return;
+                        }
+                        if (iteration.shouldDelay) {
+                            await iteration.shouldDelay(timestamp);
+                        }
+                        if (iteration.checkCancel && !iteration.checkCancel()) {
+                            return;
+                        }
 
-                    const canvas = native.uploader.upload(native.poolViews[bufferIndex], width, height);
-                    this.onFrameCallback({ canvas, timestamp, duration });
-                    ackNativeFrame(native.nativeHandle, bufferIndex);
+                        const canvas = upload();
+                        this.onFrameCallback({ canvas, timestamp, duration });
+                    } finally {
+                        ack();
+                    }
                 })
                 .catch((err) => {
                     console.error("Native frame processing error", err);
-                    ackNativeFrame(native.nativeHandle, bufferIndex);
                 });
             return;
         }
 
         // Seek/preview frames
         if (requestId !== undefined && requestId !== this.currentRequestId) {
-            ackNativeFrame(native.nativeHandle, bufferIndex);
+            ack();
             return;
         }
 
-        const canvas = native.uploader.upload(native.poolViews[bufferIndex], width, height);
-        this.onFrameCallback({ canvas, timestamp, duration });
-        ackNativeFrame(native.nativeHandle, bufferIndex);
+        try {
+            const canvas = upload();
+            this.onFrameCallback({ canvas, timestamp, duration });
+        } finally {
+            ack();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -814,24 +845,37 @@ export class VideoDecoderManager {
         targetHeight: number,
     ): Promise<void> {
         try {
+            if (targetWidth <= 0 || targetHeight <= 0) {
+                throw new Error("Native decoder requires non-zero target dimensions");
+            }
+            
             const handle = createNativeDecoder();
-            const pool = createBufferPool(targetWidth, targetHeight);
-            const poolViews = pool.map((sab) => new Uint8Array(sab));
+
             const uploader = new NativeFrameUploader();
 
-            assetClient.native = { nativeHandle: handle, bufferPool: pool, poolViews, uploader };
+            assetClient.native = { nativeHandle: handle, uploader };
 
             const filePath = await resolveNativeDecoderPath(asset.path);
 
-            configureNativeDecoder(handle, {
+            configureNativeDecoder(
+                handle,
                 filePath,
-                width: targetWidth,
-                height: targetHeight,
-                bufferPool: pool,
-                onFrame: (bufferIndex, width, height, timestamp, duration, requestId) => {
-                    this.handleNativeFrame(assetClient, bufferIndex, width, height, timestamp, duration, requestId);
+                targetWidth,
+                targetHeight,
+                (frameBytes, width, height, timestamp, duration, requestId, bufferIndex, pixelFormat) => {
+                    this.handleNativeFrame(
+                        assetClient,
+                        frameBytes,
+                        width,
+                        height,
+                        timestamp,
+                        duration,
+                        requestId,
+                        bufferIndex,
+                        pixelFormat ?? "rgba",
+                    );
                 },
-                onError: (message) => {
+                (message) => {
                     if (assetClient.activeIteration) {
                         assetClient.activeIteration.reject(new Error(message));
                         assetClient.activeIteration = null;
@@ -839,7 +883,7 @@ export class VideoDecoderManager {
                         assetClient.onError(new Error(message));
                     }
                 },
-                onReady: () => {
+                () => {
                     if (!assetClient.initialized) {
                         assetClient.initialized = true;
                         if (assetClient.initializedResolve) {
@@ -852,7 +896,14 @@ export class VideoDecoderManager {
                         }
                     }
                 },
-            });
+                {
+                    outputFormat: "nv12",
+                    copyFrameData: false,
+                    manualAck: true,
+                    preferSharedBufferPool:
+                        typeof window !== "undefined" && window.crossOriginIsolated,
+                },
+            );
         } catch (err) {
             console.warn("[VideoDecoderManager] Native decoder failed for", decoderId, ", falling back to worker:", err);
             assetClient.native = undefined;
@@ -863,14 +914,27 @@ export class VideoDecoderManager {
 
     private handleNativeFrame(
         client: VideoDecoderManagerAssetState,
-        bufferIndex: number,
+        frameBytes: Uint8Array,
         width: number,
         height: number,
         timestamp: number,
         duration: number,
         requestId: number,
+        bufferIndex?: number,
+        pixelFormat: NativePixelFormat = "rgba",
     ): void {
         const native = client.native!;
+        const ack = () => {
+            if (typeof bufferIndex === "number" && bufferIndex >= 0) {
+                ackNativeFrame(native.nativeHandle, bufferIndex);
+            }
+        };
+        const upload = (): HTMLCanvasElement => {
+            if (pixelFormat === "nv12") {
+                return native.uploader.uploadNV12(frameBytes, width, height);
+            }
+            return native.uploader.upload(frameBytes, width, height);
+        };
 
         // Iteration frames
         if (client.activeIteration && requestId === client.activeIteration.requestId) {
@@ -878,42 +942,45 @@ export class VideoDecoderManager {
 
             iteration.frameProcessingPromise = iteration.frameProcessingPromise
                 .then(async () => {
-                    if (iteration.checkCancel && !iteration.checkCancel()) {
-                        ackNativeFrame(native.nativeHandle, bufferIndex);
-                        return;
-                    }
-                    if (iteration.shouldDelay) {
-                        await iteration.shouldDelay(timestamp);
-                    }
-                    if (iteration.checkCancel && !iteration.checkCancel()) {
-                        ackNativeFrame(native.nativeHandle, bufferIndex);
-                        return;
-                    }
+                    try {
+                        if (iteration.checkCancel && !iteration.checkCancel()) {
+                            return;
+                        }
+                        if (iteration.shouldDelay) {
+                            await iteration.shouldDelay(timestamp);
+                        }
+                        if (iteration.checkCancel && !iteration.checkCancel()) {
+                            return;
+                        }
 
-                    const canvas = native.uploader.upload(native.poolViews[bufferIndex], width, height);
-                    if (client.onFrame) {
-                        client.onFrame({ canvas, timestamp, duration });
+                        const canvas = upload();
+                        if (client.onFrame) {
+                            client.onFrame({ canvas, timestamp, duration });
+                        }
+                    } finally {
+                        ack();
                     }
-                    ackNativeFrame(native.nativeHandle, bufferIndex);
                 })
                 .catch((err) => {
                     console.error("Native frame processing error (manager)", err);
-                    ackNativeFrame(native.nativeHandle, bufferIndex);
                 });
             return;
         }
 
         // Seek/preview frames
         if (requestId !== undefined && requestId !== client.currentRequestId) {
-            ackNativeFrame(native.nativeHandle, bufferIndex);
+            ack();
             return;
         }
 
-        const canvas = native.uploader.upload(native.poolViews[bufferIndex], width, height);
-        if (client.onFrame) {
-            client.onFrame({ canvas, timestamp, duration });
+        try {
+            const canvas = upload();
+            if (client.onFrame) {
+                client.onFrame({ canvas, timestamp, duration });
+            }
+        } finally {
+            ack();
         }
-        ackNativeFrame(native.nativeHandle, bufferIndex);
     }
 
     private addAssetWorker(
