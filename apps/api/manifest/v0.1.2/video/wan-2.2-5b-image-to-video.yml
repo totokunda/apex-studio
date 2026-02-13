@@ -69,7 +69,8 @@ spec:
   - type: vae
     label: Tiny Wan VAE
     name: __tiny_transformer_vae__
-    base: tiny_wan
+    base: tae
+    config_id: TAE/wan-2.2-5b
     model_path:
     - path: lightx2v/Autoencoders/lighttaew2_2.safetensors
       variant: default
