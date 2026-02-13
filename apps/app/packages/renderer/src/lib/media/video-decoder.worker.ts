@@ -100,18 +100,11 @@ function fileURLToPathInWorker(raw: string): string {
   }
 }
 
-// Best-effort helper to quickly detect a 404 for an app:// URL before we hand
-// it off to mediabunny. If the HEAD request itself fails (e.g. protocol does
-// not support HEAD), we treat it as "unknown" and *do not* block source
-// creation – only an explicit 404 status will cause us to skip this URL.
-async function isAppUrlDefinitely404(url: URL): Promise<boolean> {
-  try {
-    const res = await fetch(url.toString(), { method: "HEAD" });
-    return res.status === 404;
-  } catch {
-    return false;
-  }
-}
+// NOTE: The previous isAppUrlDefinitely404 HEAD-request check was removed.
+// On Windows, each IPC round-trip to the app:// protocol handler adds 20-200ms
+// of latency per call, and two sequential HEAD fetches per decoder init caused
+// visible seek/scrub lag. mediabunny handles missing/invalid URLs gracefully
+// on its own, so we let it fail naturally instead of pre-checking.
 
 // State
 type AssetState = {
@@ -163,8 +156,16 @@ const assetStates = new Map<string, AssetState>();
 
 // Shared tuning constants
 const MAX_CACHE_SIZE = 240; // Keep ~2 seconds of frames (at 30fps)
-const MAX_ITERATION_IN_FLIGHT = 4;
-const MAX_DECODE_QUEUE_SIZE = 8;
+// Windows D3D11VA hardware decoders have higher per-frame latency than macOS
+// VideoToolbox, so the decode pipeline needs more in-flight frames to stay
+// full and avoid starvation gaps during playback. We detect Windows via the
+// user-agent string (workers don't have navigator.platform in all runtimes,
+// but navigator.userAgent is reliable in Electron's renderer workers).
+const IS_WINDOWS =
+  typeof navigator !== "undefined" &&
+  /windows/i.test(navigator.userAgent || "");
+const MAX_ITERATION_IN_FLIGHT = IS_WINDOWS ? 8 : 4;
+const MAX_DECODE_QUEUE_SIZE = IS_WINDOWS ? 12 : 8;
 const MAX_DECODE_QUEUE_WAIT_MS = 500;
 const MAX_RESYNC_ATTEMPTS = 4;
 const DECODE_QUEUE_SLEEP_MS = 5;
@@ -674,6 +675,12 @@ async function getNextKeyPacketSafe(
 }
 
 function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean {
+  // Timing instrumentation: measure how long a GPU decoder reset/configure takes.
+  // Visible in DevTools Performance tab or via:
+  //   performance.getEntriesByType("measure").filter(m => m.name.startsWith("gpu-reset"))
+  const resetMark = `gpu-reset-start-${assetId}-${performance.now().toFixed(0)}`;
+  performance.mark(resetMark);
+
   if (!state.config) return false;
   const decoder = ensureDecoderInstance(state, assetId);
   if (!decoder) return false;
@@ -693,6 +700,7 @@ function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean 
       state.config = fallbackConfig;
       decoder.configure(fallbackConfig as VideoDecoderConfig);
     } catch {
+      try { performance.measure(`gpu-reset-${assetId}`, resetMark); } catch { /* ignore */ }
       return false;
     }
   }
@@ -708,6 +716,7 @@ function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean 
     }
   }
 
+  try { performance.measure(`gpu-reset-${assetId}`, resetMark); } catch { /* ignore */ }
   return true;
 }
 
@@ -869,12 +878,6 @@ async function handleConfigure(
     if (cfg.folderUuid && primarySourceDir === "apex-cache") {
       url.searchParams.set("folderUuid", cfg.folderUuid);
     }
-    // Skip this URL up-front if we *know* it returns a 404; otherwise fall
-    // back to the previous behavior and let mediabunny attempt to open it.
-    const is404 = await isAppUrlDefinitely404(url);
-    if (is404) {
-      throw new Error("Primary app:// URL returned 404");
-    }
     input = new Input({ formats, source: new UrlSource(url) });
   } catch (e) {
     try {
@@ -884,10 +887,6 @@ async function handleConfigure(
       const url = new URL(`app://${secondarySourceDir}/${filePath}`);
       if (cfg.folderUuid && secondarySourceDir === "apex-cache") {
         url.searchParams.set("folderUuid", cfg.folderUuid);
-      }
-      const is404 = await isAppUrlDefinitely404(url);
-      if (is404) {
-        throw new Error("Secondary app:// URL returned 404");
       }
       input = new Input({ formats, source: new UrlSource(url) });
     } catch (e) {
@@ -952,9 +951,13 @@ async function handleSeek(
   requestId: number,
   assetId?: string,
 ) {
+  // Performance instrumentation — visible in DevTools Performance tab and via
+  // performance.getEntriesByType("measure") in the console.
+  const seekPerfMark = `seek-start-${requestId}`;
+  performance.mark(seekPerfMark);
 
   const id = assetId;
- 
+
   if (!id) return;
   const state = assetStates.get(id);
   if (!state || !state.sink || !state.config) return;
@@ -1032,12 +1035,26 @@ async function handleSeek(
   let resyncAttempts = 0;
   let previewArmed = isFastScrubbing;
 
+  // Reset and configure the decoder once up-front, before the resync loop.
+  // Previously this was called on every loop iteration, which meant redundant
+  // GPU pipeline flushes on each resync attempt — very costly on Windows
+  // D3D11VA hardware decoders. We now only re-reset inside the loop when the
+  // decoder has actually closed mid-seek (rare error path).
+  if (!resetAndConfigureDecoders(state, id)) {
+    // @ts-ignore
+    postMessage({ type: "seekDone", requestId, assetId: id });
+    return;
+  }
+
   while (
     currentPacket &&
     state.currentRequestId === requestId &&
     resyncAttempts <= MAX_RESYNC_ATTEMPTS
   ) {
-    if (!resetAndConfigureDecoders(state, id)) break;
+    // Only re-reset if the decoder was closed during the previous iteration.
+    if (!state.decoder || (state.decoder.state as string) === "closed") {
+      if (!resetAndConfigureDecoders(state, id)) break;
+    }
 
     const decodedKey = await decodePacketSafe(
       state,
@@ -1119,6 +1136,12 @@ async function handleSeek(
     state.pendingSeekFrame = null;
   }
 
+  // Measure total seek latency so it's visible in DevTools Performance tab.
+  // Read in console with: performance.getEntriesByType("measure").filter(m => m.name.startsWith("seek-"))
+  try {
+    performance.measure(`seek-latency-req${requestId}`, `seek-start-${requestId}`);
+  } catch { /* mark may have been GC'd; safe to ignore */ }
+
   // @ts-ignore
   postMessage({
     type: "seekDone",
@@ -1198,12 +1221,27 @@ async function handleIterate(
         let currentPacket: EncodedPacket | null = initialPacket;
         let resyncAttempts = 0;
 
+        // Reset and configure the decoder once before entering the resync loop.
+        // Calling resetAndConfigureDecoders on every iteration was flushing the
+        // GPU decode pipeline unnecessarily on each resync attempt — extremely
+        // expensive on Windows D3D11VA hardware decoders and a primary cause of
+        // playback stutter. We now only re-reset inside the loop when the decoder
+        // has closed mid-iteration (a rare error recovery path).
+        if (!resetAndConfigureDecoders(state, id)) {
+          // @ts-ignore
+          postMessage({ type: "iterateDone", requestId, assetId: id });
+          return;
+        }
+
         while (
           currentPacket &&
           state.currentRequestId === requestId &&
           resyncAttempts <= MAX_RESYNC_ATTEMPTS
         ) {
-          if (!resetAndConfigureDecoders(state, id)) break;
+          // Only re-reset if the decoder closed during the previous iteration.
+          if (!state.decoder || (state.decoder.state as string) === "closed") {
+            if (!resetAndConfigureDecoders(state, id)) break;
+          }
 
           const decodedKey = await decodePacketSafe(
             state,
