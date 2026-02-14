@@ -48,6 +48,7 @@ spec:
     label: Lightx2v LoRA
     component: transformer
     verified: true
+    file_size: 739472104
   components:
   - type: scheduler
     label: Scheduler

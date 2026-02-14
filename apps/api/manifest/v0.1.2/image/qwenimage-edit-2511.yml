@@ -43,6 +43,7 @@ spec:
     label: Qwen Image Lightning 4 Steps
     verified: true
     source: lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
+    file_size: 849608296
   components:
   - type: scheduler
     label: Scheduler

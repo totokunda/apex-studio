@@ -46,6 +46,7 @@ spec:
     verified: true
     component: transformer
     required: true
+    file_size: 2617401920
   - source: Lightricks/LTX-2-19b-IC-LoRA-Pose/ltx-2-19b-ic-lora-pose-control.safetensors
     name: ic_lora_pose_control
     label: LTX2 19B Pose Control LoRA 384
@@ -53,6 +54,7 @@ spec:
     verified: true
     required: true
     component: transformer
+    file_size: 29
   components:
   - type: scheduler
     label: Scheduler

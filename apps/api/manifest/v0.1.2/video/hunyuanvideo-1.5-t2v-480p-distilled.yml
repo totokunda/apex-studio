@@ -69,7 +69,9 @@ spec:
       precision: bf16
       type: safetensors
       file_size: 2521294886
-    
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
   - type: transformer
     label: HunyuanVideo Transformer
     base: hunyuanvideo15.base
