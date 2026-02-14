@@ -1061,6 +1061,10 @@ export const LoraCard: React.FC<{
 }> = ({ lora, loraIndex, manifestId }) => {
   const [expanded, setExpanded] = useState(false);
   const isDownloaded = lora.is_downloaded;
+  const knownFileSize =
+    typeof lora.file_size === "number" && Number.isFinite(lora.file_size) && lora.file_size > 0
+      ? lora.file_size
+      : null;
   const loraCarRef = useRef<HTMLDivElement>(null);
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}
@@ -1076,6 +1080,11 @@ export const LoraCard: React.FC<{
           <h3 className="text-brand-light text-[12px] font-medium">{lora.label}</h3>
         </div>
         <div className="flex items-center gap-x-2 animate-in fade-in-0 duration-300">
+          {knownFileSize != null && (
+            <span className="text-[10px] text-brand-light/70 font-mono">
+              {formatBytes(knownFileSize, 1)}
+            </span>
+          )}
           {
              <>
             {expanded ? <LuChevronDown className="text-brand-light w-3 h-3" /> : <LuChevronRight className="text-brand-light w-3 h-3" />}
@@ -1125,6 +1134,10 @@ const LoraSection: React.FC<{
   const isDownloading = (jobUpdates?.length ?? 0) > 0;
   const ref = useRef<HTMLDivElement>(null);
   const width = ref.current?.clientWidth ?? 0;
+  const knownFileSize =
+    typeof lora.file_size === "number" && Number.isFinite(lora.file_size) && lora.file_size > 0
+      ? lora.file_size
+      : null;
 
 
   useEffect(() => {
@@ -1178,6 +1191,16 @@ const LoraSection: React.FC<{
                   {scale}
                 </span>
               </div>
+              {knownFileSize != null && (
+                <div className="flex gap-x-1.5 text-[10px]">
+                  <span className="text-brand-light/70 font-medium block">
+                    File Size
+                  </span>
+                  <span className="text-brand-light font-mono block">
+                    {formatBytes(knownFileSize, 1)}
+                  </span>
+                </div>
+              )}
             </div>
           )}
       {isDownloaded && path && (

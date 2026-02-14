@@ -285,6 +285,7 @@ def update_manifest_file(path: Path) -> bool:
     spec = doc.get("spec") or {}
     model_type = spec.get("model_type") or ""
     components: List[Dict[str, Any]] = spec.get("components") or []
+    loras = spec.get("loras") or []
     changed = False
 
     for comp in components:
@@ -351,6 +352,27 @@ def update_manifest_file(path: Path) -> bool:
                 if rr.get("recommended_vram_gb") != int(recommended_vram_gb):
                     rr["recommended_vram_gb"] = int(recommended_vram_gb)
                     changed = True
+
+    # Update LoRA file sizes when available.
+    if isinstance(loras, list):
+        for i, lora in enumerate(loras):
+            if isinstance(lora, str):
+                lora = {"source": lora}
+                loras[i] = lora
+                changed = True
+            if not isinstance(lora, dict):
+                continue
+            source_value = lora.get("source") or lora.get("path") or lora.get("url")
+            if not source_value or not isinstance(source_value, str):
+                continue
+            existing_size = lora.get("file_size")
+            if isinstance(existing_size, int) and existing_size > 0:
+                size_bytes = int(existing_size)
+            else:
+                size_bytes = compute_size_for_model_path(source_value, path.parent)
+            if size_bytes and lora.get("file_size") != int(size_bytes):
+                lora["file_size"] = int(size_bytes)
+                changed = True
 
     if changed:
         # Write back with safe dumper preserving simple formatting
