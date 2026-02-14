@@ -47,10 +47,11 @@ import PreprocessorProperties from '../properties/preprocessor/PreprocessorPrope
 import LoraPanel from '../properties/model/LoraPanel'
 import { runModelGeneration } from '@/lib/modelGeneration';
 import { runPreprocessorJob } from '@/lib/preprocessorRun';
-import { useManifestQuery } from '@/lib/manifest/queries'
+import { refreshManifest, useManifestQuery } from '@/lib/manifest/queries'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { formatBytes } from '@/lib/components-download/format'
 import { getTorchDevice } from '@app/preload'
+import { useQueryClient } from '@tanstack/react-query'
 
 interface PropertiesPanelProps {
     panelSize: number;
@@ -95,6 +96,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const getModelValues = useClipStore((s) => s.getModelValues);
   const getRawModelValues = useClipStore((s) => s.getRawModelValues);
   const modelDownloadProfile = useSettingsStore((s) => s.modelDownloadProfile);
+  const queryClient = useQueryClient();
   const allowFp8ForPopup = useMemo(() => {
     const dev = String(backendTorchDevice || "").trim().toLowerCase();
     return dev.startsWith("cuda");
@@ -377,6 +379,32 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     return defaults;
   }, []);
 
+  const buildDownloadedModelPathsByComponentKey = useCallback((manifest: any): Record<string, Set<string>> => {
+    const byKey: Record<string, Set<string>> = {};
+    if (!manifest) return byKey;
+
+    const components: ManifestComponent[] = (manifest?.spec?.components || []) as ManifestComponent[];
+    const normalizeModelPaths = (c: ManifestComponent): Array<any> => {
+      const raw = Array.isArray(c.model_path) ? c.model_path : (c.model_path ? [{ path: c.model_path }] : []);
+      return (raw as any[]).map((it) => (typeof it === 'string' ? { path: it } : it)).filter((it) => it && it.path);
+    };
+    const isItemDownloaded = (item: any): boolean => !!(item && item.is_downloaded === true);
+
+    let schedulerIdx = 0;
+    components.forEach((comp) => {
+      const key =
+        comp.type === "scheduler"
+          ? getSchedulerComponentKey(comp, schedulerIdx++)
+          : String((comp as any).name || comp.type || "component");
+      const downloadedItems = normalizeModelPaths(comp).filter((it) => isItemDownloaded(it));
+      if (downloadedItems.length > 0) {
+        byKey[key] = new Set(downloadedItems.map((it) => String(it.path)));
+      }
+    });
+
+    return byKey;
+  }, []);
+
   const collectPendingModelDownloads = useCallback((manifest: any): PendingModelDownloadItem[] => {
     if (!manifest) return [];
     const components: ManifestComponent[] = (manifest?.spec?.components || []) as ManifestComponent[];
@@ -592,11 +620,30 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     if (!manifest) return;
     const defaults = buildSelectedComponentDefaults(manifest);
     const existing = (clip as ModelClipProps | undefined)?.selectedComponents || {};
-    const merged = { ...defaults, ...existing };
-    if (!_.isEqual(merged, existing)) {
-      try { updateClip(clipId, { selectedComponents: merged } as any); } catch {}
+    const downloadedByKey = buildDownloadedModelPathsByComponentKey(manifest);
+    const nextSelected = { ...existing } as Record<string, any>;
+    let changed = false;
+
+    for (const [key, fallbackSelection] of Object.entries(defaults)) {
+      const currentSelection = nextSelected[key];
+      if (!currentSelection) {
+        nextSelected[key] = fallbackSelection;
+        changed = true;
+        continue;
+      }
+
+      const downloadedPaths = downloadedByKey[key];
+      const selectedPath = typeof currentSelection?.path === "string" ? String(currentSelection.path) : null;
+      if (selectedPath && downloadedPaths && !downloadedPaths.has(selectedPath)) {
+        nextSelected[key] = fallbackSelection;
+        changed = true;
+      }
     }
-  }, [hasModel, clipId, manifestData, buildSelectedComponentDefaults, updateClip, clip]);
+
+    if (changed && !_.isEqual(nextSelected, existing)) {
+      try { updateClip(clipId, { selectedComponents: nextSelected } as any); } catch {}
+    }
+  }, [hasModel, clipId, manifestData, buildSelectedComponentDefaults, buildDownloadedModelPathsByComponentKey, updateClip, clip]);
 
   // Check whether required model assets for this manifest are downloaded
   const isModelDownloaded = useMemo(() => {
@@ -906,26 +953,26 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   ]);
 
   const handleGenerate = useCallback(async () => {
+    let manifest: any = manifestData || (clip as any)?.manifest;
+    if (hasModel && manifestId) {
+      try {
+        const refreshed = await refreshManifest(manifestId, queryClient, false);
+        if (refreshed) manifest = refreshed;
+      } catch {
+        // Fallback to cached manifest on refresh errors.
+      }
+    }
+
     if (hasModel && !isModelDownloaded) {
-      const manifest: any = manifestData || (clip as any)?.manifest;
       const pending = collectPendingModelDownloads(manifest);
-      setPendingModelDownloads(
-        pending.length > 0
-          ? pending
-          : [
-              {
-                path: "Model and LoRA assets will be resolved and downloaded by the backend.",
-                sizeBytes: null,
-                componentLabel: String(manifest?.metadata?.name || "Model"),
-                kind: "model",
-              },
-            ],
-      );
-      setShowDownloadConfirm(true);
-      return;
+      if (pending.length > 0) {
+        setPendingModelDownloads(pending);
+        setShowDownloadConfirm(true);
+        return;
+      }
     }
     await startGeneration();
-  }, [hasModel, isModelDownloaded, manifestData, clip, collectPendingModelDownloads, startGeneration]);
+  }, [hasModel, isModelDownloaded, manifestData, clip, manifestId, queryClient, collectPendingModelDownloads, startGeneration]);
 
   const isModelRunning =
     !!clip &&
