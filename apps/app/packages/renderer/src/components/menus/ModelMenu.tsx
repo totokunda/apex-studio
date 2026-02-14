@@ -897,7 +897,7 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
       categoryKeys.forEach((k) => {
         const label =
           manifestCategoryKeyToLabel.get(k) ||
-          k.replace(/[_-]/g, " ").replace(/\s+/g, " ").trim();
+          k.replace(/[_-]/g, " ").replace(/\s+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase())
         set.add(label);
       });
     });
