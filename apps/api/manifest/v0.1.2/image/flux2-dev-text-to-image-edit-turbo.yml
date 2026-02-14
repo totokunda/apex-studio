@@ -45,6 +45,7 @@ spec:
     required: true
     verified: true
     scale: 1.0
+    file_size: 2760818216
   components:
   - type: scheduler
     label: Scheduler

@@ -34,11 +34,13 @@ spec:
     name: lightx2v_lora
     label: Lightx2v LoRA
     verified: true
+    file_size: 631344264
   - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_T2V_14B_FusionX_LoRA.safetensors
     scale: 1.0
     name: fusionx_lora
     label: FusionX LoRA
     verified: true
+    file_size: 316822496
   attention_types:
   - efficient_dot_product_attention
   - sdpa
@@ -374,7 +376,7 @@ spec:
       min: 256
       max: 2048
       step: 64
-    - id: vae_tile_sample_stride_height 
+    - id: vae_tile_sample_stride_height
       label: VAE Tile Stride Height
       description: Stride height for spatial tiling.
       type: number+slider
@@ -393,4 +395,4 @@ spec:
       default: 192
       min: 64
       max: 2048
-      step: 64  
+      step: 64

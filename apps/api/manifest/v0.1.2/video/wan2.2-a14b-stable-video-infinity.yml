@@ -45,6 +45,7 @@ spec:
     label: High Noise Lightning LoRA
     component: high_noise_transformer
     required: true
+    file_size: 613518320
   - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors
     scale: 0.5
     verified: true
@@ -52,6 +53,7 @@ spec:
     label: Low Noise Lightning LoRA
     component: low_noise_transformer
     required: true
+    file_size: 613518320
   - source: vita-video-gen/svi-model/version-2.0/SVI_Wan2.2-I2V-A14B_high_noise_lora_v2.0_pro.safetensors
     scale: 1.0
     verified: true
@@ -59,6 +61,7 @@ spec:
     label: High Noise SVI LoRA
     component: high_noise_transformer
     required: true
+    file_size: 1226928552
   - source: vita-video-gen/svi-model/version-2.0/SVI_Wan2.2-I2V-A14B_low_noise_lora_v2.0_pro.safetensors
     scale: 1.0
     verified: true
@@ -66,6 +69,7 @@ spec:
     label: Low Noise SVI LoRA
     component: low_noise_transformer
     required: true
+    file_size: 1226928552
   components:
   - type: scheduler
     label: Scheduler

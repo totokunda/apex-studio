@@ -48,6 +48,7 @@ spec:
     label: Lightx2v LoRA
     component: transformer
     verified: true
+    file_size: 739472104
   components:
   - type: scheduler
     label: Scheduler
@@ -413,7 +414,7 @@ spec:
       min: 256
       max: 2048
       step: 64
-    - id: vae_tile_sample_min_width 
+    - id: vae_tile_sample_min_width
       label: VAE Tile Min Width
       description: Minimum pixel width before spatial tiling is used.
       type: number+slider
@@ -423,7 +424,7 @@ spec:
       min: 256
       max: 2048
       step: 64
-    - id: vae_tile_sample_stride_height 
+    - id: vae_tile_sample_stride_height
       label: VAE Tile Stride Height
       description: Stride height for spatial tiling.
       type: number+slider

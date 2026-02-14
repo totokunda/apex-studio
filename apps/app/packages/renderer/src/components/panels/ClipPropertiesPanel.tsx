@@ -37,7 +37,7 @@ import { usePreprocessorsListQuery } from "@/lib/preprocessor/queries";
 import type { Preprocessor } from '@/lib/preprocessor/api';
 import { validatePreprocessorFrames } from '@/lib/preprocessorHelpers';
 import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
-import { ManifestComponent, ManifestComponentModelPathItem } from '@/lib/manifest/api';
+import { ManifestComponent, ManifestComponentModelPathItem, LoraType } from '@/lib/manifest/api';
 import { selectPreferredModelPathItem } from '@/lib/manifest/model-variant-selection';
 import ModelComponentsProperties from '../properties/model/ModelComponentsProperties'
 import OffloadProperties from '../properties/OffloadProperties'
@@ -380,7 +380,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const collectPendingModelDownloads = useCallback((manifest: any): PendingModelDownloadItem[] => {
     if (!manifest) return [];
     const components: ManifestComponent[] = (manifest?.spec?.components || []) as ManifestComponent[];
-    const loras: any[] = (manifest?.spec?.loras || []) as any[];
+    const loras: LoraType[] = (manifest?.spec?.loras || []) as LoraType[];
     const selectedExisting = (clip as ModelClipProps | undefined)?.selectedComponents || {};
     const selectedDefaults = buildSelectedComponentDefaults(manifest);
     const selectedMap = { ...selectedDefaults, ...selectedExisting } as Record<string, any>;
@@ -433,6 +433,12 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       }
       return null;
     };
+
+    const getLoraSizeBytes = (lora: LoraType): number | null =>
+      parsePossibleSizeBytes(lora.file_size) ??
+      parsePossibleSizeBytes(lora.size_bytes) ??
+      parsePossibleSizeBytes(lora.filesize) ??
+      parsePossibleSizeBytes(lora.size);
 
     const isFp8Item = (item: ManifestComponentModelPathItem): boolean => {
       const joined = [
@@ -569,11 +575,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
       addPending({
         path: source,
-        sizeBytes:
-          parsePossibleSizeBytes((lora as any).file_size) ??
-          parsePossibleSizeBytes((lora as any).size_bytes) ??
-          parsePossibleSizeBytes((lora as any).filesize) ??
-          parsePossibleSizeBytes((lora as any).size),
+        sizeBytes: getLoraSizeBytes(lora),
         componentLabel: "LoRA",
         variantLabel: String((lora as any).label || (lora as any).name || "").trim() || undefined,
         kind: "lora",

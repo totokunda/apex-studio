@@ -69,6 +69,9 @@ spec:
       precision: bf16
       type: safetensors
       file_size: 2521294886
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration

@@ -339,6 +339,10 @@ export type LoraType = {
       scale?: number;
       name?: string;
       label?: string;
+      file_size?: number;
+      size_bytes?: number;
+      filesize?: number;
+      size?: number;
       is_downloaded?: boolean;
       required?: boolean;
       component?: string;
