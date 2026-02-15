@@ -7,7 +7,7 @@ import React, {
   useState,
 } from "react";
 import { Image, Transformer, Group, Line} from "react-konva";
-import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
+
 import { useControlsStore } from "@/lib/control";
 import Konva from "konva";
 import { useViewportStore } from "@/lib/viewport";
@@ -20,50 +20,11 @@ import _ from "lodash";
 import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
 import { useVideoDecoderManager } from "@/lib/media/VideoDecoderManagerContext";
-import { useProjectsStore } from "@/lib/projects";
-import { generatePosterCanvas } from "@/lib/media/timeline";
 import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
+import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 // (prefetch helper removed by request; timeline-driven rendering only)
 
-const calculateIterateRange = (
-  currentFrame: number,
-  trimStart: number | undefined,
-  frameOffset: number,
-  speed: number,
-  clipFps: number,
-  projectFps: number,
-  mediaInfo: MediaInfo,
-  selectedAssetId: string,
-  assetId: string
-) => {
-    const isUsingPreprocessorSrc = selectedAssetId !== assetId;
-    const adjustedCurrentFrame = isUsingPreprocessorSrc
-      ? currentFrame - (trimStart || 0)
-      : currentFrame;
-    const idealStartFrame =
-      Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
-    const actualStartFrame = Math.floor(
-      (idealStartFrame / projectFps) * clipFps + 1e-4,
-    );
-    const totalFrames = Math.max(
-      0,
-      Math.floor((mediaInfo.duration || 0) * clipFps),
-    );
-    const startIdx =
-      Math.max(0, Math.min(totalFrames, actualStartFrame)) +
-      Math.round(((mediaInfo.startFrame || 0) / projectFps) * clipFps);
-      
-    const targetEndFrame = mediaInfo.endFrame
-      ? Math.round(((mediaInfo.endFrame || 0) / projectFps) * clipFps)
-      : undefined;
 
-    const startTime = startIdx / clipFps;
-    const endTime = targetEndFrame !== undefined 
-        ? targetEndFrame / clipFps 
-        : (mediaInfo.duration || 0);
-        
-    return { startTime, endTime, startIdx };
-};
 
 const getAspectFitSize = (
   info: MediaInfo | null | undefined,
@@ -131,11 +92,13 @@ const VideoPreview: React.FC<
   focusFrameOverride,
   currentLocalFrameOverride,
   offscreenFast = false,
-  decoderKey,
   hidden = false,
 }) => {
 
   const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(assetId) || null);
+  const mediaInfoAssetIdRef = useRef<string | null>(
+    mediaInfo.current ? assetId : null,
+  );
   // `mediaInfo` is stored in a ref for fast access by decoder callbacks, but ref updates
   // don't trigger React renders. We bump this version whenever `mediaInfo.current` changes
   // so aspect-fit sizing and Konva props update immediately (no "wait until drag" issues).
@@ -144,12 +107,13 @@ const VideoPreview: React.FC<
     mediaInfo.current = info;
     setMediaInfoVersion((v) => v + 1);
   }, []);
-  const decoderManager = useVideoDecoderManager();
+
   const focusFrameFromControls = useControlsStore((state) => state.focusFrame);
   const focusFrameFromInputs = useInputControlsStore((s) =>
     s.getFocusFrame(inputId ?? ""),
   );
-  const getActiveProject = useProjectsStore((s) => s.getActiveProject);
+
+
   const useInputScopedControls = inputMode && !!inputId;
   const focusFrame =
     typeof focusFrameOverride === "number"
@@ -173,11 +137,9 @@ const VideoPreview: React.FC<
   const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<Konva.Image>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
-  const drawTokenRef = useRef(0);
-  const posterRequestRef = useRef(0);
+
   const lastPosterKeyRef = useRef<string | null>(null);
   const suppressUntilRef = useRef<number>(0);
-  const lastSeekFrameRef = useRef<number>(0);
   const { applyFilters } = useWebGLFilters();
   // Resolve clip early so timing math can reference grouping info
   const clipFromStore = useClipStore((s) =>
@@ -195,6 +157,7 @@ const VideoPreview: React.FC<
       return 0;
     }
   }, [clip]);
+
   const startFrameUsed = useMemo(() => {
     if (!inputMode) return startFrame;
     const s = (clip as any)?.startFrame as number | undefined;
@@ -260,6 +223,10 @@ const VideoPreview: React.FC<
     const s = Number(_speed ?? 1);
     return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
   }, [_speed]);
+  const speedRef = useRef(speed);
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
   const tool = useViewportStore((s) => s.tool);
   const scale = useViewportStore((s) => s.scale);
   const position = useViewportStore((s) => s.position);
@@ -271,7 +238,7 @@ const VideoPreview: React.FC<
   const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
   const addClipSelection = useControlsStore((s) => s.addClipSelection);
   const clearSelection = useControlsStore((s) => s.clearSelection);
-  const { selectedClipIds, isFullscreen, fps: srcFps, isAccurateSeekNeeded } = useControlsStore();
+  const { selectedClipIds, isFullscreen, fps: srcFps } = useControlsStore();
   const isSelected = useMemo(
     () => selectedClipIds.includes(clipId),
     [clipId, selectedClipIds],
@@ -287,25 +254,7 @@ const VideoPreview: React.FC<
   } | null>(null);
   const addedTimestampRef = useRef<number | undefined>(undefined); // last timestamp rendered
 
-  const activeDecoderAssetIdRef = useRef<string | null>(null);
-  // Use a logical decoder id so multiple clips can share the same underlying
-  // asset while keeping independent decoder state and handlers.
-  const makeDecoderId = useCallback(
-    (id: string) => {
-      const logicalClipKey = decoderKey ?? clipId;
-      // For input-mode previews (model inputs, media dialogs, etc.), scope the
-      // decoder id by inputId so they never override the main timeline's
-      // onFrame/onError handlers for the same clip.
-      if (inputMode && inputId) {
-        return `${id}::${logicalClipKey}::input::${inputId}`;
-      }
-      // For normal timeline playback, keep the legacy id so it matches the
-      // preconfigured decoders from VideoDecoderManagerProvider.
-      return `${id}::${logicalClipKey}`;
-    },
-    [clipId, decoderKey, inputMode, inputId],
-  );
-  
+
   const { applyMask } = useWebGLMask({
     focusFrame: focusFrame,
     masks: clip?.masks || [],
@@ -381,20 +330,6 @@ const VideoPreview: React.FC<
     return { selectedAssetId: assetId, frameOffset: 0 };
   }, [clip?.preprocessors, assetId, currentFrame, trimStart]);
 
-  const posterPreprocessors = useMemo(() => {
-    const preprocessors = clip?.preprocessors ?? [];
-    return preprocessors.filter(
-      (p) =>
-        p?.assetId &&
-        p.createNewClip === false &&
-        p.status === "complete" &&
-        (typeof p.startFrame === "number" || typeof p.endFrame === "number"),
-    );
-  }, [clip?.preprocessors]);
-
-  const posterMasks = useMemo(() => clip?.masks ?? [], [clip?.masks]);
-
-  // (seekInProgressRef removed; was unused and could cause confusion)
 
   // Use refs to store current filter values to avoid callback recreation
   const filterParamsRef = useRef({
@@ -520,11 +455,10 @@ const VideoPreview: React.FC<
   // and can appear frozen until the user scrubs (seek).
   //
   // Detect backwards jumps while playing and restart the iterator from the new position.
-  const prevFocusFrameWhilePlayingRef = useRef<number | null>(null);
+
   const fpsFromControls = useControlsStore((s) => s.fps);
   const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId ?? ""));
   const fps = useInputScopedControls ? fpsFromInputs : fpsFromControls;
-  const currentStartFrameRef = useRef<number>(0);
   const lastRenderedFrameRef = useRef<number>(-1);
   const lastDrawnFocusFrameRef = useRef<number | null>(null);
   const skipDrawRef = useRef(false);
@@ -538,6 +472,9 @@ const VideoPreview: React.FC<
     fpsRef.current = fps;
   }, [fps]);
 
+
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Update refs when values change
   useEffect(() => {
@@ -785,19 +722,50 @@ const VideoPreview: React.FC<
     // @ts-ignore
     iteratorRef.current?.return?.();
     iteratorRef.current = null;
-    let info = getMediaInfoCached(selectedAssetId);
-    if (!info) {
-      return;
-    } else {
+
+    let cancelled = false;
+    const hydrateMediaInfo = async () => {
+      let info = getMediaInfoCached(selectedAssetId);
+
+      // Cold page refresh can start before media cache is hydrated.
+      // Fallback to async metadata load so first frame can render immediately after mount.
+      if (!info) {
+        const asset = getAssetById(selectedAssetId);
+        const mediaPath = asset?.path || selectedAssetId;
+        if (mediaPath) {
+          try {
+            info = await getMediaInfo(mediaPath, {
+              sourceDir: mediaPath.startsWith("app://apex-cache/")
+                ? "apex-cache"
+                : "user-data",
+            });
+          } catch {}
+        }
+      }
+
+      if (!info || cancelled) return;
+
+      mediaInfoAssetIdRef.current = selectedAssetId;
       setMediaInfoAndBump(info);
       // Update the "current" aspect-fit size for drawWrappedCanvas immediately so the
       // very first frame of the new asset can't render into a stale-sized canvas.
       displaySizeRef.current = getAspectFitSize(info, rectWidth, rectHeight);
-      
-      // Have cached info; force immediate redraw
+
+      // Have media info; force immediate redraw
       lastRenderedFrameRef.current = -1;
-    }
-  }, [selectedAssetId, rectWidth, rectHeight, setMediaInfoAndBump]);
+    };
+
+    void hydrateMediaInfo();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedAssetId,
+    rectWidth,
+    rectHeight,
+    setMediaInfoAndBump,
+    getAssetById,
+  ]);
 
 
   // Compute aspect-fit display size and offsets within the preview rect
@@ -918,7 +886,7 @@ const VideoPreview: React.FC<
   const drawWrappedCanvas = useCallback(
     (
       wc: {
-        canvas: HTMLCanvasElement | OffscreenCanvas | VideoFrame;
+        canvas: HTMLCanvasElement | OffscreenCanvas | VideoFrame | HTMLVideoElement;
         timestamp: number;
         duration: number;
       },
@@ -1088,6 +1056,11 @@ const VideoPreview: React.FC<
     [ensureProcessingCanvas, displayWidth, displayHeight, ],
   );
 
+  const drawWrappedCanvasRef = useRef(drawWrappedCanvas);
+  useEffect(() => {
+    drawWrappedCanvasRef.current = drawWrappedCanvas;
+  }, [drawWrappedCanvas]);
+
   const decoderMaskFrameRef = useRef(0);
   useEffect(() => {
     decoderMaskFrameRef.current = maskFrameForCurrentFocus;
@@ -1129,570 +1102,196 @@ const VideoPreview: React.FC<
     frameOffset,
     speed,
   ]);
+  const getTargetFrameInfoRef = useRef(getTargetFrameInfo);
+  useEffect(() => {
+    getTargetFrameInfoRef.current = getTargetFrameInfo;
+  }, [getTargetFrameInfo]);
 
-  const renderPosterFallback = useCallback(
-    async (opts?: { force?: boolean }) => {
-
-      if (!opts?.force && isPlaying) return;
-      if (hidden || !isInFrame) return;
-      if (!canvasRef.current) return;
-      if (!selectedAssetId) return;
-      if (originalFrameRef.current) return;
-
-      const info = mediaInfo.current;
-      if (!info) return;
-
-
-      let { displayWidth: targetW, displayHeight: targetH } =
-        displaySizeRef.current;
-      if (!targetW || !targetH) {
-        const fallback = getAspectFitSize(info, rectWidth, rectHeight);
-        displaySizeRef.current = fallback;
-        targetW = fallback.displayWidth;
-        targetH = fallback.displayHeight;
-      }
-
-      const width = Math.max(1, Math.floor(targetW || 0));
-      const height = Math.max(1, Math.floor(targetH || 0));
-      if (!width || !height) return;
-
-      const targetInfo = getTargetFrameInfo();
-      const frameIndex = Math.max(
-        0,
-        Math.floor(targetInfo?.targetFrame ?? 0),
-      );
-      const posterKey = `${selectedAssetId}|${frameIndex}|${width}x${height}`;
-      if (lastPosterKeyRef.current === posterKey) return;
-
-      const asset = getAssetById(selectedAssetId);
-      if (!asset?.path) return;
-
-      const token = ++posterRequestRef.current;
-      lastPosterKeyRef.current = posterKey;
-
-      const poster = await generatePosterCanvas(asset.path, width, height, {
-        mediaInfo: info,
-        frameIndex,
-        masks: posterMasks.length ? posterMasks : undefined,
-        preprocessors: posterPreprocessors.length
-          ? posterPreprocessors
-          : undefined,
-      });
-
-      if (posterRequestRef.current !== token) return;
-      if (!poster) return;
-      if (originalFrameRef.current || lastRenderedFrameRef.current >= 0) {
+  // Video frame callback: draw current video frame to canvas and trigger Konva redraw
+  const onVideoFrameCallback = useCallback(
+    (_now: number, _metadata: { mediaTime: number; presentedFrames: number }) => {
+      const video = videoRef.current;
+      const draw = drawWrappedCanvasRef.current;
+      if (!video || !draw || !canvasRef.current || video.readyState < 2) {
+        video?.requestVideoFrameCallback(onVideoFrameCallback);
         return;
       }
-
-      const fallbackCanvas = document.createElement("canvas");
-      fallbackCanvas.width = width;
-      fallbackCanvas.height = height;
-      const ctx = fallbackCanvas.getContext("2d");
-      if (!ctx) return;
       try {
-        ctx.drawImage(poster, 0, 0, width, height);
+        draw(
+          {
+            canvas: video,
+            timestamp: video.currentTime,
+            duration: 0,
+          },
+          decoderMaskFrameRef.current,
+        );
+        imageRef.current?.getLayer()?.batchDraw?.();
       } catch {
-        return;
+        // ignore draw errors (e.g. during seek)
       }
-
-      const maskFrame = maskFrameForCurrentFocus;
-      decoderMaskFrameRef.current = maskFrame;
-      pendingSeekTargetRef.current = null;
-      drawWrappedCanvas(
-        {
-          canvas: fallbackCanvas,
-          timestamp: targetInfo?.timestamp ?? 0,
-          duration: 0,
-        },
-        maskFrame,
-        { recordFrame: false },
-      );
+      video.requestVideoFrameCallback(onVideoFrameCallback);
     },
-    [
-      isPlaying,
-      hidden,
-      isInFrame,
-      selectedAssetId,
-      rectWidth,
-      rectHeight,
-      getAssetById,
-      getTargetFrameInfo,
-      drawWrappedCanvas,
-      posterMasks,
-      posterPreprocessors,
-      maskFrameForCurrentFocus,
-    ],
+    [],
   );
 
-  // Debounced worker seek for fast scrubbing (non-accurate seeks).
-  // On Windows, each worker seek message triggers expensive D3D11VA decoder
-  // operations. Without debouncing, rapid focusFrame updates (10-60/sec during
-  // timeline scrubbing) flood the worker with seeks, each partially initialising
-  // before being cancelled. A 60ms window collapses rapid scrub events into a
-  // single seek call, dramatically reducing churn while still feeling responsive.
-  // Accurate seeks (settle / explicit frame locks) bypass the debounce entirely.
-  const debouncedSeekRef = useRef<ReturnType<typeof _.debounce> | null>(null);
+  // Setup video element and wire frame rendering to Konva
   useEffect(() => {
-    debouncedSeekRef.current = _.debounce(
-      (logicalId: string, timestamp: number) => {
-        // Guard: if playback started during the debounce window, skip the seek.
-        if (isPlayingRef.current) return;
-        decoderManager.seek(logicalId, timestamp, false).catch(() => {});
-      },
-      60,
-      { leading: false, trailing: true },
-    );
-    return () => {
-      debouncedSeekRef.current?.cancel();
-    };
-    // Re-create whenever the decoder manager instance changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [decoderManager]);
+    if (!selectedAssetId || !displayWidth || !displayHeight) return;
 
-  const seekToCurrentFrame = useCallback(
-    async (isAccurateSeekNeededInput: boolean = false) => {
+    const info =
+      getMediaInfoCached(selectedAssetId) ||
+      (mediaInfoAssetIdRef.current === selectedAssetId ? mediaInfo.current : null);
+    const asset = getAssetById(selectedAssetId);
+    const url =
+      (info?.video as any)?.input?.source?._url?.href ??
+      info?.path ??
+      asset?.path;
+    if (!url || !info?.video) return;
 
-
-      // NOTE: Do NOT use `useInputControlsStore.getState()` here:
-      // it reads the global fallback store (wrong clip scope) and will return false
-      // during input playback, causing us to seek every frame.
-      // Use ref to avoid triggering seeks when pausing - this prevents frame jumping
-      if (isPlaying) return;
-      if (isPlayingRef.current) return;
-
-
-    const info = getTargetFrameInfo();
-
-    if (Math.abs(lastSeekFrameRef.current - (info?.targetFrame ?? 0)) > 8) {
-      isAccurateSeekNeededInput = true;
+    let video = videoRef.current;
+    if (!video) {
+      video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.setAttribute("playsinline", "true");
+      videoRef.current = video;
     }
-
-    lastSeekFrameRef.current = info?.targetFrame ?? 0;
- 
-
-    if (!info) {
-      void renderPosterFallback();
-      return;
-    }
-
-
-
-    const focusFrameValue = focusFrameRef.current;
-    if (
-      !isAccurateSeekNeededInput &&
-      originalFrameRef.current &&
-      lastDrawnFocusFrameRef.current === focusFrameValue
-    ) {
-      return;
-    }
-
-    const { timestamp, targetFrame } = info;
-    pendingSeekTargetRef.current = {
-      frame: targetFrame,
-      strict: isAccurateSeekNeededInput,
-    };
-
-
-    // Update the mask frame ref immediately before seeking to ensure sync
-    decoderMaskFrameRef.current = maskFrameForCurrentFocus;
-
-    // Cancel any ongoing paused seek operations (do not interfere with live decode token)
-    drawTokenRef.current++;
-    if (isAccurateSeekNeeded) {
-      isAccurateSeekNeededInput = true;
-    }
-
+    const initialPlaybackRate = Math.max(0.1, speedRef.current || 1);
     try {
-      const targetAssetId = selectedAssetId;
-      if (!targetAssetId) return;
+      video.defaultPlaybackRate = initialPlaybackRate;
+      video.playbackRate = initialPlaybackRate;
+    } catch {}
 
-      const logicalId = makeDecoderId(targetAssetId);
-
-      if (isAccurateSeekNeededInput) {
-        // Accurate seeks (settle / explicit frame lock) fire immediately so the
-        // user gets a sharp frame as soon as they stop scrubbing.
-        debouncedSeekRef.current?.cancel();
-        await decoderManager.seek(logicalId, timestamp, true);
-      } else {
-        // Fast scrub: collapse rapid seek requests into a single worker message
-        // to avoid flooding the D3D11VA decode pipeline on Windows.
-        debouncedSeekRef.current?.(logicalId, timestamp);
-      }
-
-      activeDecoderAssetIdRef.current = logicalId;
-
-    } catch (e) {
-      console.warn("[video] seek failed", e);
-      pendingSeekTargetRef.current = null;
-      void renderPosterFallback({ force: true });
-    }
-    },
-    [
-      decoderManager,
-      getTargetFrameInfo,
-      //renderPosterFallback,
-      maskFrameForCurrentFocus,
-      isAccurateSeekNeeded,
-      selectedAssetId,
-      makeDecoderId,
-      isInFrame
-    ],
-  );
-
-
-  useEffect(() => {
-    
-    const configureDecoders = async () => {
-      const ids = new Set<string>();
-      if (assetId) ids.add(assetId);
-      clip?.preprocessors?.forEach((p) => {
-        if (p.assetId) ids.add(p.assetId);
-      });
-    
-      for (const id of ids) {
-        try {
-          let info = getMediaInfoCached(id);
-          const asset = getAssetById(id);
-          if (!info && asset?.path) {
-            info = await getMediaInfo(asset.path, {
-              sourceDir: clip.type === "video" ? "user-data" : "apex-cache",
-            });
-          }
-
-          if (!info || !asset) continue;
-
-          // If this is the currently-selected source, publish the mediaInfo into React
-          // state immediately so sizing updates before the first frame renders.
-          if (id === selectedAssetId) {
-            setMediaInfoAndBump(info);
-            displaySizeRef.current = getAspectFitSize(info, rectWidth, rectHeight);
-          }
-
-          const config = info.videoDecoderConfig;
-          if (!config) continue;
-
-
-          const logicalId = makeDecoderId(id);
-
-          const onFrame = (data: {
-            canvas: VideoFrame;
-            timestamp: number;
-            duration: number;
-          }) => {
-            drawWrappedCanvas(data, decoderMaskFrameRef.current);
-          };
-
-          const onError = (e: Error) =>
-            console.error("[VideoDecoderManager] Error", id, e);
-
-          if (decoderManager.hasAsset(logicalId)) {
-            
-            decoderManager.updateAssetHandlers(logicalId, { onFrame, onError });
-            // Trigger seek for existing decoders since onReady won't be called
-
-            try {
-            await seekToCurrentFrame(true);
-            } catch (e) {
-              console.error("Error seeking to current frame", id, e);
-            }
-          } else {
-            const activeProject = getActiveProject();
-            await decoderManager.addAsset(asset, {
-              mediaInfo: info,
-              videoDecoderConfig: config,
-              folderUuid: activeProject?.folderUuid,
-              onFrame,
-              onError,
-              logicalId,
-              onReady: async () => {
-                await seekToCurrentFrame(true);
-              },
-            });
-          }
-        } catch (e) {
-          console.error("Error configuring decoder for", id, e);
-        }
-      }
+    const scheduleNextFrame = () => {
+      video?.requestVideoFrameCallback(onVideoFrameCallback);
     };
 
-    void configureDecoders();
-
-   
-  }, [
-    assetId,
-    clip?.preprocessors,
-    decoderManager,
-    getAssetById,
-    drawWrappedCanvas,
-    makeDecoderId
-  ]);
-
-  useEffect(() => {
-    void seekToCurrentFrame();
-  }, [seekToCurrentFrame]);
-
-  useEffect(() => {
-    void renderPosterFallback();
-  }, [
-    renderPosterFallback,
-    isPlaying,
-    hidden,
-    isInFrame,
-    mediaInfoVersion,
-    selectedAssetId,
-  ]);
-
-  const startRendering = useCallback(async () => {
-    if (!canvasRef.current) return;
-    if (!mediaInfo.current) return;
-    if (!displayWidth || !displayHeight) return;
-    const clipFps =
-      mediaInfo.current?.stats.video?.averagePacketRate || fps || DEFAULT_FPS;
-    const projectFps = fps || DEFAULT_FPS;
-
-    if (!Number.isFinite(clipFps) || clipFps <= 0) return;
-    if (!Number.isFinite(projectFps) || projectFps <= 0) return;
-
-    const { startTime, endTime, startIdx } = calculateIterateRange(
-      currentFrame,
-      trimStart,
-      frameOffset,
-      speed,
-      clipFps,
-      projectFps,
-      mediaInfo.current,
-      selectedAssetId,
-      assetId
-    );
-
-    currentStartFrameRef.current = startIdx;
-    const lastFrame = lastRenderedFrameRef.current;
-    if (
-      Number.isFinite(lastFrame) &&
-      lastFrame >= 0 &&
-      Math.abs(lastFrame - startIdx) <= 1
-    ) {
-      resumeGateFrameRef.current = lastFrame;
-    } else {
-      resumeGateFrameRef.current = null;
-    }
-    skipDrawRef.current = false;
-    pendingSeekTargetRef.current = null;
-
-    const myToken = ++drawTokenRef.current;
-    // @ts-ignore
-    iteratorRef.current?.return?.();
-
-    const activeAssetId = selectedAssetId;
-    if (!activeAssetId) return;
-
-    const logicalId = makeDecoderId(activeAssetId);
-
-    const checkCancel = () => {
-        if (!offscreenFast && myToken !== drawTokenRef.current) return false;
-        if (!isPlaying) return false;
-        return true;
-    };
-
-    try {
-      // Ensure the decoder is positioned at our intended start time before iterating.
-      // This is particularly important when replaying after hitting end-of-stream, where
-      // the underlying decoder/worker may not automatically rewind for a backwards range.
-      if (!checkCancel()) return;
+    const drawCurrentFrame = () => {
+      const draw = drawWrappedCanvasRef.current;
+      if (!video || !draw || !canvasRef.current || video.readyState < 2) return;
       try {
-        suppressSeekFramesRef.current = true;
-        await decoderManager.seek(logicalId, startTime, true);
+        draw(
+          {
+            canvas: video,
+            timestamp: video.currentTime,
+            duration: 0,
+          },
+          decoderMaskFrameRef.current,
+        );
+        imageRef.current?.getLayer()?.batchDraw?.();
       } catch {}
-      finally {
-        suppressSeekFramesRef.current = false;
+    };
+
+    const seekToFocusFrame = () => {
+      const targetInfo = getTargetFrameInfoRef.current();
+      if (!targetInfo || !video) return false;
+      const { timestamp } = targetInfo;
+      if (!Number.isFinite(timestamp)) return false;
+      if (Math.abs(video.currentTime - timestamp) <= 0.001) return false;
+      try {
+        video.currentTime = timestamp;
+        return true;
+      } catch {
+        return false;
       }
-      if (!checkCancel()) return;
+    };
 
-      await decoderManager.iterate(
-        logicalId,
-        startTime,
-        endTime,
-        async (ts) => {
-          if (!checkCancel()) return;
+    const onLoadedData = () => {
+      const didSeek = seekToFocusFrame();
+      if (isPlayingRef.current) {
+        video?.play().catch(() => {});
+      }
+      if (!didSeek) {
+        drawCurrentFrame();
+      }
+      scheduleNextFrame();
+    };
 
-          let sampleIdx = Number.isFinite(ts)
-            ? Math.floor(ts * clipFps + 1e-4)
-            : lastRenderedFrameRef.current + 1;
-          skipDrawRef.current = false;
-          const resumeGate = resumeGateFrameRef.current;
-          if (
-            !offscreenFast &&
-            typeof resumeGate === "number" &&
-            Number.isFinite(resumeGate) &&
-            sampleIdx < resumeGate
-          ) {
-            skipDrawRef.current = true;
-            return;
-          }
+    const onSeeked = () => {
+      drawCurrentFrame();
+      scheduleNextFrame();
+    };
 
-          const isUsingPreprocessorSrc = selectedAssetId !== assetId;
-          const computeLocalFocusMedia = () => {
-            const focusFrameValue = focusFrameRef.current;
-            // Base timeline-local frames relative to clip start (no give-start applied)
-            const baseLocal = Math.max(
-              0,
-              (focusFrameValue ?? 0) - startFrameUsed,
-            );
-            // When using preprocessor src, align to its own frame space by subtracting its start offset.
-            // Otherwise, include trimStart to match the main clip's reference frame.
-            const derivedLocal = isUsingPreprocessorSrc
-              ? Math.max(0, baseLocal - Math.max(0, frameOffset))
-              : Math.max(0, baseLocal + (trimStart || 0));
-            const localProjectFrames =
-              typeof currentLocalFrameOverride === "number"
-                ? Math.max(0, currentLocalFrameOverride)
-                : derivedLocal;
-            const speedAdjusted = Math.max(
-              0,
-              localProjectFrames * Math.max(0.1, speed),
-            );
-            // Map from project fps to native fps using floor to reduce jitter
-            const actualFrameIdx = Math.floor(
-              (speedAdjusted / projectFps) * clipFps + 1e-4,
-            );
-            return (
-              actualFrameIdx +
-              Math.round(
-                ((mediaInfo.current?.startFrame || 0) / projectFps) * clipFps,
-              )
-            );
-          };
+    video.addEventListener("loadeddata", onLoadedData);
+    video.addEventListener("seeked", onSeeked);
 
-          if (!offscreenFast) {
-            // Skip stale frames that are behind the timeline by more than 1 frame
-            let localFocus = computeLocalFocusMedia();
-            if (sampleIdx < localFocus - 1) {
-              skipDrawRef.current = true;
-              return;
-            }
-            // If we're ahead of the timeline, wait until the timeline catches up.
-            // On Windows the DWM compositor can delay RAF callbacks by one or
-            // more vsync intervals (16-33ms), causing the decoder to stall
-            // indefinitely when a frame arrives just before a compositor pause.
-            // We use a deadline-aware loop: if the RAF hasn't fired within
-            // 1.5× the expected frame interval, we break out anyway so playback
-            // never stalls under compositor jitter.
-            if (sampleIdx > (localFocus = computeLocalFocusMedia())) {
-              const frameBudgetMs = (1000 / Math.max(1, projectFps)) * 1.5;
-              const deadline = performance.now() + frameBudgetMs;
-              await new Promise<void>((resolve) => {
-                const check = () => {
-                  if (
-                    !checkCancel() ||
-                    sampleIdx <= computeLocalFocusMedia() ||
-                    performance.now() >= deadline
-                  ) {
-                    resolve();
-                  } else {
-                    requestAnimationFrame(check);
-                  }
-                };
-                requestAnimationFrame(check);
-              });
-            }
-          }
-
-          const focusFrameForMask = focusFrameRef.current;
-          const speedFactor = Math.max(0.1, speed);
-          let maskFrame: number;
-          if (clip) {
-            if (inputMode) {
-              const local = Math.max(0, focusFrameForMask + (trimStart || 0));
-              maskFrame = Math.max(0, Math.floor(local * speedFactor));
-            } else {
-              const isUsingPreprocessorSrc = selectedAssetId !== assetId;
-              const baseLocal = Math.max(0, focusFrameForMask - startFrameUsed);
-              const derivedLocal = isUsingPreprocessorSrc
-                ? Math.max(0, baseLocal - Math.max(0, frameOffset))
-                : Math.max(0, baseLocal + (trimStart || 0));
-              maskFrame = Math.max(0, Math.floor(derivedLocal * speedFactor));
-            }
-          } else {
-            const local = Math.max(
-              0,
-              focusFrameForMask - startFrameUsed + (trimStart || 0),
-            );
-            maskFrame = Math.max(0, Math.floor(local * speedFactor));
-          }
-          decoderMaskFrameRef.current = maskFrame;
-        },
-        checkCancel
-      );
-    } catch (e: any) {
-      console.log("startRendering error", e);
-      void renderPosterFallback({ force: true });
+    video.src = url;
+    video.load();
+    if (video.readyState >= 2) {
+      onLoadedData();
     }
-  }, [
-    mediaInfo,
-    fps,
-    selectedAssetId,
-    assetId,
-    displayWidth,
-    displayHeight,
-    currentFrame,
-    drawWrappedCanvas,
-    speed,
-    startFrameUsed,
-    frameOffset,
-    trimStart,
-    clip,
-    isPlaying,
-    inputMode,
-    makeDecoderId,
-    renderPosterFallback,
-  ]);
 
-  useEffect(() => {
-    if (isPlaying) {
-      void startRendering();
+    if (isPlayingRef.current) {
+      video.play().catch(() => {});
     }
+
     return () => {
-      skipDrawRef.current = false;
-      suppressSeekFramesRef.current = false;
-      resumeGateFrameRef.current = null;
-      pendingSeekTargetRef.current = null;
-      drawTokenRef.current++;
-      // @ts-ignore
-      iteratorRef.current?.return?.();
+      video?.removeEventListener("loadeddata", onLoadedData);
+      video?.removeEventListener("seeked", onSeeked);
+      video?.pause();
+      videoRef.current = null;
     };
   }, [
-    isPlaying,
-    offscreenFast,
     selectedAssetId,
-    assetId,
-    mediaInfo,
     displayWidth,
     displayHeight,
-    fps,
-    speed,
-    frameOffset,
-    applicators.length,
-    inputId,
-    inputMode,
+    getAssetById,
+    onVideoFrameCallback,
   ]);
 
-  // Restart iteration if focusFrame jumps backwards during playback (e.g. replay from end).
+  // Seek video to current frame when paused and focusFrame changes
   useEffect(() => {
-    if (!isPlaying) {
-      resumeGateFrameRef.current = null;
-      prevFocusFrameWhilePlayingRef.current = focusFrame;
+    if (isPlaying) return;
+    const video = videoRef.current;
+    const targetInfo = getTargetFrameInfo();
+    if (!video || !targetInfo || video.readyState < 2) return;
+
+    const { timestamp } = targetInfo;
+    if (Math.abs(video.currentTime - timestamp) > 0.05) {
+      video.currentTime = timestamp;
       return;
     }
-    const prev = prevFocusFrameWhilePlayingRef.current;
-    prevFocusFrameWhilePlayingRef.current = focusFrame;
-    if (typeof prev === "number" && Number.isFinite(prev)) {
-      // Any backwards jump indicates a discontinuity (scrub or replay). Restart decode.
-      if (focusFrame < prev) {
-        void startRendering();
-      }
+
+    // If we're already at the target time while paused, browsers may not emit
+    // another frame callback. Draw once explicitly to avoid initial black frames.
+    if (lastDrawnFocusFrameRef.current !== focusFrame) {
+      const draw = drawWrappedCanvasRef.current;
+      if (!draw || !canvasRef.current) return;
+      try {
+        draw(
+          {
+            canvas: video,
+            timestamp: video.currentTime,
+            duration: 0,
+          },
+          decoderMaskFrameRef.current,
+        );
+      } catch {}
     }
-  }, [focusFrame, isPlaying, startRendering]);
+  }, [isPlaying, focusFrame, getTargetFrameInfo]);
+
+  // Play/pause video based on timeline
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isPlaying) {
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  }, [isPlaying]);
+
+  // Keep the HTML video element playback speed aligned with clip speed.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const playbackRate = Math.max(0.1, speed || 1);
+    try {
+      video.defaultPlaybackRate = playbackRate;
+      video.playbackRate = playbackRate;
+    } catch {}
+  }, [speed]);
+
 
   // If video is paused, reapply filters and applicators when they change
   useEffect(() => {
@@ -2111,9 +1710,7 @@ const VideoPreview: React.FC<
         clipWidth={rectWidth}
         clipHeight={rectHeight}
       >
-        
         <Image
-          
           visible={!hidden}
           listening={!hidden}
           draggable={tool === "pointer" && !isTransforming && !inputMode && !hidden}
