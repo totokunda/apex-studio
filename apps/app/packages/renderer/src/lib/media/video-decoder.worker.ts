@@ -419,9 +419,6 @@ function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
 
   const frameTime = frame.timestamp / 1e6;
 
-  
-
-  
   // 1. Cache
   cacheFrame(state, frame);
 
@@ -771,7 +768,6 @@ async function decodePacketSafe(
 // Message Listener
 self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
   const msg = e.data;
-
   // Mirror a tiny debug summary back to the main thread so that
   // activity in this worker is visible in the normal renderer console.
   try {
@@ -843,7 +839,8 @@ async function handleConfigure(
 ) {
   const { assetId, config: cfg } = msg;
   const id = assetId ?? cfg.asset.id;
-  
+
+
   if (!id) {
     throw new Error("configure message missing asset identifier");
   }
@@ -864,6 +861,7 @@ async function handleConfigure(
     typeof cfg.userDataPath === "string" &&
     cfg.userDataPath.length > 0 &&
     filePath.includes(cfg.userDataPath?.replace(/^\/+/, ""))
+
 
   // If the incoming asset path is explicitly rooted under Electron's userData
   // directory, prefer serving via app://user-data regardless of engine_results
@@ -991,6 +989,7 @@ async function handleSeek(
 
   // 1. Cache Hit
   const cached = findCachedFrame(state, timestamp);
+
 
   if (cached) {
     postFrame(id, cached, requestId);
