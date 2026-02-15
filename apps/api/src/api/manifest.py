@@ -36,6 +36,8 @@ MANIFEST_BASE_PATH = source_manifest_base_path()
 # Mutable overlay manifests live under /.local_manifest.
 LOCAL_MANIFEST_BASE_PATH = local_manifest_base_path()
 MANIFEST_CACHE_BUSTER_FILE = LOCAL_MANIFEST_BASE_PATH / ".cache_buster"
+GROUPS_MIN_VERSION = (0, 1, 2)
+GROUPS_MIN_VERSION_STR = "0.1.2"
 
 
 def resolve_manifest_path_for_read(relative_path: str) -> Path:
@@ -571,6 +573,56 @@ def _manifest_version_sort_key(relative_path: str) -> tuple[int, int, int, int]:
     return (1, 0, 0, 0)
 
 
+def _parse_semver(value: str) -> Optional[tuple[int, int, int]]:
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", value.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def _highest_manifest_version_uncached() -> str:
+    """
+    Discover the highest manifest directory version from relative paths.
+    Returns "0.0.0" when no versioned paths are found.
+    """
+    best: Optional[tuple[int, int, int]] = None
+    for relative_path in _collect_manifest_relative_paths(include_shared=False):
+        parts = Path(relative_path).parts
+        if not parts:
+            continue
+        parsed = _parse_semver(parts[0])
+        if parsed is None:
+            continue
+        if best is None or parsed > best:
+            best = parsed
+    if best is None:
+        return "0.0.0"
+    return f"{best[0]}.{best[1]}.{best[2]}"
+
+
+@lru_cache(maxsize=1)
+def _highest_manifest_version_cached(cache_key: str) -> str:
+    return _highest_manifest_version_uncached()
+
+
+def _get_highest_manifest_version() -> str:
+    cache_key = f"manifest-version:{_manifest_cache_buster_token()}"
+    return _highest_manifest_version_cached(cache_key)
+
+
+def _manifest_version_info_sync() -> Dict[str, Any]:
+    version = _get_highest_manifest_version()
+    parsed = _parse_semver(version)
+    supports_groups = parsed is not None and parsed >= GROUPS_MIN_VERSION
+    return {
+        "version": version,
+        "supports_groups": supports_groups,
+        "min_groups_version": GROUPS_MIN_VERSION_STR,
+    }
+
+
 def _manifest_relative_path_priority(
     relative_path: str,
 ) -> tuple[int, int, int, int, int, str]:
@@ -1005,6 +1057,12 @@ async def get_system_compute_info():
     return await _run_blocking(_get_system_compute_info_sync)
 
 
+@router.get("/version")
+async def get_manifest_version():
+    """Return manifest API capability/version info used by UI endpoint gating."""
+    return await _run_blocking(_manifest_version_info_sync)
+
+
 def _list_all_manifests_sync(include_incompatible: bool = False):
     """Blocking implementation for list_all_manifests()."""
     try:
@@ -1369,6 +1427,7 @@ def invalidate_manifest_caches() -> None:
     _get_all_manifest_files_cached.cache_clear()
     _get_manifest_id_index_cached.cache_clear()
     _get_all_group_files_cached.cache_clear()
+    _highest_manifest_version_cached.cache_clear()
     bump_manifest_cache_buster()
 
 
@@ -1390,6 +1449,18 @@ async def list_manifest_groups():
 @router.get("/groups/{group_id}")
 async def get_manifest_group(group_id: str):
     """Get a specific ModelGroup by its metadata.id."""
+    return await _run_blocking(_get_group_by_id_sync, group_id)
+
+
+@router.get("/group")
+async def list_manifest_group_alias():
+    """Backward-compatible alias for listing ModelGroup manifests."""
+    return await _run_blocking(get_all_group_files)
+
+
+@router.get("/group/{group_id}")
+async def get_manifest_group_alias(group_id: str):
+    """Backward-compatible alias for fetching one ModelGroup by id."""
     return await _run_blocking(_get_group_by_id_sync, group_id)
 
 

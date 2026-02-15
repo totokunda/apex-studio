@@ -244,6 +244,7 @@ export class VideoFrameDecoder {
             else if (fmt === ADTS) formatStr = "aac";
         }
 
+
         this.worker.postMessage({
             type: "configure",
             config: {
@@ -661,6 +662,7 @@ export class VideoDecoderManager {
             onReady: options.onReady,
         });
 
+ 
         this.assets.set(decoderId, assetClient);
 
         // Send configure to the shared worker
@@ -686,6 +688,8 @@ export class VideoDecoderManager {
         if (cachedUserDataPath) {
             config.userDataPath = cachedUserDataPath;
         }
+
+        console.log("config", config);
 
         this.worker.postMessage({
             type: "configure",

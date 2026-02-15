@@ -44,17 +44,85 @@ import {
   isValidTimelineForClip,
 } from "@/lib/clip";
 import { v4 as uuidv4 } from "uuid";
-import { useQuery, useQueryClient} from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchManifestsAndPrimeCache,
   fetchManifestGroups,
   fetchModelTypes,
-  prefetchModelMenuQueries,
   useManifestQuery,
 } from "@/lib/manifest/queries";
 import { resolveManifestVariantId } from "@/lib/manifest/variantStorageKey";
 
-import { getOffloadDefaultsForManifest } from "@app/preload";
+import { getBackendUrl, getOffloadDefaultsForManifest } from "@app/preload";
+
+const MIN_MANIFEST_GROUPS_VERSION = "0.1.2";
+
+const parseSemver = (value: unknown): [number, number, number] | null => {
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)$/i);
+  if (!match) return null;
+  return [
+    Number.parseInt(match[1], 10),
+    Number.parseInt(match[2], 10),
+    Number.parseInt(match[3], 10),
+  ];
+};
+
+const isSemverAtLeast = (version: string, minimum: string): boolean => {
+  const lhs = parseSemver(version);
+  const rhs = parseSemver(minimum);
+  if (!lhs || !rhs) return false;
+  if (lhs[0] !== rhs[0]) return lhs[0] > rhs[0];
+  if (lhs[1] !== rhs[1]) return lhs[1] > rhs[1];
+  return lhs[2] >= rhs[2];
+};
+
+const fetchSupportsManifestGroups = async (): Promise<boolean> => {
+  try {
+    const backendUrlRes = await getBackendUrl();
+    const rawBackendUrl =
+      backendUrlRes?.success && backendUrlRes?.data?.url
+        ? String(backendUrlRes.data.url)
+        : "";
+    const backendUrl = rawBackendUrl.replace(/\/+$/, "");
+    if (!backendUrl) return false;
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 3_000);
+    try {
+      const response = await fetch(`${backendUrl}/manifest/version`, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      if (!response.ok) return false;
+      const payload = (await response.json()) as
+        | {
+            version?: string;
+            manifest_version?: string;
+            manifest_api_version?: string;
+            supports_groups?: boolean;
+          }
+        | undefined;
+
+      if (typeof payload?.supports_groups === "boolean") {
+        return payload.supports_groups;
+      }
+
+      const version =
+        payload?.version ??
+        payload?.manifest_version ??
+        payload?.manifest_api_version;
+      return (
+        typeof version === "string" &&
+        isSemverAtLeast(version, MIN_MANIFEST_GROUPS_VERSION)
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  } catch {
+    return false;
+  }
+};
 
 export const ModelItem: React.FC<{
   manifest: ManifestDocument;
@@ -696,23 +764,44 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const scrollCacheRef = useRef<Map<string, number>>(new Map());
-  const {selectedManifestId} = useManifestStore();
+  const { selectedManifestId } = useManifestStore();
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    // Ensure model data is warm even if the user jumps directly
-    // into the Models tab before global startup prefetch completes.
-    void prefetchModelMenuQueries(queryClient);
+    void queryClient.prefetchQuery({
+      queryKey: ["manifestSupportsGroups"],
+      queryFn: fetchSupportsManifestGroups,
+      staleTime: 300_000,
+    });
+    void queryClient.prefetchQuery({
+      queryKey: ["modelTypes"],
+      queryFn: fetchModelTypes,
+      staleTime: 30_000,
+    });
   }, [queryClient]);
   // Keep showing the last successfully rendered data while queries refetch/error,
   // to avoid the menu ever flashing "nothing" after it has rendered once.
   const lastGoodManifestsRef = useRef<ManifestDocument[] | null>(null);
   const lastGoodModelTypesRef = useRef<ModelTypeInfo[] | null>(null);
 
-  // Groups are the PRIMARY data source for the model menu.
-  // Each group represents a model family; its default variant's manifest is
-  // displayed as the card.  The flat manifest list only runs as a fallback
-  // for backends that haven't been upgraded to support groups yet.
+  const manifestVersionGateQuery = useQuery<boolean>({
+    queryKey: ["manifestSupportsGroups"],
+    queryFn: fetchSupportsManifestGroups,
+    placeholderData: (prev) => prev,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 300_000,
+    gcTime: Infinity,
+  });
+
+  const versionResolved = manifestVersionGateQuery.isFetched;
+  const useGroupedManifestEndpoint =
+    versionResolved && manifestVersionGateQuery.data === true;
+  const useLegacyManifestListEndpoint =
+    versionResolved && manifestVersionGateQuery.data === false;
+
+  // Group manifests are the primary source, but only when the version gate
+  // confirms the backend supports group APIs.
   const groupsQuery = useQuery<ManifestGroup[]>({
     queryKey: ["manifestGroups"],
     queryFn: () => fetchManifestGroups(queryClient),
@@ -723,17 +812,11 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
     refetchOnWindowFocus: false,
     staleTime: Infinity,
     gcTime: Infinity,
+    enabled: useGroupedManifestEndpoint,
   });
 
-  // Derived flags: only fall back to flat manifest list when groups have
-  // settled and returned nothing (old backend or genuinely empty).
-  const groupsResolved = groupsQuery.isFetched;
-  const groupsAvailable =
-    Array.isArray(groupsQuery.data) && groupsQuery.data.length > 0;
-
-  // Flat manifest list – ONLY runs when the groups endpoint fails or returns
-  // empty.  When groups are available the per-manifest cache is already primed
-  // by fetchManifestGroups, so we skip this call entirely.
+  // Legacy flat manifest list is only used when the version endpoint is
+  // unavailable/too old.
   const manifestsQuery = useQuery<ManifestDocument[]>({
     queryKey: ["manifest"],
     queryFn: () => fetchManifestsAndPrimeCache(queryClient),
@@ -744,9 +827,9 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
     refetchOnWindowFocus: false,
     staleTime: Infinity,
     gcTime: Infinity,
-    enabled: groupsResolved && !groupsAvailable,
+    enabled: useLegacyManifestListEndpoint,
   });
-  
+
   const modelTypesQuery = useQuery<ModelTypeInfo[]>({
     queryKey: ["modelTypes"],
     queryFn: fetchModelTypes,
@@ -756,11 +839,10 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
     refetchOnWindowFocus: false,
     staleTime: Infinity,
     gcTime: Infinity,
-
   });
 
-  const manifestsData = manifestsQuery.data;
-  const groupsData = groupsQuery.data;
+  const manifestsData = useLegacyManifestListEndpoint ? manifestsQuery.data : undefined;
+  const groupsData = useGroupedManifestEndpoint ? groupsQuery.data : undefined;
   const modelTypesData = modelTypesQuery.data;
 
   useEffect(() => {
@@ -775,11 +857,9 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
     }
   }, [modelTypesData]);
 
-  // Backend is unavailable when groups resolved with nothing AND the fallback
-  // flat manifest query also failed.  (fetchManifestGroups never throws – it
-  // returns [] on any error – so we check the resolved data instead.)
+  // Backend is unavailable when we are on the legacy path and the list call fails.
   const backendUnavailable =
-    groupsResolved && !groupsAvailable && manifestsQuery.isFetched && manifestsQuery.isError;
+    useLegacyManifestListEndpoint && manifestsQuery.isFetched && manifestsQuery.isError;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -804,28 +884,19 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
     return map;
   }, [stableModelTypes]);
 
-  // Groups are the ONLY models shown in the menu when available.
-  // Each group is represented by its default variant's manifest as a single card.
-  // The flat manifest list is a pure fallback for old backends without groups.
+  // Groups are the only source when the version gate enables grouped manifests.
+  // The flat manifest list is used only on the legacy path.
   const manifests: ManifestDocument[] = useMemo(() => {
-    // --- Primary: derive exclusively from groups ---
-    if (Array.isArray(groupsData) && groupsData.length > 0) {
+    if (useGroupedManifestEndpoint) {
       const groupManifests: ManifestDocument[] = [];
       const seenIds = new Set<string>();
 
-      for (const group of groupsData) {
+      for (const group of groupsData ?? []) {
         const variants = group.variants ?? [];
         const defaultVariant = variants.find((v) => v.default) ?? variants[0];
         if (!defaultVariant) continue;
 
         let manifest = defaultVariant.manifest as ManifestDocument | null | undefined;
-
-        // If the backend didn't resolve the ref, try the flat cache
-        if (!manifest && defaultVariant.id && Array.isArray(manifestsData)) {
-          manifest = manifestsData.find(
-            (m) => m.metadata?.id === defaultVariant.id,
-          );
-        }
 
         if (manifest) {
           const id = manifest.metadata?.id;
@@ -838,20 +909,24 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
         }
       }
 
-      // Groups are the authoritative source – return only what groups define
       return groupManifests;
     }
 
-    // --- Fallback: flat manifest list (old backend without groups) ---
-    if (Array.isArray(manifestsData) && manifestsData.length > 0) return manifestsData;
-    if (
-      (manifestsQuery.isFetching || manifestsQuery.isError) &&
-      lastGoodManifestsRef.current
-    ) {
-      return lastGoodManifestsRef.current;
+    if (useLegacyManifestListEndpoint) {
+      if (Array.isArray(manifestsData) && manifestsData.length > 0) return manifestsData;
+      if (
+        (manifestsQuery.isFetching || manifestsQuery.isError) &&
+        lastGoodManifestsRef.current
+      ) {
+        return lastGoodManifestsRef.current;
+      }
+      return manifestsData ?? lastGoodManifestsRef.current ?? [];
     }
-    return manifestsData ?? lastGoodManifestsRef.current ?? [];
+
+    return [];
   }, [
+    useGroupedManifestEndpoint,
+    useLegacyManifestListEndpoint,
     groupsData,
     manifestsData,
     manifestsQuery.isFetching,
@@ -1114,9 +1189,9 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
 
   const hasAnyManifests = manifests.length > 0;
   const hasAnyFiltered = filteredManifests.length > 0;
-  // Show empty state only after the primary query (groups) has settled.
-  // When groups returned nothing, also wait for the fallback manifest query.
-  const primaryFetched = groupsAvailable || (groupsResolved && manifestsQuery.isFetched);
+  const primaryFetched =
+    (useGroupedManifestEndpoint && groupsQuery.isFetched) ||
+    (useLegacyManifestListEndpoint && manifestsQuery.isFetched);
   const showEmptyState = primaryFetched && !hasAnyFiltered;
 
   return (
@@ -1183,17 +1258,30 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
                           type="button"
                           title="Refresh models"
                           aria-label="Refresh models"
-                          disabled={groupsQuery.isFetching || manifestsQuery.isFetching}
+                          disabled={
+                            manifestVersionGateQuery.isFetching ||
+                            groupsQuery.isFetching ||
+                            manifestsQuery.isFetching
+                          }
                           onClick={() => {
-                            // Re-trigger the primary groups query; the fallback
-                            // manifest query will auto-enable if groups returns empty.
-                            groupsQuery.refetch();
-                            if (!groupsAvailable) manifestsQuery.refetch();
+                            manifestVersionGateQuery.refetch();
+                            if (useGroupedManifestEndpoint) {
+                              groupsQuery.refetch();
+                            }
+                            if (useLegacyManifestListEndpoint) {
+                              manifestsQuery.refetch();
+                            }
                           }}
                           className="text-[11px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
                         >
                           <LuRefreshCw
-                            className={`w-3.5 h-3.5 ${(groupsQuery.isFetching || manifestsQuery.isFetching) ? "animate-spin" : ""}`}
+                            className={`w-3.5 h-3.5 ${
+                              manifestVersionGateQuery.isFetching ||
+                              groupsQuery.isFetching ||
+                              manifestsQuery.isFetching
+                                ? "animate-spin"
+                                : ""
+                            }`}
                           />
                           <span>Refresh</span>
                         </button>

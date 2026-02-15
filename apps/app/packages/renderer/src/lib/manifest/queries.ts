@@ -47,6 +47,7 @@ export async function fetchManifestGroups(
     if (!response.success || !response.data?.length) {
       return [];
     }
+    
     const groups = response.data;
     // Prime individual manifest caches from resolved group variants
     for (const group of groups) {
