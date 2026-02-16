@@ -469,6 +469,8 @@ const VideoPreview: React.FC<
   const pendingSeekTargetRef = useRef<{ frame: number; strict: boolean } | null>(
     null,
   );
+  const seekLockStartedAtMsRef = useRef(0);
+  const seekLockSkippedFramesRef = useRef(0);
   const fpsRef = useRef(fps);
   useEffect(() => {
     fpsRef.current = fps;
@@ -479,6 +481,7 @@ const VideoPreview: React.FC<
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingVideoFrameCallbackRef = useRef<number | null>(null);
   const inVideoFrameCallbackRef = useRef(false);
+  const pendingPlayAfterSeekRef = useRef(false);
   const clearPendingVideoFrameCallback = useCallback(() => {
     const video = videoRef.current;
     const callbackId = pendingVideoFrameCallbackRef.current;
@@ -492,6 +495,11 @@ const VideoPreview: React.FC<
       } catch {}
     }
     pendingVideoFrameCallbackRef.current = null;
+  }, []);
+  const clearPendingSeekTarget = useCallback(() => {
+    pendingSeekTargetRef.current = null;
+    seekLockStartedAtMsRef.current = 0;
+    seekLockSkippedFramesRef.current = 0;
   }, []);
 
   // Update refs when values change
@@ -738,7 +746,8 @@ const VideoPreview: React.FC<
     originalFrameRef.current = null;
     lastDrawnFocusFrameRef.current = null;
     resumeGateFrameRef.current = null;
-    pendingSeekTargetRef.current = null;
+    clearPendingSeekTarget();
+    pendingPlayAfterSeekRef.current = false;
     clearPendingVideoFrameCallback();
     processingCanvasRef.current = null;
     // @ts-ignore
@@ -787,6 +796,7 @@ const VideoPreview: React.FC<
     rectHeight,
     setMediaInfoAndBump,
     getAssetById,
+    clearPendingSeekTarget,
     clearPendingVideoFrameCallback,
   ]);
 
@@ -978,13 +988,35 @@ const VideoPreview: React.FC<
           : null;
       const pendingSeek = pendingSeekTargetRef.current;
       if (
-        !isPlayingRef.current &&
         pendingSeek &&
         pendingSeek.strict &&
-        frameIdx !== null &&
-        Math.abs(frameIdx - pendingSeek.frame) > 2
+        frameIdx !== null
       ) {
-        return;
+        const frameDelta = frameIdx - pendingSeek.frame;
+        if (Math.abs(frameDelta) > 2) {
+          if (!isPlayingRef.current) {
+            return;
+          }
+          if (frameDelta > 2) {
+            clearPendingSeekTarget();
+          } else {
+            const now =
+              typeof performance !== "undefined" && performance.now
+                ? performance.now()
+                : Date.now();
+            if (seekLockStartedAtMsRef.current <= 0) {
+              seekLockStartedAtMsRef.current = now;
+            }
+            seekLockSkippedFramesRef.current += 1;
+            const lockAgeMs = now - seekLockStartedAtMsRef.current;
+            const shouldReleaseLock =
+              lockAgeMs > 250 || seekLockSkippedFramesRef.current > 10;
+            if (!shouldReleaseLock) {
+              return;
+            }
+            clearPendingSeekTarget();
+          }
+        }
       }
       const resumeGate = resumeGateFrameRef.current;
       if (
@@ -993,7 +1025,18 @@ const VideoPreview: React.FC<
         frameIdx !== null &&
         frameIdx < resumeGate
       ) {
-        return;
+        const now =
+          typeof performance !== "undefined" && performance.now
+            ? performance.now()
+            : Date.now();
+        const gateAgeMs =
+          seekLockStartedAtMsRef.current > 0
+            ? now - seekLockStartedAtMsRef.current
+            : 0;
+        if (gateAgeMs <= 350) {
+          return;
+        }
+        resumeGateFrameRef.current = null;
       }
 
       skipDrawRef.current = false;
@@ -1087,13 +1130,13 @@ const VideoPreview: React.FC<
           frameIdx !== null &&
           Math.abs(frameIdx - pendingSeek.frame) <= 2
         ) {
-          pendingSeekTargetRef.current = null;
+          clearPendingSeekTarget();
         }
         lastDrawnFocusFrameRef.current = focusFrameRef.current;
       }
       imageRef.current?.getLayer()?.batchDraw?.();
     },
-    [ensureProcessingCanvas, displayWidth, displayHeight, presentCanvas],
+    [ensureProcessingCanvas, displayWidth, displayHeight, presentCanvas, clearPendingSeekTarget],
   );
 
   const drawWrappedCanvasRef = useRef(drawWrappedCanvas);
@@ -1146,6 +1189,65 @@ const VideoPreview: React.FC<
   useEffect(() => {
     getTargetFrameInfoRef.current = getTargetFrameInfo;
   }, [getTargetFrameInfo]);
+  const seekVideoToTargetFrame = useCallback(
+    (
+      video: HTMLVideoElement,
+      targetInfo: { timestamp: number; targetFrame: number },
+      opts?: {
+        strict?: boolean;
+        gatePlayback?: boolean;
+        thresholdFrames?: number;
+      },
+    ) => {
+      const { timestamp, targetFrame } = targetInfo;
+      if (!Number.isFinite(timestamp)) return false;
+
+      const clipFps =
+        mediaInfo.current?.stats.video?.averagePacketRate || fpsRef.current || DEFAULT_FPS;
+      const currentFrame =
+        Number.isFinite(clipFps) && clipFps > 0
+          ? Math.floor(video.currentTime * clipFps + 1e-4)
+          : null;
+      const thresholdFrames = Math.max(0, opts?.thresholdFrames ?? 0);
+      if (
+        currentFrame !== null &&
+        Number.isFinite(currentFrame) &&
+        Math.abs(currentFrame - targetFrame) <= thresholdFrames
+      ) {
+        if (opts?.strict) {
+          clearPendingSeekTarget();
+        }
+        return false;
+      }
+
+      pendingSeekTargetRef.current = {
+        frame: targetFrame,
+        strict: opts?.strict ?? true,
+      };
+      
+      seekLockStartedAtMsRef.current =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
+      seekLockSkippedFramesRef.current = 0;
+    
+      if (opts?.gatePlayback) {
+        resumeGateFrameRef.current = targetFrame;
+      }
+
+      try {
+        video.currentTime = timestamp;
+        return true;
+      } catch {
+        clearPendingSeekTarget();
+        if (opts?.gatePlayback) {
+          resumeGateFrameRef.current = null;
+        }
+        return false;
+      }
+    },
+    [clearPendingSeekTarget],
+  );
 
   // Video frame callback: draw current video frame to canvas and trigger Konva redraw
   const onVideoFrameCallback = useCallback(
@@ -1248,33 +1350,48 @@ const VideoPreview: React.FC<
     const seekToFocusFrame = () => {
       const targetInfo = getTargetFrameInfoRef.current();
       if (!targetInfo || !video) return false;
-      const { timestamp } = targetInfo;
-      if (!Number.isFinite(timestamp)) return false;
-      if (Math.abs(video.currentTime - timestamp) <= 0.001) return false;
-      try {
-        video.currentTime = timestamp;
-        return true;
-      } catch {
-        return false;
-      }
+      return seekVideoToTargetFrame(video, targetInfo, {
+        strict: true,
+        gatePlayback: isPlayingRef.current,
+        thresholdFrames: 0,
+      });
     };
 
     const onLoadedData = () => {
       const didSeek = seekToFocusFrame();
-      if (isPlayingRef.current) {
-        video?.play().catch(() => {});
-      }
       if (!didSeek) {
         drawCurrentFrame();
       }
-      if (isPlayingRef.current) {
+      if (isPlayingRef.current && didSeek) {
+        pendingPlayAfterSeekRef.current = true;
+      } else if (isPlayingRef.current) {
+        pendingPlayAfterSeekRef.current = false;
+        video?.play().catch(() => {});
         scheduleNextFrame();
       }
     };
 
     const onSeeked = () => {
       drawCurrentFrame();
-      if (isPlayingRef.current) {
+      const pendingSeek = pendingSeekTargetRef.current;
+      if (pendingSeek?.strict) {
+        const clipFps =
+          mediaInfo.current?.stats.video?.averagePacketRate || fpsRef.current || DEFAULT_FPS;
+        const frameIdx =
+          Number.isFinite(clipFps) && clipFps > 0
+            ? Math.floor(video.currentTime * clipFps + 1e-4)
+            : null;
+        if (
+          frameIdx !== null &&
+          Number.isFinite(frameIdx) &&
+          Math.abs(frameIdx - pendingSeek.frame) <= 2
+        ) {
+          clearPendingSeekTarget();
+        }
+      }
+      if (isPlayingRef.current || pendingPlayAfterSeekRef.current) {
+        pendingPlayAfterSeekRef.current = false;
+        video?.play().catch(() => {});
         scheduleNextFrame();
       }
     };
@@ -1296,6 +1413,8 @@ const VideoPreview: React.FC<
     return () => {
       video?.removeEventListener("loadeddata", onLoadedData);
       video?.removeEventListener("seeked", onSeeked);
+      pendingPlayAfterSeekRef.current = false;
+      clearPendingSeekTarget();
       clearPendingVideoFrameCallback();
       video?.pause();
       videoRef.current = null;
@@ -1305,8 +1424,10 @@ const VideoPreview: React.FC<
     displayWidth,
     displayHeight,
     getAssetById,
+    clearPendingSeekTarget,
     clearPendingVideoFrameCallback,
     onVideoFrameCallback,
+    seekVideoToTargetFrame,
   ]);
 
   // Seek video to current frame when paused and focusFrame changes
@@ -1316,14 +1437,31 @@ const VideoPreview: React.FC<
     const targetInfo = getTargetFrameInfo();
     if (!video || !targetInfo || video.readyState < 2) return;
 
-    const { timestamp } = targetInfo;
     const clipFps =
       mediaInfo.current?.stats.video?.averagePacketRate || fpsRef.current || DEFAULT_FPS;
-    const pauseSeekTolerance = 0.5 / Math.max(1, clipFps);
-    if (Math.abs(video.currentTime - timestamp) > pauseSeekTolerance) {
-      video.currentTime = timestamp;
+    const frameIdx =
+      Number.isFinite(clipFps) && clipFps > 0
+        ? Math.floor(video.currentTime * clipFps + 1e-4)
+        : null;
+    const frameDelta =
+      frameIdx === null ? Infinity : Math.abs(frameIdx - targetInfo.targetFrame);
+    const pendingSeek = pendingSeekTargetRef.current;
+    if (
+      video.seeking &&
+      pendingSeek?.strict &&
+      pendingSeek.frame === targetInfo.targetFrame
+    ) {
       return;
     }
+    if (!Number.isFinite(frameDelta) || frameDelta > 0) {
+      seekVideoToTargetFrame(video, targetInfo, {
+        strict: true,
+        gatePlayback: false,
+        thresholdFrames: 0,
+      });
+      return;
+    }
+    clearPendingSeekTarget();
 
     // If we're already at the target time while paused, browsers may not emit
     // another frame callback. Draw once explicitly to avoid initial black frames.
@@ -1341,13 +1479,26 @@ const VideoPreview: React.FC<
         );
       } catch {}
     }
-  }, [isPlaying, focusFrame, getTargetFrameInfo]);
+  }, [isPlaying, focusFrame, getTargetFrameInfo, seekVideoToTargetFrame, clearPendingSeekTarget]);
 
   // Play/pause video based on timeline
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     if (isPlaying) {
+      const targetInfo = getTargetFrameInfoRef.current();
+      if (targetInfo && video.readyState >= 2) {
+        const didSeek = seekVideoToTargetFrame(video, targetInfo, {
+          strict: true,
+          gatePlayback: true,
+          thresholdFrames: 0,
+        });
+        if (didSeek) {
+          pendingPlayAfterSeekRef.current = true;
+          return;
+        }
+      }
+      pendingPlayAfterSeekRef.current = false;
       video.play().catch(() => {});
       if (
         pendingVideoFrameCallbackRef.current === null &&
@@ -1357,10 +1508,16 @@ const VideoPreview: React.FC<
           video.requestVideoFrameCallback(onVideoFrameCallback);
       }
     } else {
+      pendingPlayAfterSeekRef.current = false;
       clearPendingVideoFrameCallback();
       video.pause();
     }
-  }, [isPlaying, onVideoFrameCallback, clearPendingVideoFrameCallback]);
+  }, [
+    isPlaying,
+    onVideoFrameCallback,
+    clearPendingVideoFrameCallback,
+    seekVideoToTargetFrame,
+  ]);
 
   // Keep the HTML video element playback speed aligned with clip speed.
   useEffect(() => {
@@ -1498,12 +1655,13 @@ const VideoPreview: React.FC<
     originalFrameRef.current = null;
     lastDrawnFocusFrameRef.current = null;
     resumeGateFrameRef.current = null;
-    pendingSeekTargetRef.current = null;
+    clearPendingSeekTarget();
+    pendingPlayAfterSeekRef.current = false;
     clearPendingVideoFrameCallback();
     // @ts-ignore
     iteratorRef.current?.return?.();
     iteratorRef.current = null;
-  }, [clipId, overrideClip, clearPendingVideoFrameCallback]);
+  }, [clipId, overrideClip, clearPendingVideoFrameCallback, clearPendingSeekTarget]);
 
 
   const handleDragMove = useCallback(
