@@ -477,6 +477,22 @@ const VideoPreview: React.FC<
 
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const pendingVideoFrameCallbackRef = useRef<number | null>(null);
+  const inVideoFrameCallbackRef = useRef(false);
+  const clearPendingVideoFrameCallback = useCallback(() => {
+    const video = videoRef.current;
+    const callbackId = pendingVideoFrameCallbackRef.current;
+    if (
+      video &&
+      callbackId !== null &&
+      typeof (video as any).cancelVideoFrameCallback === "function"
+    ) {
+      try {
+        (video as any).cancelVideoFrameCallback(callbackId);
+      } catch {}
+    }
+    pendingVideoFrameCallbackRef.current = null;
+  }, []);
 
   // Update refs when values change
   useEffect(() => {
@@ -723,6 +739,7 @@ const VideoPreview: React.FC<
     lastDrawnFocusFrameRef.current = null;
     resumeGateFrameRef.current = null;
     pendingSeekTargetRef.current = null;
+    clearPendingVideoFrameCallback();
     processingCanvasRef.current = null;
     // @ts-ignore
     iteratorRef.current?.return?.();
@@ -770,6 +787,7 @@ const VideoPreview: React.FC<
     rectHeight,
     setMediaInfoAndBump,
     getAssetById,
+    clearPendingVideoFrameCallback,
   ]);
 
 
@@ -1132,10 +1150,24 @@ const VideoPreview: React.FC<
   // Video frame callback: draw current video frame to canvas and trigger Konva redraw
   const onVideoFrameCallback = useCallback(
     (_now: number, _metadata: { mediaTime: number; presentedFrames: number }) => {
+      pendingVideoFrameCallbackRef.current = null;
+      inVideoFrameCallbackRef.current = true;
       const video = videoRef.current;
       const draw = drawWrappedCanvasRef.current;
       if (!video || !draw || !canvasRef.current || video.readyState < 2) {
-        video?.requestVideoFrameCallback(onVideoFrameCallback);
+        if (
+          video &&
+          isPlayingRef.current &&
+          pendingVideoFrameCallbackRef.current === null
+        ) {
+          pendingVideoFrameCallbackRef.current =
+            video.requestVideoFrameCallback(onVideoFrameCallback);
+        }
+        inVideoFrameCallbackRef.current = false;
+        return;
+      }
+      if (!isPlayingRef.current) {
+        inVideoFrameCallbackRef.current = false;
         return;
       }
       try {
@@ -1150,7 +1182,14 @@ const VideoPreview: React.FC<
       } catch {
         // ignore draw errors (e.g. during seek)
       }
-      video.requestVideoFrameCallback(onVideoFrameCallback);
+      if (
+        isPlayingRef.current &&
+        pendingVideoFrameCallbackRef.current === null
+      ) {
+        pendingVideoFrameCallbackRef.current =
+          video.requestVideoFrameCallback(onVideoFrameCallback);
+      }
+      inVideoFrameCallbackRef.current = false;
     },
     [],
   );
@@ -1184,7 +1223,11 @@ const VideoPreview: React.FC<
     } catch {}
 
     const scheduleNextFrame = () => {
-      video?.requestVideoFrameCallback(onVideoFrameCallback);
+      if (!video) return;
+      if (inVideoFrameCallbackRef.current) return;
+      if (pendingVideoFrameCallbackRef.current !== null) return;
+      pendingVideoFrameCallbackRef.current =
+        video.requestVideoFrameCallback(onVideoFrameCallback);
     };
 
     const drawCurrentFrame = () => {
@@ -1224,12 +1267,16 @@ const VideoPreview: React.FC<
       if (!didSeek) {
         drawCurrentFrame();
       }
-      scheduleNextFrame();
+      if (isPlayingRef.current) {
+        scheduleNextFrame();
+      }
     };
 
     const onSeeked = () => {
       drawCurrentFrame();
-      scheduleNextFrame();
+      if (isPlayingRef.current) {
+        scheduleNextFrame();
+      }
     };
 
     video.addEventListener("loadeddata", onLoadedData);
@@ -1243,11 +1290,13 @@ const VideoPreview: React.FC<
 
     if (isPlayingRef.current) {
       video.play().catch(() => {});
+      scheduleNextFrame();
     }
 
     return () => {
       video?.removeEventListener("loadeddata", onLoadedData);
       video?.removeEventListener("seeked", onSeeked);
+      clearPendingVideoFrameCallback();
       video?.pause();
       videoRef.current = null;
     };
@@ -1256,6 +1305,7 @@ const VideoPreview: React.FC<
     displayWidth,
     displayHeight,
     getAssetById,
+    clearPendingVideoFrameCallback,
     onVideoFrameCallback,
   ]);
 
@@ -1267,7 +1317,10 @@ const VideoPreview: React.FC<
     if (!video || !targetInfo || video.readyState < 2) return;
 
     const { timestamp } = targetInfo;
-    if (Math.abs(video.currentTime - timestamp) > 0.05) {
+    const clipFps =
+      mediaInfo.current?.stats.video?.averagePacketRate || fpsRef.current || DEFAULT_FPS;
+    const pauseSeekTolerance = 0.5 / Math.max(1, clipFps);
+    if (Math.abs(video.currentTime - timestamp) > pauseSeekTolerance) {
       video.currentTime = timestamp;
       return;
     }
@@ -1296,10 +1349,18 @@ const VideoPreview: React.FC<
     if (!video) return;
     if (isPlaying) {
       video.play().catch(() => {});
+      if (
+        pendingVideoFrameCallbackRef.current === null &&
+        !inVideoFrameCallbackRef.current
+      ) {
+        pendingVideoFrameCallbackRef.current =
+          video.requestVideoFrameCallback(onVideoFrameCallback);
+      }
     } else {
+      clearPendingVideoFrameCallback();
       video.pause();
     }
-  }, [isPlaying]);
+  }, [isPlaying, onVideoFrameCallback, clearPendingVideoFrameCallback]);
 
   // Keep the HTML video element playback speed aligned with clip speed.
   useEffect(() => {
@@ -1438,10 +1499,11 @@ const VideoPreview: React.FC<
     lastDrawnFocusFrameRef.current = null;
     resumeGateFrameRef.current = null;
     pendingSeekTargetRef.current = null;
+    clearPendingVideoFrameCallback();
     // @ts-ignore
     iteratorRef.current?.return?.();
     iteratorRef.current = null;
-  }, [clipId, overrideClip]);
+  }, [clipId, overrideClip, clearPendingVideoFrameCallback]);
 
 
   const handleDragMove = useCallback(
