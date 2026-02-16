@@ -707,37 +707,28 @@ const ImagePreview: React.FC<
       let processedCanvas =
         applyMaskRef.current?.(workingCanvas, focusFrame) ?? workingCanvas;
 
-      // If mask returned a different canvas, copy it back to working canvas to maintain single reference
-      if (processedCanvas !== workingCanvas) {
-        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-        workingCtx.drawImage(
-          processedCanvas,
-          0,
-          0,
-          workingCanvas.width,
-          workingCanvas.height,
-        );
-        processedCanvas = workingCanvas;
-      }
-
-      // Apply WebGL filters (modifies canvas in place)
-      applyFilters(processedCanvas, {
-        brightness: clip?.brightness,
-        contrast: clip?.contrast,
-        hue: clip?.hue,
-        saturation: clip?.saturation,
-        blur: clip?.blur,
-        sharpness: clip?.sharpness,
-        noise: clip?.noise,
-        vignette: clip?.vignette,
-        colorTintColor: clip?.colorTintColor,
-        colorTintIntensity: clip?.colorTintIntensity,
-        scanLines: clip?.scanLines,
-        chromaticAberration: clip?.chromaticAberration,
-        interlace: clip?.interlace,
-        pixelate: clip?.pixelate,
-        jitter: clip?.jitter,
-      });
+      // Apply WebGL filters and keep output in passthrough mode.
+      processedCanvas = applyFilters(
+        processedCanvas,
+        {
+          brightness: clip?.brightness,
+          contrast: clip?.contrast,
+          hue: clip?.hue,
+          saturation: clip?.saturation,
+          blur: clip?.blur,
+          sharpness: clip?.sharpness,
+          noise: clip?.noise,
+          vignette: clip?.vignette,
+          colorTintColor: clip?.colorTintColor,
+          colorTintIntensity: clip?.colorTintIntensity,
+          scanLines: clip?.scanLines,
+          chromaticAberration: clip?.chromaticAberration,
+          interlace: clip?.interlace,
+          pixelate: clip?.pixelate,
+          jitter: clip?.jitter,
+        },
+        { output: "passthrough" },
+      );
 
       // Ensure resources (e.g., CLUTs) are preloaded for applicators before applying
       const preloadTasks: Promise<void>[] = [];
@@ -759,17 +750,7 @@ const ImagePreview: React.FC<
       let finalCanvas = processedCanvas;
       for (const applicator of applicatorsRef.current || []) {
         const result = applicator.apply(finalCanvas);
-        if (result !== finalCanvas) {
-          workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-          workingCtx.drawImage(
-            result,
-            0,
-            0,
-            workingCanvas.width,
-            workingCanvas.height,
-          );
-          finalCanvas = workingCanvas;
-        }
+        if (result) finalCanvas = result;
       }
 
       // Draw final result to display canvas

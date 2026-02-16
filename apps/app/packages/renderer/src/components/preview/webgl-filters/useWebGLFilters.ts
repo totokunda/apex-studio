@@ -39,6 +39,12 @@ export interface FilterParams {
   jitter?: number; // 0 to 100
 }
 
+export interface ApplyFilterOptions {
+  // "passthrough": return the latest GPU canvas to avoid an extra copy.
+  // "source": copy final output back to sourceCanvas for in-place compatibility.
+  output?: "passthrough" | "source";
+}
+
 export function useWebGLFilters() {
   const webglBlurRef = useRef<WebGLBlur | null>(null);
   const webglBrightnessRef = useRef<WebGLBrightness | null>(null);
@@ -63,49 +69,34 @@ export function useWebGLFilters() {
     (
       sourceCanvas: HTMLCanvasElement,
       params: FilterParams,
+      options?: ApplyFilterOptions,
     ): HTMLCanvasElement => {
-      const ctx = sourceCanvas.getContext("2d");
-      if (!ctx) return sourceCanvas;
-
       let currentCanvas: HTMLCanvasElement = sourceCanvas;
+      let hasAnyFilter = false;
 
       // Apply brightness
       if (params.brightness && params.brightness !== 0) {
+        hasAnyFilter = true;
         if (!webglBrightnessRef.current) {
           webglBrightnessRef.current = new WebGLBrightness();
         }
         const brightnessValue = params.brightness / 100; // Map -100..100 to -1..1
-        const result = webglBrightnessRef.current.apply(
+        currentCanvas = webglBrightnessRef.current.apply(
           currentCanvas,
           brightnessValue,
         );
-
-        // Copy result back to source canvas with flip
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply contrast
       if (params.contrast && params.contrast !== 0) {
+        hasAnyFilter = true;
         if (!webglContrastRef.current) {
           webglContrastRef.current = new WebGLContrast();
         }
-        const result = webglContrastRef.current.apply(
+        currentCanvas = webglContrastRef.current.apply(
           currentCanvas,
           params.contrast,
         );
-
-        // Copy result back to source canvas with flip
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply hue and saturation
@@ -113,93 +104,58 @@ export function useWebGLFilters() {
         (params.hue && params.hue !== 0) ||
         (params.saturation && params.saturation !== 0)
       ) {
+        hasAnyFilter = true;
         if (!webglHueSaturationRef.current) {
           webglHueSaturationRef.current = new WebGLHueSaturation();
         }
-        const result = webglHueSaturationRef.current.apply(
+        currentCanvas = webglHueSaturationRef.current.apply(
           currentCanvas,
           params.hue ?? 0,
           params.saturation ?? 0,
         );
-
-        // Copy result back to source canvas with flip
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply blur
       if (params.blur && params.blur > 0) {
+        hasAnyFilter = true;
         if (!webglBlurRef.current) {
           webglBlurRef.current = new WebGLBlur();
         }
         const blurRadius = (params.blur / 100) * 10; // Map 0-100 to 0-10 radius
-        const result = webglBlurRef.current.apply(currentCanvas, blurRadius);
-
-        // Copy result back to source canvas with flip
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
+        currentCanvas = webglBlurRef.current.apply(currentCanvas, blurRadius);
       }
 
       // Apply sharpness
       if (params.sharpness && params.sharpness > 0) {
+        hasAnyFilter = true;
         if (!webglSharpnessRef.current) {
           webglSharpnessRef.current = new WebGLSharpness();
         }
-        const result = webglSharpnessRef.current.apply(
+        currentCanvas = webglSharpnessRef.current.apply(
           currentCanvas,
           params.sharpness,
         );
-
-        // Copy result back to source canvas with flip
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply noise
       if (params.noise && params.noise > 0) {
+        hasAnyFilter = true;
         if (!webglNoiseRef.current) {
           webglNoiseRef.current = new WebGLNoise();
         }
-        const result = webglNoiseRef.current.apply(currentCanvas, params.noise);
-
-        // Copy result back to source canvas with flip
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
+        currentCanvas = webglNoiseRef.current.apply(currentCanvas, params.noise);
       }
 
       // Apply vignette
       if (params.vignette && params.vignette > 0) {
+        hasAnyFilter = true;
         if (!webglVignetteRef.current) {
           webglVignetteRef.current = new WebGLVignette();
         }
-        const result = webglVignetteRef.current.apply(
+        currentCanvas = webglVignetteRef.current.apply(
           currentCanvas,
           params.vignette,
         );
-
-        // Copy result back to source canvas with flip
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply color tint
@@ -208,6 +164,7 @@ export function useWebGLFilters() {
         params.colorTintIntensity > 0 &&
         params.colorTintColor
       ) {
+        hasAnyFilter = true;
         if (!webglColorTintRef.current) {
           webglColorTintRef.current = new WebGLColorTint();
         }
@@ -216,110 +173,98 @@ export function useWebGLFilters() {
         const r = parseInt(hex.substring(0, 2), 16) / 255;
         const g = parseInt(hex.substring(2, 4), 16) / 255;
         const b = parseInt(hex.substring(4, 6), 16) / 255;
-        const result = webglColorTintRef.current.apply(
+        currentCanvas = webglColorTintRef.current.apply(
           currentCanvas,
           r,
           g,
           b,
           params.colorTintIntensity,
         );
-
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply scan lines
       if (params.scanLines && params.scanLines > 0) {
+        hasAnyFilter = true;
         if (!webglScanLinesRef.current) {
           webglScanLinesRef.current = new WebGLScanLines();
         }
-        const result = webglScanLinesRef.current.apply(
+        currentCanvas = webglScanLinesRef.current.apply(
           currentCanvas,
           params.scanLines,
         );
-
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply chromatic aberration
       if (params.chromaticAberration && params.chromaticAberration > 0) {
+        hasAnyFilter = true;
         if (!webglChromaticAberrationRef.current) {
           webglChromaticAberrationRef.current = new WebGLChromaticAberration();
         }
-        const result = webglChromaticAberrationRef.current.apply(
+        currentCanvas = webglChromaticAberrationRef.current.apply(
           currentCanvas,
           params.chromaticAberration,
         );
-
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply interlace
       if (params.interlace && params.interlace > 0) {
+        hasAnyFilter = true;
         if (!webglInterlaceRef.current) {
           webglInterlaceRef.current = new WebGLInterlace();
         }
-        const result = webglInterlaceRef.current.apply(
+        currentCanvas = webglInterlaceRef.current.apply(
           currentCanvas,
           params.interlace,
         );
-
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply pixelate
       if (params.pixelate && params.pixelate > 0) {
+        hasAnyFilter = true;
         if (!webglPixelateRef.current) {
           webglPixelateRef.current = new WebGLPixelate();
         }
-        const result = webglPixelateRef.current.apply(
+        currentCanvas = webglPixelateRef.current.apply(
           currentCanvas,
           params.pixelate,
         );
-
-        ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
       }
 
       // Apply jitter
       if (params.jitter && params.jitter > 0) {
+        hasAnyFilter = true;
         if (!webglJitterRef.current) {
           webglJitterRef.current = new WebGLJitter();
         }
-        const result = webglJitterRef.current.apply(
+        currentCanvas = webglJitterRef.current.apply(
           currentCanvas,
           params.jitter,
         );
+      }
 
+      if (!hasAnyFilter) {
+        return sourceCanvas;
+      }
+
+      if (options?.output === "passthrough") {
+        return currentCanvas;
+      }
+
+      if (currentCanvas !== sourceCanvas) {
+        const ctx = sourceCanvas.getContext("2d");
+        if (!ctx) return currentCanvas;
+        if (
+          sourceCanvas.width !== currentCanvas.width ||
+          sourceCanvas.height !== currentCanvas.height
+        ) {
+          sourceCanvas.width = currentCanvas.width;
+          sourceCanvas.height = currentCanvas.height;
+        }
         ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        ctx.save();
-        ctx.scale(1, -1);
-        ctx.drawImage(result, 0, -sourceCanvas.height);
-        ctx.restore();
-        currentCanvas = sourceCanvas;
+        ctx.imageSmoothingEnabled = true;
+        // @ts-ignore
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(currentCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height);
       }
 
       return sourceCanvas;

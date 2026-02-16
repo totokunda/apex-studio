@@ -96,29 +96,12 @@ export class FilterPreview extends BaseClipApplicator<FilterClipProps> {
 
     try {
       // Apply the filter with the specified strength (assumes CLUT is already loaded)
-
       const filteredCanvas = this.haldClutInstance.apply(
         canvas,
         filterPath,
         this.strength,
       );
-
-      // Copy the filtered result back to the original canvas to maintain reference
-      const ctx = canvas.getContext("2d");
-      if (ctx && filteredCanvas !== canvas) {
-        // Ensure canvas dimensions match
-        if (
-          canvas.width !== filteredCanvas.width ||
-          canvas.height !== filteredCanvas.height
-        ) {
-          canvas.width = filteredCanvas.width;
-          canvas.height = filteredCanvas.height;
-        }
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(filteredCanvas, 0, 0);
-      }
-
-      return canvas;
+      return filteredCanvas;
     } catch (error) {
       console.error("[FilterPreview] Error applying filter:", error);
       return canvas;
