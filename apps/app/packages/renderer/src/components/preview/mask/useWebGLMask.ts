@@ -69,17 +69,19 @@ export function useWebGLMask({
       workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
       workingCtx.drawImage(sourceCanvas, 0, 0);
 
-      return masks.reduce((acc, mask, index) => {
+      let currentCanvas: HTMLCanvasElement = workingCanvas;
+
+      for (let index = 0; index < masks.length; index += 1) {
+        const mask = masks[index];
         const effectiveMask =
           index === 0 ? mask : { ...mask, backgroundColorEnabled: false };
         const baseTransform =
           mask.transform ?? clip?.originalTransform ?? clip?.transform;
+        let nextCanvas = currentCanvas;
+
         if (mask.tool === "shape") {
-          // For subsequent masks, disable background so we compose masks instead of overwriting
-
-          // Apply clipTransform to shapeBounds
-          const maskedCanvas = shapeMask.apply(
-            acc,
+          nextCanvas = shapeMask.apply(
+            currentCanvas,
             effectiveMask,
             frame,
             clip?.transform,
@@ -87,21 +89,9 @@ export function useWebGLMask({
             baseTransform,
             debug,
           );
-          // If maskedCanvas is the same as acc, it means WebGL failed and returned source unchanged
-          if (maskedCanvas === acc) {
-            return acc;
-          }
-
-          const ctx = acc.getContext("2d");
-          if (!ctx) return acc;
-
-          ctx.clearRect(0, 0, acc.width, acc.height);
-          ctx.drawImage(maskedCanvas, 0, 0);
-
-          return acc;
         } else if (mask.tool === "lasso") {
-          const maskedCanvas = lassoMask.apply(
-            acc,
+          nextCanvas = lassoMask.apply(
+            currentCanvas,
             effectiveMask,
             frame,
             clip?.transform,
@@ -109,19 +99,9 @@ export function useWebGLMask({
             baseTransform,
             debug,
           );
-          if (maskedCanvas === acc) {
-            return acc;
-          }
-          const ctx = acc.getContext("2d");
-          if (!ctx) return acc;
-
-          ctx.clearRect(0, 0, acc.width, acc.height);
-          ctx.drawImage(maskedCanvas, 0, 0);
-
-          return acc;
         } else if (mask.tool === "touch") {
-          const maskedCanvas = touchMask.apply(
-            acc,
+          nextCanvas = touchMask.apply(
+            currentCanvas,
             effectiveMask,
             frame,
             clip?.transform,
@@ -129,17 +109,14 @@ export function useWebGLMask({
             baseTransform,
             debug,
           );
-          if (maskedCanvas === acc) {
-            return acc;
-          }
-          const ctx = acc.getContext("2d");
-          if (!ctx) return acc;
-          ctx.clearRect(0, 0, acc.width, acc.height);
-          ctx.drawImage(maskedCanvas, 0, 0);
-          return acc;
         }
-        return acc;
-      }, workingCanvas);
+
+        if (nextCanvas && nextCanvas !== currentCanvas) {
+          currentCanvas = nextCanvas;
+        }
+      }
+
+      return currentCanvas;
     },
     [focusFrame, masks, disabled, debug, clip, useOriginalTransform],
   );

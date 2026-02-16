@@ -1024,40 +1024,19 @@ const VideoPreview: React.FC<
       // Apply masks before running filters/applicators so downstream operations see masked pixels
 
       const maskedCanvas = toolRef.current !== "mask" ? applyMaskRef.current(workingCanvas, maskFrame) : workingCanvas;
-      if (maskedCanvas !== workingCanvas) {
-        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-        try {
-          workingCtx.drawImage(
-            maskedCanvas,
-            0,
-            0,
-            workingCanvas.width,
-            workingCanvas.height,
-          );
-        } catch {}
-      }
+      let processedCanvas = maskedCanvas;
 
       // Apply WebGL filters for better performance (fast enough for real-time playback)
-      // Use ref values to avoid callback recreation on filter/applicator changes
-      applyFiltersRef.current(workingCanvas, filterParamsRef.current);
-
-      // Apply applicators to canvas
-      let processedCanvas = workingCanvas;
+      // Use passthrough mode to keep filter output on GPU/canvas chain.
+      processedCanvas = applyFiltersRef.current(
+        processedCanvas,
+        filterParamsRef.current,
+        { output: "passthrough" },
+      );
 
       for (const applicator of applicatorsRef.current) {
         const result = applicator.apply(processedCanvas);
-        // Ensure result is copied back to working canvas for chaining
-        if (result !== processedCanvas) {
-          workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-          workingCtx.drawImage(
-            result,
-            0,
-            0,
-            workingCanvas.width,
-            workingCanvas.height,
-          );
-          processedCanvas = workingCanvas;
-        }
+        if (result) processedCanvas = result;
       }
 
       // Always draw the final processed result back to display canvas
@@ -1715,45 +1694,17 @@ const VideoPreview: React.FC<
 
           // Apply masks before filters so masked pixels feed the rest of the pipeline
           const maskedCanvas = toolRef.current !== "mask" ? applyMaskRef.current(workingCanvas, maskFrameForCurrentFocus) : workingCanvas;
-          if (maskedCanvas !== workingCanvas) {
-            workingCtx.clearRect(
-              0,
-              0,
-              workingCanvas.width,
-              workingCanvas.height,
-            );
-            workingCtx.drawImage(
-              maskedCanvas,
-              0,
-              0,
-              workingCanvas.width,
-              workingCanvas.height,
-            );
-          }
+          let processedCanvas = maskedCanvas;
 
           // Apply filters to the clean frame
-          applyFilters(workingCanvas, filterParamsRef.current);
+          processedCanvas = applyFilters(processedCanvas, filterParamsRef.current, {
+            output: "passthrough",
+          });
 
           // Apply applicators (filter clips from layers above)
-          let processedCanvas = workingCanvas;
           for (const applicator of applicatorsRef.current) {
             const result = applicator.apply(processedCanvas);
-            if (result !== processedCanvas) {
-              workingCtx.clearRect(
-                0,
-                0,
-                workingCanvas.width,
-                workingCanvas.height,
-              );
-              workingCtx.drawImage(
-                result,
-                0,
-                0,
-                workingCanvas.width,
-                workingCanvas.height,
-              );
-              processedCanvas = workingCanvas;
-            }
+            if (result) processedCanvas = result;
           }
 
           // Always draw final result back to display canvas

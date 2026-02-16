@@ -15,11 +15,11 @@ import { DEFAULT_FPS } from "@/lib/settings";
 import { useClipStore } from "@/lib/clip";
 import { WrappedCanvas } from "mediabunny";
 import { useWebGLFilters } from "@/components/preview/webgl-filters";
+import { FrameBlitter } from "@/components/preview/webgl/FrameBlitter";
 import { BaseClipApplicator } from "./apply/base";
 import _ from "lodash";
 import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
-import { useVideoDecoderManager } from "@/lib/media/VideoDecoderManagerContext";
 import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 // (prefetch helper removed by request; timeline-driven rendering only)
@@ -135,6 +135,8 @@ const VideoPreview: React.FC<
   );
   const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
   const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const frameBlitterRef = useRef<FrameBlitter | null>(null);
+  const use2dPresentRef = useRef(false);
   const imageRef = useRef<Konva.Image>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
 
@@ -686,6 +688,9 @@ const VideoPreview: React.FC<
       setImageSource(canvasRef.current);
     }
     return () => {
+      frameBlitterRef.current?.dispose();
+      frameBlitterRef.current = null;
+      use2dPresentRef.current = false;
       canvasRef.current = null;
       originalFrameRef.current = null;
       processingCanvasRef.current = null;
@@ -883,6 +888,46 @@ const VideoPreview: React.FC<
     [],
   );
 
+  const presentCanvas = useCallback((sourceCanvas: HTMLCanvasElement) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (
+      canvas.width !== sourceCanvas.width ||
+      canvas.height !== sourceCanvas.height
+    ) {
+      canvas.width = sourceCanvas.width;
+      canvas.height = sourceCanvas.height;
+    }
+
+    if (!use2dPresentRef.current) {
+      if (!frameBlitterRef.current) {
+        const nextBlitter = new FrameBlitter(canvas);
+        if (nextBlitter.isReady()) {
+          frameBlitterRef.current = nextBlitter;
+        } else {
+          nextBlitter.dispose();
+          use2dPresentRef.current = true;
+        }
+      }
+
+      if (frameBlitterRef.current) {
+        frameBlitterRef.current.resize(canvas.width, canvas.height);
+        if (frameBlitterRef.current.blit(sourceCanvas)) {
+          return;
+        }
+      }
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    // @ts-ignore
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(sourceCanvas, 0, 0, canvas.width, canvas.height);
+  }, []);
+
   const drawWrappedCanvas = useCallback(
     (
       wc: {
@@ -893,12 +938,8 @@ const VideoPreview: React.FC<
       maskFrame?: number,
       opts?: { recordFrame?: boolean },
     ) => {
-
-      
-      let canvas = canvasRef.current;
-
-
-      if (!canvas) return;
+      const displayCanvas = canvasRef.current;
+      if (!displayCanvas) return;
 
       if (isPlayingRef.current && suppressSeekFramesRef.current) {
         skipDrawRef.current = false;
@@ -945,92 +986,73 @@ const VideoPreview: React.FC<
       const targetW = Math.floor(displaySizeRef.current.displayWidth || 0);
       const targetH = Math.floor(displaySizeRef.current.displayHeight || 0);
       if (targetW > 0 && targetH > 0) {
-        if (canvas.width !== targetW || canvas.height !== targetH) {
-          canvas.width = targetW;
-          canvas.height = targetH;
+        if (
+          displayCanvas.width !== targetW ||
+          displayCanvas.height !== targetH
+        ) {
+          displayCanvas.width = targetW;
+          displayCanvas.height = targetH;
           // Any cached intermediate canvases must be reset to match the new size.
           originalFrameRef.current = null;
           processingCanvasRef.current = null;
         }
       }
 
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.imageSmoothingEnabled = true;
-      // @ts-ignore
-      ctx.imageSmoothingQuality = "high";
-      try {
-        ctx.drawImage(wc.canvas, 0, 0, canvas.width, canvas.height);
-      } catch {}
-
-      // Store the original unfiltered frame for filter adjustments while paused
-      if (!originalFrameRef.current) {
-        originalFrameRef.current = document.createElement("canvas");
-      }
-      if (
-        originalFrameRef.current.width !== canvas.width ||
-        originalFrameRef.current.height !== canvas.height
-      ) {
-        originalFrameRef.current.width = canvas.width;
-        originalFrameRef.current.height = canvas.height;
-      }
-
-      const origCtx = originalFrameRef.current.getContext("2d");
-      if (origCtx) {
-        origCtx.clearRect(0, 0, canvas.width, canvas.height);
-        origCtx.drawImage(canvas, 0, 0);
-      }
-
-      const workingCanvas = ensureProcessingCanvas(canvas.width, canvas.height);
+      const workingCanvas = ensureProcessingCanvas(
+        displayCanvas.width,
+        displayCanvas.height,
+      );
       const workingCtx = workingCanvas.getContext("2d");
       if (!workingCtx) return;
 
       workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-      workingCtx.drawImage(canvas, 0, 0);
-
-      // Apply masks before running filters/applicators so downstream operations see masked pixels
-
-      const maskedCanvas = toolRef.current !== "mask" ? applyMaskRef.current(workingCanvas, maskFrame) : workingCanvas;
-      if (maskedCanvas !== workingCanvas) {
-        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-        try {
-          workingCtx.drawImage(
-            maskedCanvas,
-            0,
-            0,
-            workingCanvas.width,
-            workingCanvas.height,
-          );
-        } catch {}
+      try {
+        workingCtx.drawImage(wc.canvas, 0, 0, workingCanvas.width, workingCanvas.height);
+      } catch {
+        return;
       }
 
-      // Apply WebGL filters for better performance (fast enough for real-time playback)
-      // Use ref values to avoid callback recreation on filter/applicator changes
-      applyFiltersRef.current(workingCanvas, filterParamsRef.current);
-
-      // Apply applicators to canvas
-      let processedCanvas = workingCanvas;
-
-      for (const applicator of applicatorsRef.current) {
-        const result = applicator.apply(processedCanvas);
-        // Ensure result is copied back to working canvas for chaining
-        if (result !== processedCanvas) {
-          workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-          workingCtx.drawImage(
-            result,
-            0,
-            0,
-            workingCanvas.width,
-            workingCanvas.height,
-          );
-          processedCanvas = workingCanvas;
+      // Cache the unfiltered frame only while paused to avoid extra frame copies during playback.
+      if (!isPlayingRef.current) {
+        if (!originalFrameRef.current) {
+          originalFrameRef.current = document.createElement("canvas");
+        }
+        if (
+          originalFrameRef.current.width !== workingCanvas.width ||
+          originalFrameRef.current.height !== workingCanvas.height
+        ) {
+          originalFrameRef.current.width = workingCanvas.width;
+          originalFrameRef.current.height = workingCanvas.height;
+        }
+        const origCtx = originalFrameRef.current.getContext("2d");
+        if (origCtx) {
+          origCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+          origCtx.drawImage(workingCanvas, 0, 0);
         }
       }
 
-      // Always draw the final processed result back to display canvas
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
+      // Apply masks before running filters/applicators so downstream operations see masked pixels
+      const maskedCanvas =
+        toolRef.current !== "mask"
+          ? applyMaskRef.current(workingCanvas, maskFrame)
+          : workingCanvas;
+      let processedCanvas = maskedCanvas;
+
+      // Apply WebGL filters for better performance (fast enough for real-time playback)
+      // Use passthrough mode to avoid an in-place copy after each filter chain.
+      processedCanvas = applyFiltersRef.current(
+        processedCanvas,
+        filterParamsRef.current,
+        { output: "passthrough" },
+      );
+
+      for (const applicator of applicatorsRef.current) {
+        const result = applicator.apply(processedCanvas);
+        if (result) processedCanvas = result;
+      }
+
+      // Final present to the Konva source canvas uses a GPU blit when available.
+      presentCanvas(processedCanvas);
       if (opts?.recordFrame !== false) {
         if (frameIdx !== null) {
           lastRenderedFrameRef.current = frameIdx;
@@ -1053,7 +1075,7 @@ const VideoPreview: React.FC<
       }
       imageRef.current?.getLayer()?.batchDraw?.();
     },
-    [ensureProcessingCanvas, displayWidth, displayHeight, ],
+    [ensureProcessingCanvas, displayWidth, displayHeight, presentCanvas],
   );
 
   const drawWrappedCanvasRef = useRef(drawWrappedCanvas);
@@ -1177,7 +1199,6 @@ const VideoPreview: React.FC<
           },
           decoderMaskFrameRef.current,
         );
-        imageRef.current?.getLayer()?.batchDraw?.();
       } catch {}
     };
 
@@ -1297,69 +1318,36 @@ const VideoPreview: React.FC<
     if (!isPlaying && canvasRef.current && imageRef.current) {
       // If we have an original frame cached, use it for fast reapplication
       if (originalFrameRef.current) {
-        let canvas = canvasRef.current;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          const workingCanvas = ensureProcessingCanvas(
-            canvas.width,
-            canvas.height,
-          );
-          const workingCtx = workingCanvas.getContext("2d");
-          if (!workingCtx) return;
+        const baseWidth = Math.max(1, originalFrameRef.current.width);
+        const baseHeight = Math.max(1, originalFrameRef.current.height);
+        const workingCanvas = ensureProcessingCanvas(baseWidth, baseHeight);
+        const workingCtx = workingCanvas.getContext("2d");
+        if (!workingCtx) return;
 
-          // Start with the original unfiltered frame
-          workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
-          workingCtx.drawImage(originalFrameRef.current, 0, 0);
+        // Start with the original unfiltered frame
+        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+        workingCtx.drawImage(originalFrameRef.current, 0, 0);
 
-          // Apply masks before filters so masked pixels feed the rest of the pipeline
-          const maskedCanvas = toolRef.current !== "mask" ? applyMaskRef.current(workingCanvas, maskFrameForCurrentFocus) : workingCanvas;
-          if (maskedCanvas !== workingCanvas) {
-            workingCtx.clearRect(
-              0,
-              0,
-              workingCanvas.width,
-              workingCanvas.height,
-            );
-            workingCtx.drawImage(
-              maskedCanvas,
-              0,
-              0,
-              workingCanvas.width,
-              workingCanvas.height,
-            );
-          }
+        // Apply masks before filters so masked pixels feed the rest of the pipeline
+        const maskedCanvas =
+          toolRef.current !== "mask"
+            ? applyMaskRef.current(workingCanvas, maskFrameForCurrentFocus)
+            : workingCanvas;
+        let processedCanvas = maskedCanvas;
 
-          // Apply filters to the clean frame
-          applyFilters(workingCanvas, filterParamsRef.current);
+        // Apply filters to the clean frame
+        processedCanvas = applyFilters(processedCanvas, filterParamsRef.current, {
+          output: "passthrough",
+        });
 
-          // Apply applicators (filter clips from layers above)
-          let processedCanvas = workingCanvas;
-          for (const applicator of applicatorsRef.current) {
-            const result = applicator.apply(processedCanvas);
-            if (result !== processedCanvas) {
-              workingCtx.clearRect(
-                0,
-                0,
-                workingCanvas.width,
-                workingCanvas.height,
-              );
-              workingCtx.drawImage(
-                result,
-                0,
-                0,
-                workingCanvas.width,
-                workingCanvas.height,
-              );
-              processedCanvas = workingCanvas;
-            }
-          }
-
-          // Always draw final result back to display canvas
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
-
-          imageRef.current.getLayer()?.batchDraw();
+        // Apply applicators (filter clips from layers above)
+        for (const applicator of applicatorsRef.current) {
+          const result = applicator.apply(processedCanvas);
+          if (result) processedCanvas = result;
         }
+
+        presentCanvas(processedCanvas);
+        imageRef.current.getLayer()?.batchDraw();
       } else {
         // If no cached frame exists, decode the current frame
         // Force re-decode even if we already rendered this frame index
@@ -1389,6 +1377,7 @@ const VideoPreview: React.FC<
     applyMask,
     maskFrameForCurrentFocus,
     ensureProcessingCanvas,
+    presentCanvas,
     inputId,
     inputMode,
   ]);
