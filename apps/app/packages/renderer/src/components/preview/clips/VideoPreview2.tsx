@@ -1125,7 +1125,6 @@ const VideoPreview: React.FC<
           },
           decoderMaskFrameRef.current,
         );
-        imageRef.current?.getLayer()?.batchDraw?.();
       } catch {
         // ignore draw errors (e.g. during seek)
       }
@@ -1715,7 +1714,6 @@ const VideoPreview: React.FC<
           listening={!hidden}
           draggable={tool === "pointer" && !isTransforming && !inputMode && !hidden}
           ref={imageRef}
-          
           image={imageSource || undefined}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}
