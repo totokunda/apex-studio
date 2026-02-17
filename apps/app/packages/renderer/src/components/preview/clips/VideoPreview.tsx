@@ -6,7 +6,6 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Image, Transformer, Group, Line} from "react-konva";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import { useControlsStore } from "@/lib/control";
 import Konva from "konva";
@@ -22,7 +21,9 @@ import { useInputControlsStore } from "@/lib/inputControl";
 import { useVideoDecoderManager } from "@/lib/media/VideoDecoderManagerContext";
 import { useProjectsStore } from "@/lib/projects";
 import { generatePosterCanvas } from "@/lib/media/timeline";
-import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
+import SharedClipCanvasSurface, {
+  getAspectFitSize,
+} from "./shared/SharedClipCanvasSurface";
 // (prefetch helper removed by request; timeline-driven rendering only)
 
 const calculateIterateRange = (
@@ -64,30 +65,6 @@ const calculateIterateRange = (
         
     return { startTime, endTime, startIdx };
 };
-
-const getAspectFitSize = (
-  info: MediaInfo | null | undefined,
-  rectWidth: number,
-  rectHeight: number,
-) => {
-  const originalWidth = info?.video?.displayWidth || 0;
-  const originalHeight = info?.video?.displayHeight || 0;
-  if (!originalWidth || !originalHeight || !rectWidth || !rectHeight) {
-    return { displayWidth: 0, displayHeight: 0, offsetX: 0, offsetY: 0 };
-  }
-  const aspectRatio = originalWidth / originalHeight;
-  let dw = rectWidth;
-  let dh = rectHeight;
-  if (rectWidth / rectHeight > aspectRatio) {
-    dw = rectHeight * aspectRatio;
-  } else {
-    dh = rectWidth / aspectRatio;
-  }
-  const ox = (rectWidth - dw) / 2;
-  const oy = (rectHeight - dh) / 2;
-  return { displayWidth: dw, displayHeight: dh, offsetX: ox, offsetY: oy };
-};
-
 
 const VideoPreview: React.FC<
   VideoClipProps & {
@@ -172,11 +149,9 @@ const VideoPreview: React.FC<
   const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
   const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<Konva.Image>(null);
-  const transformerRef = useRef<Konva.Transformer>(null);
   const drawTokenRef = useRef(0);
   const posterRequestRef = useRef(0);
   const lastPosterKeyRef = useRef<string | null>(null);
-  const suppressUntilRef = useRef<number>(0);
   const lastSeekFrameRef = useRef<number>(0);
   const { applyFilters } = useWebGLFilters();
   // Resolve clip early so timing math can reference grouping info
@@ -261,21 +236,11 @@ const VideoPreview: React.FC<
     return Number.isFinite(s) && s > 0 ? Math.min(5, Math.max(0.1, s)) : 1;
   }, [_speed]);
   const tool = useViewportStore((s) => s.tool);
-  const scale = useViewportStore((s) => s.scale);
-  const position = useViewportStore((s) => s.position);
-  const setClipTransform = useClipStore((s) => s.setClipTransform);
   const clipTransform = overrideClip
     ? overrideClip.transform
     : useClipStore((s) => s.getClipTransform(clipId));
-
-  const removeClipSelection = useControlsStore((s) => s.removeClipSelection);
-  const addClipSelection = useControlsStore((s) => s.addClipSelection);
-  const clearSelection = useControlsStore((s) => s.clearSelection);
-  const { selectedClipIds, isFullscreen, fps: srcFps, isAccurateSeekNeeded } = useControlsStore();
-  const isSelected = useMemo(
-    () => selectedClipIds.includes(clipId),
-    [clipId, selectedClipIds],
-  );
+  const srcFps = useControlsStore((s) => s.fps);
+  const isAccurateSeekNeeded = useControlsStore((s) => s.isAccurateSeekNeeded);
 
   const getAssetById = useClipStore((s) => s.getAssetById);
   const lastSelectedAssetIdRef = useRef<string | null>(null);
@@ -461,35 +426,6 @@ const VideoPreview: React.FC<
     startFrameUsed,
   ]);
 
-  const aspectRatio = useMemo(() => {
-    const originalWidth = mediaInfo.current?.video?.displayWidth || 0;
-    const originalHeight = mediaInfo.current?.video?.displayHeight || 0;
-    if (!originalWidth || !originalHeight) return 16 / 9;
-    const aspectRatio = originalWidth / originalHeight;
-
-    return aspectRatio;
-  }, [
-    mediaInfo.current?.video?.displayWidth,
-    mediaInfo.current?.video?.displayHeight,
-  ]);
-
-  const groupRef = useRef<Konva.Group>(null);
-  const SNAP_THRESHOLD_PX = 4; // pixels at screen scale
-  const [guides, setGuides] = useState({
-    vCenter: false,
-    hCenter: false,
-    v25: false,
-    v75: false,
-    h25: false,
-    h75: false,
-    left: false,
-    right: false,
-    top: false,
-    bottom: false,
-  });
-  const [isInteracting, setIsInteracting] = useState(false);
-  const [isRotating, setIsRotating] = useState(false);
-  const [isTransforming, setIsTransforming] = useState(false);
   const iteratorRef = useRef<AsyncIterable<WrappedCanvas | null> | null>(null);
   const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
   const isPlayingFromInputs = useInputControlsStore((s) =>
@@ -572,174 +508,6 @@ const VideoPreview: React.FC<
     applicators.length,
   ]);
 
-  const updateGuidesAndMaybeSnap = useCallback(
-    (opts: { snap: boolean }) => {
-      if (isRotating) return; // disable guides/snapping while rotating
-      const node = imageRef.current;
-      const group = groupRef.current;
-      if (!node || !group) return;
-      const thresholdLocal = SNAP_THRESHOLD_PX / Math.max(0.0001, scale);
-      const client = node.getClientRect({
-        skipShadow: true,
-        skipStroke: true,
-        relativeTo: group as any,
-      });
-      const centerX = client.x + client.width / 2;
-      const centerY = client.y + client.height / 2;
-      const dxToVCenter = rectWidth / 2 - centerX;
-      const dyToHCenter = rectHeight / 2 - centerY;
-      const dxToV25 = rectWidth * 0.25 - centerX;
-      const dxToV75 = rectWidth * 0.75 - centerX;
-      const dyToH25 = rectHeight * 0.25 - centerY;
-      const dyToH75 = rectHeight * 0.75 - centerY;
-      const distVCenter = Math.abs(dxToVCenter);
-      const distHCenter = Math.abs(dyToHCenter);
-      const distV25 = Math.abs(dxToV25);
-      const distV75 = Math.abs(dxToV75);
-      const distH25 = Math.abs(dyToH25);
-      const distH75 = Math.abs(dyToH75);
-      const distLeft = Math.abs(client.x - 0);
-      const distRight = Math.abs(client.x + client.width - rectWidth);
-      const distTop = Math.abs(client.y - 0);
-      const distBottom = Math.abs(client.y + client.height - rectHeight);
-
-      const nextGuides = {
-        vCenter: distVCenter <= thresholdLocal,
-        hCenter: distHCenter <= thresholdLocal,
-        v25: distV25 <= thresholdLocal,
-        v75: distV75 <= thresholdLocal,
-        h25: distH25 <= thresholdLocal,
-        h75: distH75 <= thresholdLocal,
-        left: distLeft <= thresholdLocal,
-        right: distRight <= thresholdLocal,
-        top: distTop <= thresholdLocal,
-        bottom: distBottom <= thresholdLocal,
-      };
-      setGuides(nextGuides);
-
-      if (opts.snap) {
-        let deltaX = 0;
-        let deltaY = 0;
-        if (nextGuides.vCenter) {
-          deltaX += dxToVCenter;
-        } else if (nextGuides.v25) {
-          deltaX += dxToV25;
-        } else if (nextGuides.v75) {
-          deltaX += dxToV75;
-        } else if (nextGuides.left) {
-          deltaX += -client.x;
-        } else if (nextGuides.right) {
-          deltaX += rectWidth - (client.x + client.width);
-        }
-        if (nextGuides.hCenter) {
-          deltaY += dyToHCenter;
-        } else if (nextGuides.h25) {
-          deltaY += dyToH25;
-        } else if (nextGuides.h75) {
-          deltaY += dyToH75;
-        } else if (nextGuides.top) {
-          deltaY += -client.y;
-        } else if (nextGuides.bottom) {
-          deltaY += rectHeight - (client.y + client.height);
-        }
-        if (deltaX !== 0 || deltaY !== 0) {
-          node.x(node.x() + deltaX);
-          node.y(node.y() + deltaY);
-          setClipTransform(clipId, { x: node.x(), y: node.y() });
-        }
-      }
-    },
-    [rectWidth, rectHeight, scale, setClipTransform, clipId, isRotating],
-  );
-
-  const transformerBoundBoxFunc = useCallback(
-    (_oldBox: any, newBox: any) => {
-      if (isRotating) return newBox; // do not snap bounds while rotating
-      // Convert absolute newBox to local coordinates of the content group (rect space)
-      const invScale = 1 / Math.max(0.0001, scale);
-      const local = {
-        x: (newBox.x - position.x) * invScale,
-        y: (newBox.y - position.y) * invScale,
-        width: newBox.width * invScale,
-        height: newBox.height * invScale,
-      };
-      const thresholdLocal = SNAP_THRESHOLD_PX * invScale;
-
-      const left = local.x;
-      const right = local.x + local.width;
-      const top = local.y;
-      const bottom = local.y + local.height;
-      const v25 = rectWidth * 0.25;
-      const v75 = rectWidth * 0.75;
-      const h25 = rectHeight * 0.25;
-      const h75 = rectHeight * 0.75;
-
-      // Snap left edge to 0, 25%, 75%
-      if (Math.abs(left - 0) <= thresholdLocal) {
-        local.x = 0;
-        local.width = right - local.x;
-      } else if (Math.abs(left - v25) <= thresholdLocal) {
-        local.x = v25;
-        local.width = right - local.x;
-      } else if (Math.abs(left - v75) <= thresholdLocal) {
-        local.x = v75;
-        local.width = right - local.x;
-      }
-      // Snap right edge to rectWidth, 75%, 25%
-      if (Math.abs(rectWidth - right) <= thresholdLocal) {
-        local.width = rectWidth - local.x;
-      } else if (Math.abs(v75 - right) <= thresholdLocal) {
-        local.width = v75 - local.x;
-      } else if (Math.abs(v25 - right) <= thresholdLocal) {
-        local.width = v25 - local.x;
-      }
-      // Snap top edge to 0, 25%, 75%
-      if (Math.abs(top - 0) <= thresholdLocal) {
-        local.y = 0;
-        local.height = bottom - local.y;
-      } else if (Math.abs(top - h25) <= thresholdLocal) {
-        local.y = h25;
-        local.height = bottom - local.y;
-      } else if (Math.abs(top - h75) <= thresholdLocal) {
-        local.y = h75;
-        local.height = bottom - local.y;
-      }
-      // Snap bottom edge to rectHeight, 75%, 25%
-      if (Math.abs(rectHeight - bottom) <= thresholdLocal) {
-        local.height = rectHeight - local.y;
-      } else if (Math.abs(h75 - bottom) <= thresholdLocal) {
-        local.height = h75 - local.y;
-      } else if (Math.abs(h25 - bottom) <= thresholdLocal) {
-        local.height = h25 - local.y;
-      }
-
-      // Convert back to absolute space
-      let adjusted = {
-        ...newBox,
-        x: position.x + local.x * scale,
-        y: position.y + local.y * scale,
-        width: local.width * scale,
-        height: local.height * scale,
-      };
-
-      // Prevent negative or zero sizes in absolute space just in case
-      const MIN_SIZE_ABS = 1e-3;
-      if (adjusted.width < MIN_SIZE_ABS) adjusted.width = MIN_SIZE_ABS;
-      if (adjusted.height < MIN_SIZE_ABS) adjusted.height = MIN_SIZE_ABS;
-
-      return adjusted;
-    },
-    [
-      rectWidth,
-      rectHeight,
-      scale,
-      position.x,
-      position.y,
-      isRotating,
-      aspectRatio,
-    ],
-  );
-
   // Create canvas once and expose to Konva Image via state so initial render receives it
   useEffect(() => {
     if (!canvasRef.current) {
@@ -755,21 +523,6 @@ const VideoPreview: React.FC<
       setImageSource(null);
     };
   }, []);
-
-  useEffect(() => {
-    if (!isSelected) return;
-    const tr = transformerRef.current;
-    const img = imageRef.current;
-    if (!tr || !img) return;
-    const raf = requestAnimationFrame(() => {
-      tr.nodes([img]);
-      if (typeof (tr as any).forceUpdate === "function") {
-        (tr as any).forceUpdate();
-      }
-      tr.getLayer()?.batchDraw?.();
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [isSelected]);
 
   useEffect(() => {
     if (lastSelectedAssetIdRef.current === selectedAssetId) return;
@@ -792,7 +545,12 @@ const VideoPreview: React.FC<
       setMediaInfoAndBump(info);
       // Update the "current" aspect-fit size for drawWrappedCanvas immediately so the
       // very first frame of the new asset can't render into a stale-sized canvas.
-      displaySizeRef.current = getAspectFitSize(info, rectWidth, rectHeight);
+      displaySizeRef.current = getAspectFitSize(
+        info.video?.displayWidth || 0,
+        info.video?.displayHeight || 0,
+        rectWidth,
+        rectHeight,
+      );
       
       // Have cached info; force immediate redraw
       lastRenderedFrameRef.current = -1;
@@ -802,7 +560,12 @@ const VideoPreview: React.FC<
 
   // Compute aspect-fit display size and offsets within the preview rect
   const { displayWidth, displayHeight, offsetX, offsetY } = useMemo(() => {
-    return getAspectFitSize(mediaInfo.current, rectWidth, rectHeight);
+    return getAspectFitSize(
+      mediaInfo.current?.video?.displayWidth || 0,
+      mediaInfo.current?.video?.displayHeight || 0,
+      rectWidth,
+      rectHeight,
+    );
   }, [
     mediaInfoVersion,
     mediaInfo.current?.video?.displayWidth,
@@ -816,88 +579,6 @@ const VideoPreview: React.FC<
   useEffect(() => {
     displaySizeRef.current = { displayWidth, displayHeight, offsetX, offsetY };
   }, [displayWidth, displayHeight, offsetX, offsetY]);
-
-  // Initialize default transform if missing or invalid (zero-sized),
-  // always recentering the clip in the preview rect.
-  useEffect(() => {
-    if (!overrideClip && displayWidth > 0 && displayHeight > 0) {
-      const hasTransform = !!clipTransform;
-      const width = clipTransform?.width ?? 0;
-      const height = clipTransform?.height ?? 0;
-      const needsInit = !hasTransform || width <= 0 || height <= 0;
-
-      if (needsInit) {
-        setClipTransform(clipId, {
-          x: offsetX,
-          y: offsetY,
-          width: displayWidth,
-          height: displayHeight,
-          scaleX: 1,
-          scaleY: 1,
-          rotation: 0,
-        });
-      }
-    }
-  }, [
-    clipTransform,
-    displayWidth,
-    displayHeight,
-    offsetX,
-    offsetY,
-    clipId,
-    setClipTransform,
-    overrideClip,
-  ]);
-
-  // Hard guarantee: clip transform width/height are never zero or negative.
-  // If we ever see an invalid size, immediately normalize it to a sane value.
-  useEffect(() => {
-    if (!clipTransform) return;
-    // Do not mutate store transforms when rendering an override-only clip.
-    if (overrideClip) return;
-
-    const currentWidth = clipTransform.width ?? 0;
-    const currentHeight = clipTransform.height ?? 0;
-
-    if (currentWidth > 0 && currentHeight > 0) return;
-
-    const fallbackWidth =
-      (displayWidth && displayWidth > 0 ? displayWidth : currentWidth) || 1;
-    const fallbackHeight =
-      (displayHeight && displayHeight > 0 ? displayHeight : currentHeight) || 1;
-
-    setClipTransform(clipId, {
-      ...clipTransform,
-      // When we normalize an invalid transform, also recenter the clip
-      // within the preview rect so it remains visually centered.
-      x: offsetX,
-      y: offsetY,
-      width: Math.max(fallbackWidth, 1),
-      height: Math.max(fallbackHeight, 1),
-    });
-  }, [
-    clipTransform,
-    displayWidth,
-    displayHeight,
-    offsetX,
-    offsetY,
-    clipId,
-    setClipTransform,
-    overrideClip,
-  ]);
-
-  // Ensure canvas matches display size for crisp rendering
-  useEffect(() => {
-    if (!canvasRef.current) return;
-    if (!displayWidth || !displayHeight) return;
-    const canvas = canvasRef.current;
-    const w = Math.floor(displayWidth);
-    const h = Math.floor(displayHeight);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-    }
-  }, [displayWidth, displayHeight]);
 
   const ensureProcessingCanvas = useCallback(
     (width: number, height: number) => {
@@ -1125,7 +806,12 @@ const VideoPreview: React.FC<
       let { displayWidth: targetW, displayHeight: targetH } =
         displaySizeRef.current;
       if (!targetW || !targetH) {
-        const fallback = getAspectFitSize(info, rectWidth, rectHeight);
+        const fallback = getAspectFitSize(
+          info.video?.displayWidth || 0,
+          info.video?.displayHeight || 0,
+          rectWidth,
+          rectHeight,
+        );
         displaySizeRef.current = fallback;
         targetW = fallback.displayWidth;
         targetH = fallback.displayHeight;
@@ -1345,7 +1031,12 @@ const VideoPreview: React.FC<
           // state immediately so sizing updates before the first frame renders.
           if (id === selectedAssetId) {
             setMediaInfoAndBump(info);
-            displaySizeRef.current = getAspectFitSize(info, rectWidth, rectHeight);
+            displaySizeRef.current = getAspectFitSize(
+              info.video?.displayWidth || 0,
+              info.video?.displayHeight || 0,
+              rectWidth,
+              rectHeight,
+            );
           }
 
           const config = info.videoDecoderConfig;
@@ -1808,67 +1499,6 @@ const VideoPreview: React.FC<
   }, [clipId, overrideClip]);
 
 
-  const handleDragMove = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent>) => {
-      updateGuidesAndMaybeSnap({ snap: true });
-      const node = imageRef.current;
-      if (node) {
-        setClipTransform(clipId, { x: node.x(), y: node.y() });
-      } else {
-        setClipTransform(clipId, { x: e.target.x(), y: e.target.y() });
-      }
-    },
-    [setClipTransform, clipId, updateGuidesAndMaybeSnap],
-  );
-
-  const handleDragStart = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent>) => {
-      e.target.getStage()!.container().style.cursor = "grab";
-      addClipSelection(clipId);
-      const now =
-        typeof performance !== "undefined" && performance.now
-          ? performance.now()
-          : Date.now();
-      suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
-      setIsInteracting(true);
-      updateGuidesAndMaybeSnap({ snap: true });
-    },
-    [clipId, addClipSelection, updateGuidesAndMaybeSnap],
-  );
-
-  const handleDragEnd = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent>) => {
-      e.target.getStage()!.container().style.cursor = "default";
-      const now =
-        typeof performance !== "undefined" && performance.now
-          ? performance.now()
-          : Date.now();
-      suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 250);
-      setClipTransform(clipId, { x: e.target.x(), y: e.target.y() });
-      setIsInteracting(false);
-      setGuides({
-        vCenter: false,
-        hCenter: false,
-        v25: false,
-        v75: false,
-        h25: false,
-        h75: false,
-        left: false,
-        right: false,
-        top: false,
-        bottom: false,
-      });
-    },
-    [setClipTransform, clipId],
-  );
-
-  const handleClick = useCallback(() => {
-    if (isFullscreen) return;
-    if (hidden) return;
-    clearSelection();
-    addClipSelection(clipId);
-  }, [addClipSelection, clipId, isFullscreen, hidden]);
-
   // If we become visible after being hidden (prewarmed), force a redraw so the
   // already-decoded backing canvas is displayed immediately.
   useEffect(() => {
@@ -1878,348 +1508,25 @@ const VideoPreview: React.FC<
     } catch {}
   }, [hidden]);
 
-  useEffect(() => {
-    const transformer = transformerRef.current;
-    if (!transformer) return;
-    const bumpSuppress = () => {
-      const now =
-        typeof performance !== "undefined" && performance.now
-          ? performance.now()
-          : Date.now();
-      suppressUntilRef.current = Math.max(suppressUntilRef.current, now + 300);
-    };
-    const onTransformStart = () => {
-      bumpSuppress();
-      setIsTransforming(true);
-      const active = (transformer as any)?.getActiveAnchor?.();
-      const rotating = typeof active === "string" && active.includes("rotater");
-      setIsRotating(!!rotating);
-      setIsInteracting(true);
-      if (!rotating) {
-        updateGuidesAndMaybeSnap({ snap: false });
-      } else {
-        setGuides({
-          vCenter: false,
-          hCenter: false,
-          v25: false,
-          v75: false,
-          h25: false,
-          h75: false,
-          left: false,
-          right: false,
-          top: false,
-          bottom: false,
-        });
-      }
-    };
-    const persistTransform = () => {
-      const node = imageRef.current;
-      if (!node) return;
-      const newWidth = node.width() * node.scaleX();
-      const newHeight = node.height() * node.scaleY();
-      setClipTransform(clipId, {
-        x: node.x(),
-        y: node.y(),
-        width: newWidth,
-        height: newHeight,
-        scaleX: 1,
-        scaleY: 1,
-        rotation: node.rotation(),
-      }, true, true);
-      node.width(newWidth);
-      node.height(newHeight);
-      node.scaleX(1);
-      node.scaleY(1);
-    };
-    const onTransform = () => {
-      bumpSuppress();
-      if (!isRotating) {
-        updateGuidesAndMaybeSnap({ snap: false });
-      }
-      persistTransform();
-    };
-
-    const onTransformEnd = () => {
-      bumpSuppress();
-      setIsTransforming(false);
-      setIsInteracting(false);
-      setIsRotating(false);
-      setGuides({
-        vCenter: false,
-        hCenter: false,
-        v25: false,
-        v75: false,
-        h25: false,
-        h75: false,
-        left: false,
-        right: false,
-        top: false,
-        bottom: false,
-      });
-      persistTransform();
-    };
-    transformer.on("transformstart", onTransformStart);
-    transformer.on("transform", onTransform);
-    transformer.on("transformend", onTransformEnd);
-    return () => {
-      transformer.off("transformstart", onTransformStart);
-      transformer.off("transform", onTransform);
-      transformer.off("transformend", onTransformEnd);
-    };
-  }, [
-    transformerRef.current,
-    updateGuidesAndMaybeSnap,
-    setClipTransform,
-    clipId,
-    isRotating,
-  ]);
-
-  useEffect(() => {
-    if (inputMode) return;
-    const handleWindowClick = (e: MouseEvent) => {
-      if (!isSelected) return;
-      const now =
-        typeof performance !== "undefined" && performance.now
-          ? performance.now()
-          : Date.now();
-      if (now < suppressUntilRef.current) return;
-      const stage = imageRef.current?.getStage();
-      const container = stage?.container();
-      // check that node is inside container
-      const node = e.target;
-      if (!container?.contains(node as Node)) return;
-      if (!stage || !container || !imageRef.current) return;
-      const containerRect = container.getBoundingClientRect();
-      const pointerX = e.clientX - containerRect.left;
-      const pointerY = e.clientY - containerRect.top;
-      const imgRect = imageRef.current.getClientRect({
-        skipShadow: true,
-        skipStroke: true,
-      });
-      const insideImage =
-        pointerX >= imgRect.x &&
-        pointerX <= imgRect.x + imgRect.width &&
-        pointerY >= imgRect.y &&
-        pointerY <= imgRect.y + imgRect.height;
-
-      if (!insideImage) {
-        removeClipSelection(clipId);
-      }
-    };
-    window.addEventListener("click", handleWindowClick);
-    return () => {
-      window.removeEventListener("click", handleWindowClick);
-    };
-  }, [clipId, isSelected, removeClipSelection, inputMode]);
-
-  // Calculate pixel crop from normalized crop for Konva Image
-  const pixelCrop = useMemo(() => {
-    const c = clipTransform?.crop;
-    if (!c || !displayWidth || !displayHeight) return undefined;
-    return {
-      x: c.x * displayWidth,
-      y: c.y * displayHeight,
-      width: c.width * displayWidth,
-      height: c.height * displayHeight,
-    };
-  }, [clipTransform?.crop, displayWidth, displayHeight]);
-
-  const nodeWidth = useMemo(
-    () =>
-      clipTransform?.width && clipTransform.width > 0
-        ? clipTransform.width
-        : displayWidth || 1,
-    [clipTransform?.width, displayWidth],
-  );
-  const nodeHeight = useMemo(
-    () =>
-      clipTransform?.height && clipTransform.height > 0
-        ? clipTransform.height
-        : displayHeight || 1,
-    [clipTransform?.height, displayHeight],
-  );
-  const safeCornerRadius = useMemo(
-    () =>
-      sanitizeCornerRadius(clipTransform?.cornerRadius, nodeWidth, nodeHeight),
-    [clipTransform?.cornerRadius, nodeWidth, nodeHeight],
-  );
-
-  
-
-  // Only render Konva nodes when the clip is active in the current frame and not explicitly hidden.
-  if (hidden || !isInFrame) {
-    return null;
-  }
-
-
-
   return (
-    <React.Fragment>
-      <Group
-        ref={groupRef}
-        clipX={0}
-        clipY={0}
-        clipWidth={rectWidth}
-        clipHeight={rectHeight}
-      >
-        
-        <Image
-          
-          visible={!hidden}
-          listening={!hidden}
-          draggable={tool === "pointer" && !isTransforming && !inputMode && !hidden}
-          ref={imageRef}
-          
-          image={imageSource || undefined}
-          x={clipTransform?.x ?? offsetX}
-          y={clipTransform?.y ?? offsetY}
-          width={nodeWidth}
-          height={nodeHeight}
-          scaleX={clipTransform?.scaleX ?? 1}
-          scaleY={clipTransform?.scaleY ?? 1}
-          rotation={clipTransform?.rotation ?? 0}
-          cornerRadius={safeCornerRadius}
-          opacity={(clipTransform?.opacity ?? 100) / 100}
-          crop={pixelCrop}
-          onDragMove={handleDragMove}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          onClick={handleClick}
-        />
-        {tool === "pointer" &&
-          isSelected &&
-          isInteracting &&
-          !isRotating &&
-          !isFullscreen && (
-            <React.Fragment>
-              {guides.vCenter && (
-                <Line
-                  listening={false}
-                  points={[rectWidth / 2, 0, rectWidth / 2, rectHeight]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.v25 && (
-                <Line
-                  listening={false}
-                  points={[rectWidth * 0.25, 0, rectWidth * 0.25, rectHeight]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.v75 && (
-                <Line
-                  listening={false}
-                  points={[rectWidth * 0.75, 0, rectWidth * 0.75, rectHeight]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.hCenter && (
-                <Line
-                  listening={false}
-                  points={[0, rectHeight / 2, rectWidth, rectHeight / 2]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.h25 && (
-                <Line
-                  listening={false}
-                  points={[0, rectHeight * 0.25, rectWidth, rectHeight * 0.25]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.h75 && (
-                <Line
-                  listening={false}
-                  points={[0, rectHeight * 0.75, rectWidth, rectHeight * 0.75]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.left && (
-                <Line
-                  listening={false}
-                  points={[0, 0, 0, rectHeight]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.right && (
-                <Line
-                  listening={false}
-                  points={[rectWidth, 0, rectWidth, rectHeight]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.top && (
-                <Line
-                  listening={false}
-                  points={[0, 0, rectWidth, 0]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-              {guides.bottom && (
-                <Line
-                  listening={false}
-                  points={[0, rectHeight, rectWidth, rectHeight]}
-                  stroke={"#AE81CE"}
-                  strokeWidth={1}
-                  dash={[6, 4]}
-                />
-              )}
-            </React.Fragment>
-          )}
-      </Group>
-      <Transformer
-        borderStroke="#AE81CE"
-        anchorCornerRadius={8}
-        anchorStroke="#E3E3E3"
-        anchorStrokeWidth={1}
-        borderStrokeWidth={2}
-        visible={
-          !hidden &&
-          tool === "pointer" &&
-          isSelected &&
-          !isFullscreen &&
-          overlap &&
-          !inputMode
-        }
-        listening={!hidden}
-        rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
-        boundBoxFunc={transformerBoundBoxFunc as any}
-        ref={(node) => {
-          transformerRef.current = node;
-          if (node && imageRef.current) {
-            node.nodes([imageRef.current]);
-            if (typeof (node as any).forceUpdate === "function") {
-              (node as any).forceUpdate();
-            }
-            node.getLayer()?.batchDraw?.();
-          }
-        }}
-        enabledAnchors={[
-          "top-left",
-          "bottom-right",
-          "top-right",
-          "bottom-left",
-        ]}
-      />
-    </React.Fragment>
+    <SharedClipCanvasSurface
+      clipId={clipId}
+      rectWidth={rectWidth}
+      rectHeight={rectHeight}
+      displayWidth={displayWidth}
+      displayHeight={displayHeight}
+      offsetX={offsetX}
+      offsetY={offsetY}
+      clipTransform={clipTransform}
+      canvasRef={canvasRef}
+      imageRef={imageRef}
+      imageSource={imageSource || canvasRef.current}
+      overlap={overlap}
+      inputMode={inputMode}
+      isInFrame={isInFrame}
+      hidden={hidden}
+      overrideClip={!!overrideClip}
+    />
   );
 };
 

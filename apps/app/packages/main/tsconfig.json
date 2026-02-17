@@ -16,6 +16,6 @@
       "@app/export-renderer": ["../export-renderer"]
     }
   },
-  "include": ["src/**/*.ts", "../../types/**/*.d.ts"],
+  "include": ["src/**/*.ts", "../../types/**/*.d.ts", "../native-decoder/types.ts"],
   "exclude": ["**/*.spec.ts", "**/*.test.ts"]
 }

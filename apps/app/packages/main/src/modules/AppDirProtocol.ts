@@ -550,6 +550,11 @@ class AppDirProtocol implements AppModule {
       "Content-Length": String(stat.size),
       "Cache-Control": "public, max-age=31536000, immutable",
     });
+    // Required for SharedArrayBuffer (native decoder ring buffer)
+    if (ct.startsWith("text/html")) {
+      headers.set("Cross-Origin-Opener-Policy", "same-origin");
+      headers.set("Cross-Origin-Embedder-Policy", "credentialless");
+    }
 
     if (request.method === "HEAD") {
       return new Response(null, { status: 200, headers });

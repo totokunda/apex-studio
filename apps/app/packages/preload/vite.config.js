@@ -1,4 +1,4 @@
-import { getChromeMajorVersion } from "@app/electron-versions";
+import { getNodeMajorVersion } from "@app/electron-versions";
 import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,7 +14,7 @@ export default /**
     ssr: true,
     sourcemap: "inline",
     outDir: "dist",
-    target: `chrome${getChromeMajorVersion()}`,
+    target: `node${getNodeMajorVersion()}`,
     assetsDir: ".",
     lib: {
       // Use named entries so output filenames are stable and match package.json exports:
@@ -37,8 +37,27 @@ export default /**
     emptyOutDir: true,
     reportCompressedSize: false,
   },
-  plugins: [mockExposed(), handleHotReload()],
+  plugins: [copyNativeDecoderWorker(), mockExposed(), handleHotReload()],
 });
+
+function copyNativeDecoderWorker() {
+  return {
+    name: "@app/preload-copy-native-decoder-worker",
+    writeBundle() {
+      const outDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
+      const workerSrc = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "src",
+        "nativeDecoder.worker.cjs",
+      );
+      const workerDest = path.join(outDir, "nativeDecoder.worker.cjs");
+      if (fs.existsSync(workerSrc)) {
+        fs.mkdirSync(outDir, { recursive: true });
+        fs.copyFileSync(workerSrc, workerDest);
+      }
+    },
+  };
+}
 
 /**
  * This plugin creates a browser (renderer) version of `preload` package.

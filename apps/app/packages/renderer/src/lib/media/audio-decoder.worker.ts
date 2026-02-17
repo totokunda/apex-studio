@@ -88,16 +88,6 @@ function fileURLToPathInWorker(raw: string): string {
   }
 }
 
-// Best-effort 404 check for app:// URLs
-async function isAppUrlDefinitely404(url: URL): Promise<boolean> {
-  try {
-    const res = await fetch(url.toString(), { method: "HEAD" });
-    return res.status === 404;
-  } catch {
-    return false;
-  }
-}
-
 // State per asset
 type AssetState = {
   decoder: AudioDecoder | null;
@@ -293,10 +283,6 @@ async function handleConfigure(
     if (cfg.folderUuid && primarySourceDir === "apex-cache") {
       url.searchParams.set("folderUuid", cfg.folderUuid);
     }
-    const is404 = await isAppUrlDefinitely404(url);
-    if (is404) {
-      throw new Error("Primary app:// URL returned 404");
-    }
     input = new Input({ formats, source: new UrlSource(url) });
   } catch {
     try {
@@ -306,10 +292,6 @@ async function handleConfigure(
       const url = new URL(`app://${secondarySourceDir}/${filePath}`);
       if (cfg.folderUuid && secondarySourceDir === "apex-cache") {
         url.searchParams.set("folderUuid", cfg.folderUuid);
-      }
-      const is404 = await isAppUrlDefinitely404(url);
-      if (is404) {
-        throw new Error("Secondary app:// URL returned 404");
       }
       input = new Input({ formats, source: new UrlSource(url) });
     } catch {

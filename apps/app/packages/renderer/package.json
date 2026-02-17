@@ -84,6 +84,7 @@
     "tailwindcss": "^4.1.12",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
+    "vite-plugin-node-polyfills": "^0.25.0",
     "vite-tsconfig-paths": "^5.1.4"
   }
 }

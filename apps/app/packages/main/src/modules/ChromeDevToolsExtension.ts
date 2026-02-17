@@ -31,7 +31,10 @@ export class ChromeDevToolsExtension implements AppModule {
     try {
       // `electron-devtools-installer` is a devDependency and is not shipped in production builds.
       // Use a dynamic import so packaged apps never crash with ERR_MODULE_NOT_FOUND.
-      const installer = (await import("electron-devtools-installer")) as any;
+      const installer = await import("electron-devtools-installer");
+      const installExtension =
+        installer.installExtension ??
+        (installer as { default?: (ext: unknown) => Promise<unknown> }).default;
       const dict = {
         REDUX_DEVTOOLS: installer.REDUX_DEVTOOLS,
         VUEJS_DEVTOOLS: installer.VUEJS_DEVTOOLS,
@@ -41,9 +44,11 @@ export class ChromeDevToolsExtension implements AppModule {
         JQUERY_DEBUGGER: installer.JQUERY_DEBUGGER,
         MOBX_DEVTOOLS: installer.MOBX_DEVTOOLS,
       } as const;
-      const installExtension = installer.default as (
-        ext: unknown,
-      ) => Promise<unknown>;
+      if (typeof installExtension !== "function") {
+        throw new Error(
+          "electron-devtools-installer: installExtension not found (check ESM/CJS interop)",
+        );
+      }
       await installExtension(dict[this.#extension]);
     } catch (error) {
       // Extensions are nice-to-have in dev; log and continue instead of crashing

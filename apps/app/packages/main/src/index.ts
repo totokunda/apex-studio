@@ -18,6 +18,7 @@ import { remoteVersioningModule } from "./modules/RemoteVersioningModule.js";
 import { installerModule } from "./modules/InstallerModule.js";
 import { launcherStatusModule } from "./modules/LauncherStatusModule.js";
 import { apexApiAutoUpdater } from "./modules/ApexApiAutoUpdater.js";
+import { mediaSourcePreviewModule } from "./modules/MediaSourcePreviewModule.js";
 import { app } from "electron";
 
 export async function initApp(initConfig: AppInitConfig) {
@@ -54,15 +55,14 @@ export async function initApp(initConfig: AppInitConfig) {
     .init(remoteVersioningModule())
     // Local installer: extract server bundles + ensure ffmpeg is available
     .init(installerModule())
+    .init(mediaSourcePreviewModule())
     // Core backend IPC and persistence should be ready before any renderer windows load
-    
     .init(
       createWindowManagerModule({
         initConfig,
       }),
     )
     .init(terminateAppOnLastWindowClose())
-    
     .init(autoUpdater())
     .init(apexApiAutoUpdater())
     .init(chromeDevToolsExtension({ extension: "REACT_DEVELOPER_TOOLS" }))

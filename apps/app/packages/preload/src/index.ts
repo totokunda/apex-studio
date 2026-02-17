@@ -27,6 +27,8 @@ export {
 
 import { pathToFileURL as pathToFileURLNode, fileURLToPath as fileURLToPathNode } from "node:url";
 
+export * from "./nativeDecoder.js";
+
 export const pathToFileURL = (path: string) => {
   return pathToFileURLNode(path).href;
 };
@@ -48,6 +50,7 @@ export * from "./core/ipc.js";
 // Media library and previews
 export * from "./media/library.js";
 export * from "./media/previews.js";
+export * from "./media/mediaSourcePreview.js";
 // Explicit re-export to ensure the virtual browser shim includes this new API.
 export { exportVideoTranscodeWithFfmpeg } from "./media/previews.js";
 

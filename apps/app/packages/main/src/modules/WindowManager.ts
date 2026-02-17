@@ -134,7 +134,7 @@ class WindowManager implements AppModule {
           }
         : {}),
       webPreferences: {
-        nodeIntegration: false,
+        nodeIntegration: false, 
         contextIsolation: true,
         sandbox: false, // Sandbox disabled because the demo of preload script depend on the Node.js api
         webviewTag: false, // The webview tag is not recommended. Consider alternatives like an iframe or Electron's BrowserView. @see https://www.electronjs.org/docs/latest/api/webview-tag#warning
@@ -148,6 +148,7 @@ class WindowManager implements AppModule {
         // ignore
       }
     }
+
     this.#wireReadyToShow(browserWindow);
     await this.#loadRenderer(browserWindow, "launcher");
     if (this.#openDevTools) {
@@ -199,7 +200,7 @@ class WindowManager implements AppModule {
           }
         : { fullscreen: true }),
       webPreferences: {
-        nodeIntegration: false,
+        nodeIntegration: true,
         contextIsolation: true,
         sandbox: false,
         webviewTag: false,
@@ -213,6 +214,7 @@ class WindowManager implements AppModule {
         preload: this.#preload.path,
       },
     });
+
     this.#enableWindowsFullscreenEscapeHatch(browserWindow);
     if (process.platform === "win32") {
       try {

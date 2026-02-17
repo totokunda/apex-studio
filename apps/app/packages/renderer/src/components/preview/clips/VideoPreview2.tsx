@@ -441,6 +441,11 @@ const VideoPreview: React.FC<
     : useInputScopedControls
       ? isPlayingFromInputs
       : isPlayingFromControls;
+  const allowPlayback = offscreenFast || (!hidden && isInFrame);
+  const allowPlaybackRef = useRef(allowPlayback);
+  useEffect(() => {
+    allowPlaybackRef.current = allowPlayback;
+  }, [allowPlayback]);
   const focusFrameRef = useRef(focusFrame);
   useEffect(() => {
     focusFrameRef.current = focusFrame;
@@ -1224,7 +1229,7 @@ const VideoPreview: React.FC<
         frame: targetFrame,
         strict: opts?.strict ?? true,
       };
-      
+
       seekLockStartedAtMsRef.current =
         typeof performance !== "undefined" && performance.now
           ? performance.now()
@@ -1272,6 +1277,10 @@ const VideoPreview: React.FC<
         inVideoFrameCallbackRef.current = false;
         return;
       }
+      if (!allowPlaybackRef.current) {
+        inVideoFrameCallbackRef.current = false;
+        return;
+      }
       try {
         draw(
           {
@@ -1286,6 +1295,7 @@ const VideoPreview: React.FC<
       }
       if (
         isPlayingRef.current &&
+        allowPlaybackRef.current &&
         pendingVideoFrameCallbackRef.current === null
       ) {
         pendingVideoFrameCallbackRef.current =
@@ -1485,7 +1495,7 @@ const VideoPreview: React.FC<
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (isPlaying) {
+    if (isPlaying && allowPlayback) {
       const targetInfo = getTargetFrameInfoRef.current();
       if (targetInfo && video.readyState >= 2) {
         const didSeek = seekVideoToTargetFrame(video, targetInfo, {
@@ -1514,6 +1524,7 @@ const VideoPreview: React.FC<
     }
   }, [
     isPlaying,
+    allowPlayback,
     onVideoFrameCallback,
     clearPendingVideoFrameCallback,
     seekVideoToTargetFrame,

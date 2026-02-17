@@ -1,5 +1,5 @@
 import type { AppModule } from "../AppModule.js";
-import { app, ipcMain } from "electron";
+import { ipcMain } from "electron";
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
@@ -11,7 +11,6 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdDecompress } from "node:zlib";
 import * as tar from "tar-stream";
-import net from "node:net";
 import { pythonProcess } from "./PythonProcess.js";
 
 type ConfigResponse<T> = { success: true; data: T } | { success: false; error: string };
