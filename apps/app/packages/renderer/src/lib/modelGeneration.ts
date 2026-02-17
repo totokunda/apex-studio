@@ -1048,7 +1048,6 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     const activeProject = useProjectsStore.getState().getActiveProject();
     const folderUuid = activeProject?.folderUuid;
-
     const res = await runEngine({
       manifest_id: manifestId,
       inputs: engineInputs,
