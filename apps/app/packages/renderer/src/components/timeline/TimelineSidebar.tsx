@@ -151,8 +151,8 @@ const TimelineSidebarItem: React.FC<
 const TimelineSidebar: React.FC<TimelineSidebarProps> = ({ clampedScroll }) => {
   const collapsedWidth = 40; // ~ w-14
   const expandedWidth = 84; // ~ w-24
-  const [width, setWidth] = useState<number>(collapsedWidth);
-  const [isOpen, setIsOpen] = useState<boolean>(false);
+  const [width, setWidth] = useState<number>(expandedWidth);
+  const [isOpen, setIsOpen] = useState<boolean>(true);
   const startXRef = useRef<number>(0);
   const isDraggingRef = useRef<boolean>(false);
   const { timelines } = useClipStore();

@@ -2278,7 +2278,7 @@ const TimelineClip: React.FC<
                 y={timelineHeight / 2}
                 text="Drawing"
                 fontSize={9.5}
-                fontFamily=""
+                fontFamily="Inter"
                 fontStyle="500"
                 fill="white"
                 align="left"

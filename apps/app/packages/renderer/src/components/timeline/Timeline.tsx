@@ -159,6 +159,8 @@ const Timeline: React.FC<
         width={timelineWidth! - timelineX + 8}
         height={renderedTimelineHeight}
         fill={"rgba(11, 11, 13, 0.25)"}
+        stroke={"rgba(255, 255, 255, 0.12)"}
+        strokeWidth={0.5}
         onContextMenu={(e) => {
           e.evt.preventDefault();
           const stage = e.target.getStage();
