@@ -111,7 +111,7 @@ const AddModelPathForm: React.FC<AddModelPathFormProps> = ({
     !isValidatingModelPath && isDuplicateVariantName;
 
   return (
-    <div className="mt-2.5 w-full bg-brand-background border border-brand-light/15 rounded-md px-3 py-3.5 space-y-2.5">
+    <div className="mt-2.5 w-full bg-brand-background border border-brand-light/10 rounded-md px-3.5 py-3.5 space-y-2.5">
       <div className="flex flex-col gap-y-1.5">
         <label className="text-[10px] text-brand-light/90 font-medium">
           Model Name

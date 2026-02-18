@@ -1211,8 +1211,8 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
           onClick={() => setActiveTab("downloads")}
           className={`flex-1 text-[11px] font-medium px-2 py-1.5 rounded-l-[6px] transition-colors ${
             activeTab === "downloads"
-              ? "bg-brand-accent-shade text-brand-light"
-              : "bg-brand-background-light text-brand-light/70 hover:text-brand-light"
+              ? "bg-brand-background-light text-brand-light"
+              : "bg-brand text-brand-light/60 hover:text-brand-light/70 opacity-80 hover:opacity-100"
           }`}
         >
           Downloads
@@ -1222,8 +1222,8 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
           onClick={() => setActiveTab("verified")}
           className={`flex-1 text-[11px] font-medium px-2 py-1.5 rounded-r-[6px] transition-colors ${
             activeTab === "verified"
-              ? "bg-brand-accent-shade text-brand-light"
-              : "bg-brand-background-light text-brand-light/70 hover:text-brand-light"
+              ? "bg-brand-background-light text-brand-light"
+              : "bg-brand text-brand-light/60 hover:text-brand-light/70 opacity-80 hover:opacity-100"
           }`}
         >
           Verified
@@ -1242,7 +1242,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
               <span>Add LoRA</span>
             </button>
           ) : (
-            <div className="w-full bg-brand border border-brand-light/15 rounded-md px-3.5 py-3.5 space-y-2.5 backdrop-blur-md">
+            <div className="w-full bg-brand border border-brand-light/5 rounded-md px-3.5 py-3.5 space-y-2.5 backdrop-blur-md">
               <div className="flex flex-col gap-y-0.5 text-start">
                 <label className="text-[11px] text-brand-light/90 font-medium">
                   Name
@@ -1298,7 +1298,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
                     >
                       <SelectValue placeholder="Select transformer" />
                     </SelectTrigger>
-                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                    <SelectContent className="bg-brand-background text-brand-light font-inter z-101 dark">
                       {transformerComponents.map((entry) => {
                         const key = getTransformerComponentKey(entry);
                         const compAny = entry.comp as any;
@@ -1353,14 +1353,14 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
                       !newLoraComponent.trim()) ||
                     isStartingDownload
                   }
-                  className="text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90  bg-brand-accent-shade hover:bg-brand-accent-two-shade border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
+                  className="text-[10.5px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90  bg-brand-light/18 hover:bg-brand-light/20 border border-brand-light/5 rounded-[4px] px-2.5 py-1 transition-all"
                 >
                   {isStartingDownload ? (
                     <LuLoader className="w-3.5 h-3.5 animate-spin" />
                   ) : (
                     <LuPlus className="w-3.5 h-3.5" />
                   )}
-                  <span>{isStartingDownload ? "Adding..." : "Add LoRA"}</span>
+                  <span>{isStartingDownload ? "Adding..." : "Add"}</span>
                 </button>
               </div>
             </div>
@@ -1388,7 +1388,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
               });
             if (!entries.length && !isAddingLora) {
               return (
-                <div className="text-brand-light/90 text-[12px] font-medium flex flex-col justify-center items-center gap-y-2 p-4 w-full h-28 border border-brand-light/10 rounded-md bg-brand">
+                <div className="text-brand-light/90 text-[12px] font-medium flex flex-col justify-center items-center gap-y-2 p-4 w-full h-28  rounded-md bg-brand">
                   <PiCubeDuotone className="w-6 h-6 text-brand-light/90" />
                   <span>No pending downloads.</span>
                 </div>
@@ -1415,7 +1415,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
       {activeTab === "verified" && (
         <>
           {!hasInstalledLoras && (
-            <div className="text-brand-light/90 text-[12px] font-medium flex flex-col justify-center items-center gap-y-2 p-4 w-full h-28 border border-brand-light/10 rounded-md bg-brand">
+            <div className="text-brand-light/90 text-[12px] font-medium flex flex-col justify-center items-center gap-y-2 p-4 w-full h-28  rounded-md bg-brand">
               <PiCubeDuotone className="w-6 h-6 text-brand-light/90" />
               <span>No LoRAs added.</span>
             </div>

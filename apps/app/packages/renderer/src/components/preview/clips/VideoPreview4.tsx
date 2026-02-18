@@ -158,6 +158,12 @@ const VideoPreview: React.FC<
     s.getClipById(clipId),
   ) as VideoClipProps;
   const clip = (overrideClip as VideoClipProps) || clipFromStore;
+  const effectiveStartFrame = Number.isFinite((clip as any)?.startFrame)
+    ? Number((clip as any).startFrame)
+    : Number(startFrame || 0);
+  const effectiveTrimStart = Number.isFinite((clip as any)?.trimStart)
+    ? Number((clip as any).trimStart)
+    : Number(trimStart || 0);
   // In input mode, when a clip is part of a group, offset by the group's start so playback is contiguous
   const groupStartForClip = useMemo(() => {
     const grpId = (clip as any)?.groupId as string | undefined;
@@ -170,7 +176,7 @@ const VideoPreview: React.FC<
     }
   }, [clip]);
   const startFrameUsed = useMemo(() => {
-    if (!inputMode) return startFrame;
+    if (!inputMode) return effectiveStartFrame;
     const s = (clip as any)?.startFrame as number | undefined;
     const hasGroup = Boolean((clip as any)?.groupId);
     if (hasGroup && typeof s === "number") {
@@ -178,7 +184,7 @@ const VideoPreview: React.FC<
       return Math.max(0, rel);
     }
     return 0;
-  }, [inputMode, startFrame, clip, groupStartForClip]);
+  }, [inputMode, effectiveStartFrame, clip, groupStartForClip]);
 
   // Mirror `startFrameUsed` semantics for end-frame checks (important in input mode where we
   // normalize non-grouped clips to a 0-based local window).
@@ -227,8 +233,8 @@ const VideoPreview: React.FC<
 
 
   const currentFrame = useMemo(
-    () => focusFrame - startFrameUsed + (trimStart || 0),
-    [focusFrame, startFrameUsed, trimStart],
+    () => focusFrame - startFrameUsed + effectiveTrimStart,
+    [focusFrame, startFrameUsed, effectiveTrimStart],
   );
   const speed = useMemo(() => {
     const s = Number(_speed ?? 1);
@@ -297,7 +303,7 @@ const VideoPreview: React.FC<
 
     // go through the preprocessors and find the one that is within the focus frame
     // adjust preprocessor ranges by trimStart to match currentFrame's reference frame
-    const cliptrimStart = trimStart || 0;
+    const cliptrimStart = effectiveTrimStart;
     for (const preprocessor of clip.preprocessors) {
       if (
         preprocessor.startFrame !== undefined &&
@@ -336,7 +342,7 @@ const VideoPreview: React.FC<
     cachedPreprocessorRangeRef.current = null;
     addedTimestampRef.current = 0;
     return { selectedAssetId: assetId, frameOffset: 0 };
-  }, [clip?.preprocessors, assetId, currentFrame, trimStart, srcFps]);
+  }, [clip?.preprocessors, assetId, currentFrame, effectiveTrimStart, srcFps]);
 
   // NativeDecoder: worker-backed native decoder for seeking and playback
   const assetForDecoder = getAssetById(selectedAssetId);
@@ -403,14 +409,14 @@ const VideoPreview: React.FC<
     const speedFactor = Math.max(0.1, speed);
     if (clip) {
       if (inputMode) {
-        const local = Math.max(0, focusFrame + (trimStart || 0));
+        const local = Math.max(0, focusFrame + effectiveTrimStart);
         return Math.max(0, Math.floor(local * speedFactor));
       }
       const isUsingPreprocessorSrc = selectedAssetId !== assetId;
       const baseLocal = Math.max(0, focusFrame - startFrameUsed);
       const derivedLocal = isUsingPreprocessorSrc
         ? Math.max(0, baseLocal - Math.max(0, frameOffset))
-        : Math.max(0, baseLocal + (trimStart || 0));
+        : Math.max(0, baseLocal + effectiveTrimStart);
       return Math.max(0, Math.floor(derivedLocal * speedFactor));
     }
     return Math.max(0, Math.floor(Math.max(0, currentFrame) * speedFactor));
@@ -419,7 +425,7 @@ const VideoPreview: React.FC<
     focusFrame,
     currentFrame,
     inputMode,
-    trimStart,
+    effectiveTrimStart,
     speed,
     selectedAssetId,
     assetId,
@@ -771,9 +777,9 @@ const VideoPreview: React.FC<
     if (!Number.isFinite(projectFps) || projectFps <= 0) return null;
 
     const isUsingPreprocessorSrc = selectedAssetId !== assetId;
-    const currentFrameForSeek = focusFrame - startFrameUsed + (trimStart || 0);
+    const currentFrameForSeek = focusFrame - startFrameUsed + effectiveTrimStart;
     const adjustedCurrentFrame = isUsingPreprocessorSrc
-      ? currentFrameForSeek - (trimStart || 0)
+      ? currentFrameForSeek - effectiveTrimStart
       : currentFrameForSeek;
     const idealFrame =
       Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
@@ -794,7 +800,7 @@ const VideoPreview: React.FC<
     assetId,
     focusFrame,
     startFrameUsed,
-    trimStart,
+    effectiveTrimStart,
     frameOffset,
     speed,
   ]);
@@ -903,10 +909,10 @@ const VideoPreview: React.FC<
   const debouncedSeekRef = useRef<ReturnType<typeof _.debounce> | null>(null);
   useEffect(() => {
     debouncedSeekRef.current = _.debounce(
-      async (_logicalId: string, timestamp: number) => {
+      async (_logicalId: string, timestamp: number, keyframeOnly: boolean) => {
         if (isPlayingRef.current) return;
         if (!nativeDecoder) return;
-        const result = await nativeDecoder.decodeFrame(timestamp, false);
+        const result = await nativeDecoder.decodeFrame(timestamp, keyframeOnly);
         if (result) {
           const canvas = nativeDecoder.renderFrame(result.view);
           if (canvas)
@@ -938,7 +944,11 @@ const VideoPreview: React.FC<
 
     const info = getTargetFrameInfo();
 
-    if (Math.abs(lastSeekFrameRef.current - (info?.targetFrame ?? 0)) > 8) {
+    const isFastScrubMode = !isAccurateSeekNeeded && !isAccurateSeekNeededInput;
+    if (
+      !isFastScrubMode &&
+      Math.abs(lastSeekFrameRef.current - (info?.targetFrame ?? 0)) > 8
+    ) {
       isAccurateSeekNeededInput = true;
     }
 
@@ -999,11 +1009,10 @@ const VideoPreview: React.FC<
               { canvas, timestamp: result.timestamp, duration: 0 },
               decoderMaskFrameRef.current
             );
-        } else {
-          void renderPosterFallback({ force: true });
         }
       } else {
-        debouncedSeekRef.current?.(logicalId, timestamp);
+        // During active scrub, keyframe-only seeks keep the UI responsive.
+        debouncedSeekRef.current?.(logicalId, timestamp, true);
       }
     } catch (e) {
       console.warn("[video] seek failed", e);
@@ -1077,7 +1086,7 @@ const VideoPreview: React.FC<
 
     const { startTime, endTime, startIdx } = calculateIterateRange(
       currentFrame,
-      trimStart,
+      effectiveTrimStart,
       frameOffset,
       speed,
       clipFps,
@@ -1086,6 +1095,7 @@ const VideoPreview: React.FC<
       selectedAssetId,
       assetId
     );
+
 
     currentStartFrameRef.current = startIdx;
     const lastFrame = lastRenderedFrameRef.current;
@@ -1127,7 +1137,7 @@ const VideoPreview: React.FC<
         const isUsingPreprocessorSrc = selectedAssetId !== assetId;
         const derivedLocal = isUsingPreprocessorSrc
           ? Math.max(0, baseLocal - Math.max(0, frameOffset))
-          : Math.max(0, baseLocal + (trimStart || 0));
+          : Math.max(0, baseLocal + effectiveTrimStart);
         const localProjectFrames =
           typeof currentLocalFrameOverride === "number"
             ? Math.max(0, currentLocalFrameOverride)
@@ -1225,7 +1235,7 @@ const VideoPreview: React.FC<
     speed,
     startFrameUsed,
     frameOffset,
-    trimStart,
+    effectiveTrimStart,
     clip,
     isPlaying,
     inputMode,

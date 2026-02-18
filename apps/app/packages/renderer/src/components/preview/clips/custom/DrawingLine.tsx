@@ -15,6 +15,7 @@ import { useControlsStore } from "@/lib/control";
 import { useClipStore } from "@/lib/clip";
 import ApplicatorFilter from "../custom/ApplicatorFilter";
 import { BaseClipApplicator } from "../apply/base";
+import { SELECTION_STROKE_COLOR } from "@/lib/selectionStroke";
 
 //@ts-ignore
 Konva.Filters.Applicator = ApplicatorFilter;
@@ -610,7 +611,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         />
         <Rect
           ref={rectRef}
-          stroke={"#AE81CE"}
+          stroke={SELECTION_STROKE_COLOR}
           strokeWidth={0}
           x={bbox.x}
           y={bbox.y}
@@ -644,7 +645,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.vCenter && (
           <Line
             points={[rectWidth / 2, 0, rectWidth / 2, rectHeight]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -653,7 +654,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.hCenter && (
           <Line
             points={[0, rectHeight / 2, rectWidth, rectHeight / 2]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -662,7 +663,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.v25 && (
           <Line
             points={[rectWidth * 0.25, 0, rectWidth * 0.25, rectHeight]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -671,7 +672,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.v75 && (
           <Line
             points={[rectWidth * 0.75, 0, rectWidth * 0.75, rectHeight]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -680,7 +681,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.h25 && (
           <Line
             points={[0, rectHeight * 0.25, rectWidth, rectHeight * 0.25]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -689,7 +690,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.h75 && (
           <Line
             points={[0, rectHeight * 0.75, rectWidth, rectHeight * 0.75]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -698,7 +699,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.left && (
           <Line
             points={[0, 0, 0, rectHeight]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -707,7 +708,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.right && (
           <Line
             points={[rectWidth, 0, rectWidth, rectHeight]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -716,7 +717,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.top && (
           <Line
             points={[0, 0, rectWidth, 0]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -725,7 +726,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         {guides.bottom && (
           <Line
             points={[0, rectHeight, rectWidth, rectHeight]}
-            stroke="#AE81CE"
+            stroke={SELECTION_STROKE_COLOR}
             strokeWidth={1}
             dash={[6, 4]}
             listening={false}
@@ -733,7 +734,7 @@ const DrawingLineComponent: React.FC<DrawingLineProps> = ({
         )}
       </Group>
       <Transformer
-        borderStroke="#AE81CE"
+        borderStroke={SELECTION_STROKE_COLOR}
         anchorCornerRadius={8}
         anchorStroke="#E3E3E3"
         anchorStrokeWidth={1}

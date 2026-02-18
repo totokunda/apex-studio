@@ -108,7 +108,7 @@ const OffloadLevelDropdown: React.FC<{
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="p-0 bg-brand-background border-brand-light/10 font-poppins"
+          className="p-0 bg-brand-background border-brand-light/10 font-inter"
           style={{ width: triggerRef.current?.offsetWidth || 320 }}
         >
           <Command className="bg-brand-background">
@@ -212,7 +212,7 @@ const InfoTip: React.FC<{ text: string; disabled?: boolean }> = ({
       </TooltipTrigger>
       <TooltipContent
         sideOffset={6}
-        className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+        className="max-w-xs whitespace-pre-wrap text-[10px] font-inter bg-brand-background border border-brand-light/10"
       >
         {text}
       </TooltipContent>

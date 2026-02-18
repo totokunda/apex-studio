@@ -1113,7 +1113,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                   <LuChevronDown className="w-3 h-3 text-brand-light" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-(--radix-dropdown-menu-trigger-width) dark font-poppins bg-brand-background">
+              <DropdownMenuContent className="w-(--radix-dropdown-menu-trigger-width) dark font-inter bg-brand-background">
                 <DropdownMenuRadioGroup
                   value={mask.trackingDirection ?? "both"}
                   onValueChange={(value: string) =>

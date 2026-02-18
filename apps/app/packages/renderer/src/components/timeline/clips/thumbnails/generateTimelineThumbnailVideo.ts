@@ -6,7 +6,81 @@ import { useControlsStore } from "@/lib/control";
 import { MediaInfo, VideoClipProps } from "@/lib/types";
 import { getClipWidth } from "@/lib/clip";
 import { useClipStore } from "@/lib/clip";
+import {
+  readTimelineThumbnailDiskCache,
+  stableSerializeCacheKey,
+  writeTimelineThumbnailDiskCacheInBackground,
+} from "./timelineThumbnailDiskCache";
+
 const THUMBNAIL_TILE_SIZE = 36;
+const MAX_FALLBACK_CANVASES = 512;
+const videoThumbnailFallbackByClipId = new Map<string, HTMLCanvasElement>();
+
+const cloneCanvas = (source: HTMLCanvasElement): HTMLCanvasElement | null => {
+  const width = Math.max(1, Math.floor(source.width || 0));
+  const height = Math.max(1, Math.floor(source.height || 0));
+  if (width <= 0 || height <= 0) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(source, 0, 0, width, height);
+  return canvas;
+};
+
+const drawFittedCanvas = (
+  ctx: CanvasRenderingContext2D,
+  source: HTMLCanvasElement,
+  targetW: number,
+  targetH: number,
+) => {
+  ctx.drawImage(source, 0, 0, Math.max(1, targetW), Math.max(1, targetH));
+};
+
+const rememberVideoFallback = (clipId: string, source: HTMLCanvasElement) => {
+  const snapshot = cloneCanvas(source);
+  if (!snapshot) return;
+  videoThumbnailFallbackByClipId.set(clipId, snapshot);
+  if (videoThumbnailFallbackByClipId.size > MAX_FALLBACK_CANVASES) {
+    const oldest = videoThumbnailFallbackByClipId.keys().next().value;
+    if (oldest) videoThumbnailFallbackByClipId.delete(oldest);
+  }
+};
+
+const getVideoFilterState = (clip: VideoClipProps) => ({
+  brightness: clip?.brightness,
+  contrast: clip?.contrast,
+  hue: clip?.hue,
+  saturation: clip?.saturation,
+  blur: clip?.blur,
+  sharpness: clip?.sharpness,
+  noise: clip?.noise,
+  vignette: clip?.vignette,
+  colorTintColor: clip?.colorTintColor,
+  colorTintIntensity: clip?.colorTintIntensity,
+  scanLines: clip?.scanLines,
+  chromaticAberration: clip?.chromaticAberration,
+  interlace: clip?.interlace,
+  pixelate: clip?.pixelate,
+  jitter: clip?.jitter,
+});
+
+const getMaskSignature = (clip: VideoClipProps) =>
+  (clip?.masks ?? []).map((mask) => ({
+    id: mask.id,
+    tool: mask.tool,
+    createdAt: mask.createdAt,
+    lastModified: mask.lastModified,
+    isTracked: mask.isTracked,
+    trackingDirection: mask.trackingDirection,
+    inverted: mask.inverted,
+    transform: mask.transform,
+    keyframeCount:
+      mask.keyframes instanceof Map
+        ? mask.keyframes.size
+        : Object.keys(mask.keyframes ?? {}).length,
+  }));
 
 export const generateTimelineThumbnailVideo = async (
   clipType: string,
@@ -180,6 +254,113 @@ export const generateTimelineThumbnailVideo = async (
   const getAssetById = useClipStore.getState().getAssetById;
   const asset = getAssetById(currentClip.assetId);
   if (!asset) return;
+  const ctx = imageCanvas.getContext("2d");
+  if (!ctx) return;
+  const fallbackCanvas =
+    videoThumbnailFallbackByClipId.get(currentClipId) ?? cloneCanvas(imageCanvas);
+  if (fallbackCanvas) {
+    ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+    drawFittedCanvas(
+      ctx,
+      fallbackCanvas,
+      Math.max(1, imageCanvas.width),
+      Math.max(1, imageCanvas.height),
+    );
+    groupRef.current?.getLayer()?.batchDraw();
+  }
+
+  const filters = getVideoFilterState(currentClip);
+  const maskSignature = getMaskSignature(currentClip);
+  const clipVisualSignature = stableSerializeCacheKey({
+    filters,
+    masks: maskSignature,
+    transform: currentClip?.transform,
+    originalTransform: currentClip?.originalTransform,
+    resizeSide,
+  });
+  const diskCacheKey = stableSerializeCacheKey({
+    kind: "timeline-video-thumbnail",
+    v: 1,
+    assetPath: asset.path,
+    timeline: {
+      timelineDuration,
+      timelineHeight,
+      timelineWidth,
+      thumbnailClipWidth,
+      maxTimelineWidth,
+      overHang,
+      currentStartFrame,
+      currentEndFrame,
+      timelineStartFrame,
+      timelineEndFrame,
+      timelineShift,
+      noShift,
+      tClipWidth,
+      resizeSide,
+    },
+    frameMap: {
+      projectFps,
+      clipFps,
+      speed,
+      fpsAdjustment,
+      frameIndices,
+      numColumns,
+      numColumnsAlt,
+    },
+    clip: {
+      trimStart: currentClip.trimStart ?? 0,
+      trimEnd: currentClip.trimEnd ?? 0,
+      visual: clipVisualSignature,
+    },
+    canvas: {
+      width: imageCanvas.width,
+      height: imageCanvas.height,
+    },
+  });
+  const sourceSignature = stableSerializeCacheKey({
+    assetPath: asset.path,
+    media: {
+      duration: mediaInfoRef?.duration,
+      startFrame: mediaInfoRef?.startFrame,
+      endFrame: mediaInfoRef?.endFrame,
+      displayWidth: mediaInfoRef?.video?.displayWidth,
+      displayHeight: mediaInfoRef?.video?.displayHeight,
+      videoPacketCount: mediaInfoRef?.stats.video?.packetCount,
+      audioPacketCount: mediaInfoRef?.stats.audio?.packetCount,
+    },
+  });
+  const requestKey = `${currentClipId}|${diskCacheKey}|${sourceSignature}`;
+
+  // Any new render intent must invalidate older in-flight streams immediately.
+  // This prevents stale lower-zoom/higher-zoom passes from presenting after the
+  // user rapidly changes zoom level.
+  const requestSeq = ++exactVideoUpdateSeqRef.current;
+
+  // Cancel any pending exact update from a previous request.
+  if (exactVideoUpdateTimerRef.current != null) {
+    window.clearTimeout(exactVideoUpdateTimerRef.current);
+    exactVideoUpdateTimerRef.current = null;
+  }
+
+  const diskCached = await readTimelineThumbnailDiskCache({
+    kind: "video",
+    key: diskCacheKey,
+    sourceSignature,
+  });
+  if (diskCached) {
+    ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+    drawFittedCanvas(
+      ctx,
+      diskCached,
+      Math.max(1, imageCanvas.width),
+      Math.max(1, imageCanvas.height),
+    );
+    lastExactRequestKeyRef.current = requestKey;
+    rememberVideoFallback(currentClipId, imageCanvas);
+    groupRef.current?.getLayer()?.batchDraw();
+    return;
+  }
+
   const nearest = getNearestCachedCanvasSamples(
     asset.path,
     frameIndices,
@@ -192,8 +373,7 @@ export const generateTimelineThumbnailVideo = async (
   const hasCachedSamples = nearest.some(
     (sample) => sample !== null && sample !== undefined,
   );
-  const ctx = imageCanvas.getContext("2d");
-  if (ctx) {
+  {
     let x = overHang;
     const targetWidth = Math.max(1, imageCanvas.width);
     const targetHeight = Math.max(1, imageCanvas.height);
@@ -203,8 +383,12 @@ export const generateTimelineThumbnailVideo = async (
     // Always paint a background so we never show transparent/white gaps.
     // We intentionally "overfill" the entire canvas; the Konva clip will cut it.
     ctx.clearRect(0, 0, targetWidth, targetHeight);
-    ctx.fillStyle = "#0B0B0D";
-    ctx.fillRect(0, 0, targetWidth, targetHeight);
+    if (fallbackCanvas) {
+      drawFittedCanvas(ctx, fallbackCanvas, targetWidth, targetHeight);
+    } else {
+      ctx.fillStyle = "#0B0B0D";
+      ctx.fillRect(0, 0, targetWidth, targetHeight);
+    }
 
     // When resizing from the left for video, truncate from the left by
     // skipping the overflow width from the left side of the tile sequence.
@@ -324,34 +508,18 @@ export const generateTimelineThumbnailVideo = async (
     }
 
     // Apply WebGL filters to video thumbnails
-    const vidClip = currentClip as VideoClipProps;
-    applyFilters(imageCanvas, {
-      brightness: vidClip?.brightness,
-      contrast: vidClip?.contrast,
-      hue: vidClip?.hue,
-      saturation: vidClip?.saturation,
-      blur: vidClip?.blur,
-      sharpness: vidClip?.sharpness,
-      noise: vidClip?.noise,
-      vignette: vidClip?.vignette,
-      colorTintColor: vidClip?.colorTintColor,
-      colorTintIntensity: vidClip?.colorTintIntensity,
-      scanLines: vidClip?.scanLines,
-      chromaticAberration: vidClip?.chromaticAberration,
-      interlace: vidClip?.interlace,
-      pixelate: vidClip?.pixelate,
-      jitter: vidClip?.jitter,
-    });
+    applyFilters(imageCanvas, filters);
+    if (lastCanvasToTile || hasCachedSamples || fallbackCanvas) {
+      rememberVideoFallback(currentClipId, imageCanvas);
+    }
 
     // 2) Debounced fetch of exact frames and redraw when available
-    if (exactVideoUpdateTimerRef.current != null) {
-      window.clearTimeout(exactVideoUpdateTimerRef.current);
-      exactVideoUpdateTimerRef.current = null;
-    }
     const DEBOUNCE_MS = hasCachedSamples ? 100 : 0;
-    const requestKey = `${currentClipId}|${timelineStartFrame}-${timelineEndFrame}|${thumbnailWidth}x${timelineHeight}|${overHang}|${frameIndices.join(",")}`;
     exactVideoUpdateTimerRef.current = window.setTimeout(async () => {
-      const mySeq = ++exactVideoUpdateSeqRef.current;
+      const mySeq = requestSeq;
+      if (mySeq !== exactVideoUpdateSeqRef.current) {
+        return;
+      }
       try {
         if (lastExactRequestKeyRef.current === requestKey) {
           return;
@@ -380,25 +548,6 @@ export const generateTimelineThumbnailVideo = async (
 
         const targetWidth2 = Math.max(1, imageCanvas.width);
         const targetHeight2 = Math.max(1, imageCanvas.height);
-
-        const vidClip = currentClip as VideoClipProps;
-        const filters = {
-          brightness: vidClip?.brightness,
-          contrast: vidClip?.contrast,
-          hue: vidClip?.hue,
-          saturation: vidClip?.saturation,
-          blur: vidClip?.blur,
-          sharpness: vidClip?.sharpness,
-          noise: vidClip?.noise,
-          vignette: vidClip?.vignette,
-          colorTintColor: vidClip?.colorTintColor,
-          colorTintIntensity: vidClip?.colorTintIntensity,
-          scanLines: vidClip?.scanLines,
-          chromaticAberration: vidClip?.chromaticAberration,
-          interlace: vidClip?.interlace,
-          pixelate: vidClip?.pixelate,
-          jitter: vidClip?.jitter,
-        };
 
         const present = () => {
           if (mySeq !== exactVideoUpdateSeqRef.current) return;
@@ -607,6 +756,14 @@ export const generateTimelineThumbnailVideo = async (
           groupRef.current?.getLayer()?.batchDraw();
 
           lastExactRequestKeyRef.current = requestKey;
+
+          writeTimelineThumbnailDiskCacheInBackground({
+            kind: "video",
+            key: diskCacheKey,
+            sourceSignature,
+            canvas: imageCanvas,
+          });
+          rememberVideoFallback(currentClipId, imageCanvas);
 
           // Force rerender if there were no cached samples initially
           if (!hasCachedSamples) {

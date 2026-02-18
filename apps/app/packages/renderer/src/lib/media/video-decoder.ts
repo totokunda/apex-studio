@@ -689,7 +689,6 @@ export class VideoDecoderManager {
             config.userDataPath = cachedUserDataPath;
         }
 
-        console.log("config", config);
 
         this.worker.postMessage({
             type: "configure",

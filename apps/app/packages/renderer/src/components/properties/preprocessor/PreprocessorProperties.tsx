@@ -187,7 +187,7 @@ const PreprocessorProperties: React.FC<PreprocessorPropertiesProps> = ({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
                   align="end"
-                  className="bg-brand-background/95 backdrop-blur-sm text-brand-light border border-brand-light/10 font-poppins dark"
+                  className="bg-brand-background/95 backdrop-blur-sm text-brand-light border border-brand-light/10 font-inter dark"
                 >
                   <DropdownMenuRadioGroup
                     value={selectedCategory}

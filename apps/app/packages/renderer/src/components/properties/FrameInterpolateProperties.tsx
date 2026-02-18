@@ -257,7 +257,7 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
               align="center"
               side="bottom"
               hideArrow
-              className="max-w-xs font-medium backdrop-blur-sm text-[10.5px] rounded-[6px] font-poppins bg-brand/70 border border-brand-light/10"
+              className="max-w-xs font-medium backdrop-blur-sm text-[10.5px] rounded-[6px] font-inter bg-brand/70 border border-brand-light/10"
             >
               Frame interpolation generates intermediate frames to increase FPS
               for smooth motion. Audio is not changed.
@@ -297,7 +297,7 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
                     >
                       <SelectValue placeholder="2x" />
                     </SelectTrigger>
-                    <SelectContent className="dark font-poppins">
+                    <SelectContent className="dark font-inter">
                       {Array.from({ length: 15 }, (_, i) => i + 2).map((m) => (
                         <SelectItem
                           className="text-[11px]"
@@ -336,7 +336,7 @@ const FrameInterpolateProperties: React.FC<FrameInterpolatePropertiesProps> = ({
                   align="center"
                   side="bottom"
                   hideArrow
-                  className="max-w-xs font-medium backdrop-blur-sm text-[10.5px] rounded-[6px] font-poppins bg-brand/70 border border-brand-light/10"
+                  className="max-w-xs font-medium backdrop-blur-sm text-[10.5px] rounded-[6px] font-inter bg-brand/70 border border-brand-light/10"
                 >
                   Sets resolution scaling. Lower values downscale and are
                   recommended for higher-resolution sources to save VRAM; higher

@@ -16,7 +16,7 @@ import { BaseClipApplicator } from "./apply/base";
 import ApplicatorFilter from "./custom/ApplicatorFilter";
 import { useInputControlsStore } from "@/lib/inputControl";
 import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
-// (duplicate removed)
+import { SELECTION_STROKE_COLOR } from "@/lib/selectionStroke";
 
 //@ts-ignore
 Konva.Filters.Applicator = ApplicatorFilter;
@@ -2320,7 +2320,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[rectWidth / 2, 0, rectWidth / 2, rectHeight]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2329,7 +2329,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[rectWidth * 0.25, 0, rectWidth * 0.25, rectHeight]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2338,7 +2338,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[rectWidth * 0.75, 0, rectWidth * 0.75, rectHeight]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2347,7 +2347,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[0, rectHeight / 2, rectWidth, rectHeight / 2]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2356,7 +2356,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[0, rectHeight * 0.25, rectWidth, rectHeight * 0.25]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2365,7 +2365,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[0, rectHeight * 0.75, rectWidth, rectHeight * 0.75]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2374,7 +2374,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[0, 0, 0, rectHeight]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2383,7 +2383,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[rectWidth, 0, rectWidth, rectHeight]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2392,7 +2392,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[0, 0, rectWidth, 0]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2401,7 +2401,7 @@ const TextPreview: React.FC<
                 <Line
                   listening={false}
                   points={[0, rectHeight, rectWidth, rectHeight]}
-                  stroke={"#AE81CE"}
+                  stroke={SELECTION_STROKE_COLOR}
                   strokeWidth={1}
                   dash={[6, 4]}
                 />
@@ -2493,7 +2493,7 @@ const TextPreview: React.FC<
       )}
 
       <Transformer
-        borderStroke="#AE81CE"
+        borderStroke={SELECTION_STROKE_COLOR}
         anchorCornerRadius={8}
         anchorStroke="#E3E3E3"
         anchorStrokeWidth={1}

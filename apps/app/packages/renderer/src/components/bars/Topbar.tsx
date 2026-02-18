@@ -501,7 +501,7 @@ const TopBar: React.FC<TopBarProps> = () => {
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
-            className="dark w-60 font-poppins bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] p-0 gap-0"
+            className="dark w-60 font-inter bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] p-0 gap-0"
           >
             
             <div className=" relative">
@@ -647,7 +647,7 @@ const TopBar: React.FC<TopBarProps> = () => {
         <SystemMemoryMenu />
         <JobsMenu />
       <DropdownMenu open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
-        <DropdownMenuTrigger className="text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
+        <DropdownMenuTrigger className="text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium  hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
           <span className="text-[11px] inline-flex items-center space-x-1 w-full">
             <span className="text-brand-light/50 font-light">⌘</span>{" "}
             <span>Shortcuts</span>
@@ -660,7 +660,7 @@ const TopBar: React.FC<TopBarProps> = () => {
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
-          className="dark w-[400px] font-poppins p-0 overflow-hidden bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] z-[100]"
+          className="dark w-[400px] font-inter p-0 overflow-hidden bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] z-[100]"
         >
           <div className="border-b border-brand-light/10 px-3 py-2">
             <span className="text-[11px] uppercase tracking-wide text-brand-light/70">
@@ -729,7 +729,7 @@ const TopBar: React.FC<TopBarProps> = () => {
         </DropdownMenuContent>
       </DropdownMenu>
       <DropdownMenu open={sizeOpen} onOpenChange={setSizeOpen}>
-        <DropdownMenuTrigger className="text-brand-light/90 dark w-24 h-[34px] flex items-center space-x-1  px-2 relative font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
+        <DropdownMenuTrigger className="text-brand-light/90 dark w-24 h-[34px] flex items-center space-x-1  px-2 relative font-medium hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
           <PiResize className="w-4 h-4" /> <span className="text-xs">Size</span>
           <div className="absolute right-2">
             {sizeOpen ? (
@@ -741,7 +741,7 @@ const TopBar: React.FC<TopBarProps> = () => {
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
-          className="dark w-48 flex flex-col bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] font-poppins"
+          className="dark w-48 flex flex-col bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] font-inter"
         >
           {[
             { id: "16:9", name: "Wide", w: 16, h: 9 },
@@ -830,7 +830,7 @@ const TopBar: React.FC<TopBarProps> = () => {
         </DropdownMenuContent>
       </DropdownMenu>
       <DropdownMenu open={layoutOpen} onOpenChange={setLayoutOpen}>
-        <DropdownMenuTrigger className="text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand/90 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
+        <DropdownMenuTrigger className="text-brand-light/90 dark w-32 h-[34px] relative flex items-center space-x-2 px-2 font-medium  hover:text-brand-light bg-brand hover:bg-brand/90 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
           <LayoutIcon type={layout as any} />
           <span className="text-[11px]">{layoutLabel}</span>
           <div className="absolute right-2">
@@ -843,7 +843,7 @@ const TopBar: React.FC<TopBarProps> = () => {
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
-          className="dark w-48 font-poppins bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px]"
+          className="dark w-48 font-inter bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px]"
         >
           <DropdownMenuItem
             className="dark text-[11px] font-medium flex items-center gap-x-2"
@@ -894,7 +894,7 @@ const TopBar: React.FC<TopBarProps> = () => {
           <button
             disabled={!canExport} 
             type="button"
-            className="text-brand-light space-x-1.5 flex items-center justify-center px-5 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-brand disabled:border-brand font-medium h-[34px] hover:text-brand-light bg-brand-accent border border-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer"
+            className=" space-x-1.5 flex items-center justify-center px-5 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-brand disabled:border-brand font-medium h-[34px] text-brand-lighter bg-brand-accent-shade hover:bg-brand-accent-two-shade border border-brand-accent-two-shade rounded-[6px] py-1.5 transition-all duration-300 cursor-pointer"
             onClick={() => setExportOpen(true)}
           >
             <TbPackageExport size={16} />
@@ -951,7 +951,7 @@ const TopBar: React.FC<TopBarProps> = () => {
         }}
         
       >
-        <AlertDialogContent className="dark bg-brand-background/95 font-poppins backdrop-blur-md border border-brand-light/10">
+        <AlertDialogContent className="dark bg-brand-background/95 font-inter backdrop-blur-md border border-brand-light/10">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-brand-light">
               Delete project?

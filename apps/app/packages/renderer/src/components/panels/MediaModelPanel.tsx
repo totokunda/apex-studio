@@ -39,6 +39,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
   const { section } = useSidebarStore();
   const { clearSelectedManifestId } = useManifestStore();
   const queryClient = useQueryClient();
+  const SCROLL_STEP = 120;
 
   const warmModelMenu = useCallback(() => {
     try {
@@ -70,23 +71,64 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
     }, 100);
   }, [panelRef.current]);
 
-  const checkScrollButtons = () => {
+  const checkScrollButtons = useCallback(() => {
     if (triggersRef.current) {
       const { scrollLeft, scrollWidth, clientWidth } = triggersRef.current;
       setCanScrollLeft(scrollLeft > 0);
       setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 1);
     }
-  };
+  }, []);
+
+  const scrollTriggerIntoView = useCallback(() => {
+    if (!section || !triggersRef.current) return;
+    const trigger = triggersRef.current.querySelector<HTMLElement>(
+      `[data-sidebar-section="${section}"]`,
+    );
+    trigger?.scrollIntoView({
+      block: "nearest",
+      inline: "center",
+      behavior: "smooth",
+    });
+  }, [section]);
 
   useEffect(() => {
     checkScrollButtons();
     const handleScroll = () => checkScrollButtons();
     const triggerElement = triggersRef.current;
-    if (triggerElement) {
-      triggerElement.addEventListener("scroll", handleScroll);
-      return () => triggerElement.removeEventListener("scroll", handleScroll);
+    if (!triggerElement) return;
+
+    const resizeObserver = new ResizeObserver(() => checkScrollButtons());
+    resizeObserver.observe(triggerElement);
+    const contentElement = triggerElement.firstElementChild;
+    if (contentElement instanceof Element) {
+      resizeObserver.observe(contentElement);
     }
-  }, [panelSize]);
+
+    window.addEventListener("resize", checkScrollButtons);
+    triggerElement.addEventListener("scroll", handleScroll);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", checkScrollButtons);
+      triggerElement.removeEventListener("scroll", handleScroll);
+    };
+  }, [panelSize, checkScrollButtons]);
+
+  useEffect(() => {
+    scrollTriggerIntoView();
+  }, [scrollTriggerIntoView]);
+
+  const handleTriggerWheel = useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      const target = triggersRef.current;
+      if (!target) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (target.scrollWidth <= target.clientWidth) return;
+      event.preventDefault();
+      target.scrollBy({ left: event.deltaY, behavior: "auto" });
+      checkScrollButtons();
+    },
+    [checkScrollButtons],
+  );
 
   return (
     <ResizablePanel
@@ -107,21 +149,35 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
       })}
     >
       <div className="relative p-3 px-5 pb-1 w-full">
-        <LuChevronLeft
+        <button
+          type="button"
+          aria-label="Scroll sections left"
           onClick={() => {
             if (triggersRef.current) {
-              triggersRef.current.scrollBy({ left: -80, behavior: "smooth" });
+              triggersRef.current.scrollBy({
+                left: -SCROLL_STEP,
+                behavior: "smooth",
+              });
             }
           }}
           className={cn(
-            "text-brand-light h-6 w-6 mt-1 bg-brand-background/90 border border-brand-light/10 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute left-2 top-1/2 -translate-y-1/2 p-1 cursor-pointer",
+            "text-brand-light h-6 w-6 mt-1 bg-brand-background/90 border border-brand-light/10 hover:bg-brand-background/100 z-50 transition-all duration-200 rounded-full absolute left-2 top-1/2 -translate-y-1/2 p-1 cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent-shade/60",
             canScrollLeft ? "block" : "hidden",
+          )}
+        >
+          <LuChevronLeft className="h-4 w-4" />
+        </button>
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-y-3 left-5 w-8 bg-gradient-to-r from-brand-background to-transparent transition-opacity duration-200",
+            canScrollLeft ? "opacity-100" : "opacity-0",
           )}
         />
         <div
           ref={triggersRef}
           style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
-          className="overflow-x-auto [&::-webkit-scrollbar]:hidden"
+          onWheel={handleTriggerWheel}
+          className="overflow-x-auto scroll-smooth [&::-webkit-scrollbar]:hidden"
         >
           <div className="flex flex-row gap-x-2 w-fit">
             <MediaModelTrigger
@@ -159,17 +215,30 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
             />
           </div>
         </div>
-        <LuChevronRight
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-y-3 right-5 w-8 bg-gradient-to-l from-brand-background to-transparent transition-opacity duration-200",
+            canScrollRight ? "opacity-100" : "opacity-0",
+          )}
+        />
+        <button
+          type="button"
+          aria-label="Scroll sections right"
           onClick={() => {
             if (triggersRef.current) {
-              triggersRef.current.scrollBy({ left: 80, behavior: "smooth" });
+              triggersRef.current.scrollBy({
+                left: SCROLL_STEP,
+                behavior: "smooth",
+              });
             }
           }}
           className={cn(
-            "text-brand-light h-6 w-6 mt-1 border border-brand-light/10 bg-brand-background/90 hover:bg-brand-background z-50 transition-all duration-200 rounded-full absolute right-2 top-1/2 -translate-y-1/2 p-1 cursor-pointer",
+            "text-brand-light h-6 w-6 mt-1 border border-brand-light/10 bg-brand-background/90 hover:bg-brand-background z-50 transition-all duration-200 rounded-full absolute right-2 top-1/2 -translate-y-1/2 p-1 cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent-shade/60",
             canScrollRight ? "block" : "hidden",
           )}
-        />
+        >
+          <LuChevronRight className="h-4 w-4" />
+        </button>
       </div>
       
       {section === "media" && <MediaMenu />}

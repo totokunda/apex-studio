@@ -24,7 +24,7 @@ import { KonvaEventObject } from "konva/lib/Node";
 import { BASE_LONG_SIDE, DEFAULT_FPS } from "@/lib/settings";
 
 import _ from "lodash";
-import VideoPreview from "./clips/VideoPreview4";
+import VideoPreview from "./clips/VideoPreview5";
 import AudioPreview from "./clips/AudioPreview";
 import ImagePreview from "./clips/ImagePreview";
 import ShapePreview from "./clips/ShapePreview";
@@ -3075,7 +3075,7 @@ const Preview: React.FC<PreviewProps> = () => {
           {/* Fullscreen button */}
           <button
             onClick={() => setIsFullscreen(true)}
-            className="absolute bottom-4 right-4 p-2 bg-brand cursor-pointer hover:bg-brand-background-dark hover:text-blue-400 text-white rounded-md transition-colors"
+            className="absolute bottom-4 right-4 p-2 bg-brand cursor-pointer hover:bg-brand-background-dark hover:text-brand-accent-light text-white rounded-md transition-colors"
           >
             <SlSizeFullscreen className="h-3 w-3" />
           </button>

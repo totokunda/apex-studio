@@ -3,9 +3,48 @@ import { useClipStore } from "@/lib/clip";
 import { getAudioIterator } from "@/lib/media/audio";
 import { useControlsStore } from "@/lib/control";
 import { getMediaInfo } from "@/lib/media/utils";
+import {
+  readTimelineThumbnailDiskCache,
+  stableSerializeCacheKey,
+  writeTimelineThumbnailDiskCacheInBackground,
+} from "./timelineThumbnailDiskCache";
 
 // Per-clip cancellation for progressive waveform rendering
 const audioRenderSeqByClipId = new Map<string, number>();
+const MAX_FALLBACK_CANVASES = 512;
+const audioThumbnailFallbackByClipId = new Map<string, HTMLCanvasElement>();
+
+const cloneCanvas = (source: HTMLCanvasElement): HTMLCanvasElement | null => {
+  const width = Math.max(1, Math.floor(source.width || 0));
+  const height = Math.max(1, Math.floor(source.height || 0));
+  if (width <= 0 || height <= 0) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(source, 0, 0, width, height);
+  return canvas;
+};
+
+const drawFittedCanvas = (
+  ctx: CanvasRenderingContext2D,
+  source: HTMLCanvasElement,
+  targetW: number,
+  targetH: number,
+) => {
+  ctx.drawImage(source, 0, 0, Math.max(1, targetW), Math.max(1, targetH));
+};
+
+const rememberAudioFallback = (clipId: string, source: HTMLCanvasElement) => {
+  const snapshot = cloneCanvas(source);
+  if (!snapshot) return;
+  audioThumbnailFallbackByClipId.set(clipId, snapshot);
+  if (audioThumbnailFallbackByClipId.size > MAX_FALLBACK_CANVASES) {
+    const oldest = audioThumbnailFallbackByClipId.keys().next().value;
+    if (oldest) audioThumbnailFallbackByClipId.delete(oldest);
+  }
+};
 
 export const generateTimelineThumbnailAudio = async (
   clipType: string,
@@ -53,6 +92,18 @@ export const generateTimelineThumbnailAudio = async (
 
   const ctx = imageCanvas.getContext("2d");
   if (!ctx) return;
+  const fallbackCanvas =
+    audioThumbnailFallbackByClipId.get(currentClipId) ?? cloneCanvas(imageCanvas);
+  if (fallbackCanvas) {
+    ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+    drawFittedCanvas(
+      ctx,
+      fallbackCanvas,
+      Math.max(1, imageCanvas.width),
+      Math.max(1, imageCanvas.height),
+    );
+    groupRef.current?.getLayer()?.batchDraw();
+  }
 
   const targetH = Math.max(1, Math.floor(height));
   const targetW = Math.max(1, Math.floor(imageCanvas.width));
@@ -113,6 +164,73 @@ export const generateTimelineThumbnailAudio = async (
   const fadeInPx = (fadeInSec / segDurationSec) * waveformW;
   const fadeOutPx = (fadeOutSec / segDurationSec) * waveformW;
   const fadeOutStartPx = waveformW - fadeOutPx;
+  const sourceSignature = stableSerializeCacheKey({
+    assetPath: asset.path,
+    media: {
+      duration: mediaInfoRef?.duration,
+      startFrame: mediaInfoRef?.startFrame,
+      endFrame: mediaInfoRef?.endFrame,
+      audioPacketCount: mediaInfoRef?.stats.audio?.packetCount,
+      sampleRate: mediaInfoRef?.audio?.sampleRate,
+    },
+  });
+  const diskCacheKey = stableSerializeCacheKey({
+    kind: "timeline-audio-thumbnail",
+    v: 1,
+    assetPath: asset.path,
+    clip: {
+      trimStart: currentClip.trimStart ?? 0,
+      trimEnd: currentClip.trimEnd ?? 0,
+      speed,
+      volumeDb,
+      fadeInSec,
+      fadeOutSec,
+      noShift,
+    },
+    timeline: {
+      timelineDuration,
+      timelineWidth,
+      timelinePadding,
+      timelineHeight,
+      currentStartFrame,
+      currentEndFrame,
+      timelineShift,
+      visibleStartFrame,
+      visibleEndFrame,
+      duration,
+      pixelsPerFrame,
+      positionOffsetStart,
+    },
+    segment: {
+      startIndex,
+      endIndex,
+      segStartSec,
+      segEndSec,
+      segDurationSec,
+      barDurationSec,
+    },
+    canvas: {
+      width: targetW,
+      height: targetH,
+      waveformW,
+      offset,
+      barWidth,
+      gap,
+    },
+  });
+
+  const diskCached = await readTimelineThumbnailDiskCache({
+    kind: "audio",
+    key: diskCacheKey,
+    sourceSignature,
+  });
+  if (diskCached) {
+    ctx.clearRect(0, 0, targetW, targetH);
+    drawFittedCanvas(ctx, diskCached, targetW, targetH);
+    rememberAudioFallback(currentClipId, imageCanvas);
+    groupRef.current?.getLayer()?.batchDraw();
+    return;
+  }
 
   // --- Color utilities (local, no effect on data) ---
   const clamp255 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
@@ -393,6 +511,7 @@ export const generateTimelineThumbnailAudio = async (
 
   // Base draw immediately (so UI updates before decode finishes)
   renderComposite([], false);
+  rememberAudioFallback(currentClipId, imageCanvas);
   groupRef.current?.getLayer()?.batchDraw();
 
   // Decode and blit progressively from left -> right
@@ -546,6 +665,14 @@ export const generateTimelineThumbnailAudio = async (
       }
       renderComposite(valuesForLine, true);
       groupRef.current?.getLayer()?.batchDraw();
+      rememberAudioFallback(currentClipId, imageCanvas);
+
+      writeTimelineThumbnailDiskCacheInBackground({
+        kind: "audio",
+        key: diskCacheKey,
+        sourceSignature,
+        canvas: imageCanvas,
+      });
     }
   }
 

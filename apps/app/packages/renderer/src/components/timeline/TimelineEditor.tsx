@@ -235,7 +235,7 @@ const TimelineMoments: React.FC<TimelineMomentsProps> = React.memo(
                   text={formatTickLabel(tick.x, tick.format)}
                   fontSize={8.5}
                   fill="rgba(255, 255, 255, 0.4)"
-                  fontFamily="Poppins, system-ui, sans-serif"
+                  fontFamily="Inter, system-ui, sans-serif"
                   listening={false}
                 />
               )}
@@ -2053,9 +2053,9 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
                     className="w-full rounded-lg bg-brand-background/60 text-brand-light/90 duration-100 ease-in-out "
                     accepts={["media"]}
                     highlight={{
-                      borderColor: "#A477C4",
-                      textColor: "#FFFFFF",
-                      bgColor: "#A477C4",
+                      borderColor: "#e3e3e3",
+                      textColor: "#222124",
+                      bgColor: " #e3e3e3",
                     }}
                   >
                     <div className="w-full group py-6 px-10  rounded-lg  flex items-center ">
@@ -2064,7 +2064,7 @@ const TimelineEditor: React.FC<TimelineEditorProps> = React.memo(() => {
                           <span className="flex items-center justify-center leading-none">
                             <GoFileMedia className="w-5 h-5 " />
                           </span>
-                          <span className="text-[12px] font-light font-poppins leading-none ">
+                          <span className="text-[12px] font-light font-inter leading-none ">
                             Drag and drop media to start creating
                           </span>
                         </h4>

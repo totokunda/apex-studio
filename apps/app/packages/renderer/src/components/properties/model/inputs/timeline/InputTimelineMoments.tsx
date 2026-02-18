@@ -188,7 +188,7 @@ const TimelineMoments: React.FC<TimelineMomentsProps> = React.memo(
                   text={formatTickLabel(tick.x, tick.format)}
                   fontSize={7.5}
                   fill="rgba(227, 227, 227, 0.7)"
-                  fontFamily="Poppins, system-ui, sans-serif"
+                  fontFamily=", system-ui, sans-serif"
                   listening={false}
                 />
               )}

@@ -1,4 +1,5 @@
 import { useClipStore } from "@/lib/clip";
+import { SELECTION_STROKE_COLOR } from "@/lib/selectionStroke";
 import { useControlsStore } from "@/lib/control";
 import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 import type { ClipTransform } from "@/lib/types";
@@ -576,7 +577,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[rectWidth / 2, 0, rectWidth / 2, rectHeight]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -585,7 +586,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[rectWidth * 0.25, 0, rectWidth * 0.25, rectHeight]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -594,7 +595,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[rectWidth * 0.75, 0, rectWidth * 0.75, rectHeight]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -603,7 +604,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[0, rectHeight / 2, rectWidth, rectHeight / 2]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -612,7 +613,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[0, rectHeight * 0.25, rectWidth, rectHeight * 0.25]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -621,7 +622,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[0, rectHeight * 0.75, rectWidth, rectHeight * 0.75]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -630,7 +631,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[0, 0, 0, rectHeight]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -639,7 +640,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[rectWidth, 0, rectWidth, rectHeight]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -648,7 +649,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[0, 0, rectWidth, 0]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -657,7 +658,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
               <Line
                 listening={false}
                 points={[0, rectHeight, rectWidth, rectHeight]}
-                stroke={"#AE81CE"}
+                stroke={SELECTION_STROKE_COLOR}
                 strokeWidth={1}
                 dash={[6, 4]}
               />
@@ -666,7 +667,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
         )}
       </Group>
       <Transformer
-        borderStroke="#AE81CE"
+        borderStroke={SELECTION_STROKE_COLOR}
         anchorCornerRadius={8}
         anchorStroke="#E3E3E3"
         anchorStrokeWidth={1}

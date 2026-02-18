@@ -357,12 +357,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
                 <span className="text-brand-light/80 text-[11px]">
                   {manifest.metadata.author}
                 </span>
-                {knownTotalBytes > 0 && (
-                  <span className="text-brand-light/70 text-[10px] font-mono">
-                    Known size: {formatBytes(knownTotalBytes, 1)}
-                    {knownLoraBytes > 0 ? ` (LoRAs: ${formatBytes(knownLoraBytes, 1)})` : ""}
-                  </span>
-                )}
+
               </div>
 
               <div className="flex flex-row items-center gap-1.5 mt-2 flex-wrap">
@@ -381,7 +376,7 @@ const ModelPage: React.FC<ModelPageProps> = ({
             <div className="mt-4">
               <button
                 type="button"
-                className="text-[11px] font-medium w-full flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded-[6px] px-12 py-2.5 shrink-0 text-brand-light hover:text-brand-light/90 bg-brand-background-light hover:bg-brand/90 border border-brand-light/10"
+                className="text-[11px] font-medium w-full flex items-center transition-all duration-200 justify-center gap-x-1.5 rounded-[6px] px-12 py-2 shrink-0 text-brand-light hover:text-brand-light/90 bg-brand-background-light hover:bg-brand/90 border border-brand-light/5"
                 title="Add clip at playhead"
                 onClick={async () => {
                   try {

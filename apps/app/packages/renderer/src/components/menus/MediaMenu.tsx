@@ -723,29 +723,29 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
         <DropdownMenu>
           <div
             ref={uploadBarRef}
-            className="bg-brand-accent-shade shadow flex flex-row  items-center   text-brand-lighter w-full text-[12.5px] font-medium rounded transition-all duration-200 cursor-pointer"
+            className="bg-brand-background-light shadow flex flex-row  items-center  text-brand-light w-full text-[12.5px] font-medium rounded  cursor-pointer"
           >
             <span
               onClick={() => handleUpload(false)}
-              className="px-4 py-2 flex flex-row gap-x-2.5 rounded-l items-center justify-center hover:bg-brand-accent-two-shade border-r border-brand-light/30 w-full"
+              className="px-4 py-1.5 flex flex-row gap-x-2.5 rounded-l  border-l border-y h-8 border-brand-light/10 items-center hover:bg-brand justify-center w-full transition duration-200"
             >
               {isUploading ? (
-                <LuLoader className="w-[18px] h-[18px] animate-spin" />
+                <LuLoader className="w-[16px] h-[16px] animate-spin" />
               ) : (
-                <LuCloudUpload className="w-[18px] h-[18px] cursor-pointer stroke-2" />
+                <LuCloudUpload className="w-[16px] h-[16px] cursor-pointer stroke-2" />
               )}
-              <span className="flex flex-row gap-x-2.5 items-center justify-center text-xs">
+              <span className="flex flex-row gap-x-2.5 items-center justify-center text-[11px]">
                 {isUploading ? "Uploading…" : "Upload Media"}
               </span>
             </span>
-            <DropdownMenuTrigger className="px-1 py-2 flex flex-row gap-x-2.5 items-center justify-center w-10 hover:bg-brand-accent-two-shade rounded-r-md">
-              <LuChevronDown className="w-4 h-4 cursor-pointer stroke-2" />
+            <DropdownMenuTrigger className="px-1 py-2 flex flex-row gap-x-2.5 items-center justify-center w-10 h-8 rounded-r  hover:bg-brand border border-brand-light/10 transition duration-200">
+              <LuChevronDown className="w-3.5 h-3.5 cursor-pointer stroke-2" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
               sideOffset={2}
               style={{ width: menuWidth, maxWidth: menuWidth }}
-              className="dark mt-1 flex flex-col text-brand-light bg-brand-background font-poppins"
+              className="dark mt-1 flex flex-col text-brand-light bg-brand-background font-inter"
             >
               <DropdownMenuItem
                 onClick={() => handleUpload(false)}
@@ -792,7 +792,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="dark w-44 flex flex-col text-brand-light bg-brand-background font-poppins text-[12px]"
+              className="dark w-44 flex flex-col text-brand-light bg-brand-background font-inter text-[12px]"
             >
               <DropdownMenuCheckboxItem
                 className="text-[11px] font-medium"
@@ -863,7 +863,7 @@ const MediaSidebar: React.FC<MediaSidebarProps> = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="dark w-48 flex flex-col text-brand-light bg-brand-background font-poppins"
+              className="dark w-48 flex flex-col text-brand-light bg-brand-background font-inter"
             >
               {/* Sort key (mutually exclusive via checkboxes) */}
               <DropdownMenuCheckboxItem

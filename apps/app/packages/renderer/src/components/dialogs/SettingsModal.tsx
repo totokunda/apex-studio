@@ -963,11 +963,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
 
       <DialogContent className="w-full max-w-xl dark p-0 h-[500px] gap-0 space-y-0 items-start flex flex-col">
-        <DialogTitle className="text-brand-light font-poppins text-xs font-medium px-5 pt-4 h-fit">
+        <DialogTitle className="text-brand-light font-inter text-xs font-medium px-5 pt-4 h-fit">
             Settings
         </DialogTitle>
         <Tabs defaultValue="general" className="p-5 pt-0 mt-5 w-full flex-1 flex flex-col overflow-hidden">
-          <TabsList className="font-poppins text-brand-light/90 dark gap-1 mb-1.5 w-full ">
+          <TabsList className="font-inter text-brand-light/90 dark gap-1 mb-1.5 w-full ">
           <TabsTrigger
               className="data-[state=active]:bg-brand-light/10 data-[state=active]:text-brand-light text-[11px] rounded-[6px] px-2 py-1 w-full!"
               value="project"
@@ -1008,7 +1008,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </TabsList>
           <div className="flex-1 overflow-y-auto pb-8 mb-12 pr-2.5 custom-scrollbar">
           <TabsContent value="project">
-            <div className="flex flex-col gap-4 font-poppins text-brand-light ">
+            <div className="flex flex-col gap-4 font-inter text-brand-light ">
               <div className="flex flex-col gap-1">
                 <label className={fieldLabelClass}>
                   <span>Project FPS</span>
@@ -1028,7 +1028,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                     <SelectValue placeholder="Select FPS" />
                   </SelectTrigger>
-                  <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                  <SelectContent className="bg-brand-background text-brand-light font-inter z-101 dark">
                     <SelectItem value="24" className="text-[11px] font-medium">
                       24 FPS
                     </SelectItem>
@@ -1067,7 +1067,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                     <SelectValue placeholder="Select duration" />
                   </SelectTrigger>
-                  <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                  <SelectContent className="bg-brand-background text-brand-light font-inter z-101 dark">
                     <SelectItem value="3" className="text-[11px] font-medium">
                       3 seconds
                     </SelectItem>
@@ -1089,7 +1089,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </TabsContent>
           <TabsContent value="tokens">
-            <div className="flex flex-col gap-4 font-poppins text-brand-light">
+            <div className="flex flex-col gap-4 font-inter text-brand-light">
               <div className="flex flex-col gap-1">
                 <label className={fieldLabelClass}>
                   <span>Hugging Face Hub Token</span>
@@ -1157,7 +1157,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </TabsContent>
           <TabsContent value="config">
-            <div className="flex flex-col gap-4 font-poppins text-brand-light h-full">
+            <div className="flex flex-col gap-4 font-inter text-brand-light h-full">
               <div className="flex flex-col gap-1">
                 <label className={fieldLabelClass}>
                   <span>Backend URL</span>
@@ -1250,7 +1250,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                     <SelectValue placeholder="Select mask model" />
                   </SelectTrigger>
-                  <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                  <SelectContent className="bg-brand-background text-brand-light font-inter z-101 dark">
                     <SelectItem value="sam2_tiny" className="text-[11px] font-medium">
                       Sam2 Tiny  
                     </SelectItem>
@@ -1346,7 +1346,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                     <SelectValue placeholder="Select profile" />
                   </SelectTrigger>
-                  <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                  <SelectContent className="bg-brand-background text-brand-light font-inter z-101 dark">
                     <SelectItem value="auto" className="text-[10.5px] font-medium!">
                       Automatic (Recommended)
                     </SelectItem>
@@ -1363,7 +1363,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </TabsContent>
           <TabsContent value="memory">
-            <div className="flex flex-col gap-4 font-poppins text-brand-light h-full">
+            <div className="flex flex-col gap-4 font-inter text-brand-light h-full">
               <div className="flex items-center justify-between">
                 <div className="text-[10px] text-brand-light/70">
                   These settings apply immediately on the backend process (no restart).
@@ -1510,7 +1510,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </TabsContent>
           <TabsContent value="updates">
-            <div className="flex flex-col gap-5 font-poppins text-brand-light h-full">
+            <div className="flex flex-col gap-5 font-inter text-brand-light h-full">
               <div className="flex flex-col gap-2 rounded-lg border border-brand-light/10 bg-brand-light/5 p-3">
                 <div className="text-[11px] text-brand-light/80 font-medium">
                   App Update
@@ -1675,7 +1675,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </TabsContent>
           <TabsContent value="paths">
-            <div className="flex flex-col gap-4 font-poppins text-brand-light h-full">
+            <div className="flex flex-col gap-4 font-inter text-brand-light h-full">
 
               <div className="flex flex-row gap-1 items-center justify-between w-full">
                 <label className={fieldLabelClass + " w-1/3"}>
@@ -1904,7 +1904,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <Button
             type="button"
             variant="ghost"
-            className="h-8 px-4 text-[11px] w-full font-medium bg-brand-light/5 hover:bg-brand-light/10 rounded-[6px] text-brand-light font-poppins"
+            className="h-8 px-4 text-[11px] w-full font-medium bg-brand-light/5 hover:bg-brand-light/10 rounded-[6px] text-brand-light font-inter"
             onClick={() => {
               // Cancel should revert any previewed backend URL + local form edits.
               resetToGlobalSettings();
@@ -1915,7 +1915,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </Button>
           <Button
             type="button"
-            className="h-8 px-5 w-full bg-brand-accent hover:bg-brand-accent-two-shade text-brand-light font-poppins text-[11px] font-medium rounded-[6px] border border-brand-accent-two-shade"
+            className="h-8 px-5 w-full bg-brand-accent hover:bg-brand-accent-two-shade text-brand-light font-inter text-[11px] font-medium rounded-[6px] border border-brand-accent-two-shade"
             disabled={saveDisabled}
             onClick={async () => {
               if (saveDisabled) return;

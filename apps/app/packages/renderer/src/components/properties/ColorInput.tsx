@@ -222,7 +222,7 @@ const ColorInput: React.FC<ColorInputProps> = ({
               </TooltipTrigger>
               <TooltipContent
                 sideOffset={6}
-                className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+                className="max-w-xs whitespace-pre-wrap text-[10px] font-inter bg-brand-background border border-brand-light/10"
               >
                 {tooltip}
               </TooltipContent>
@@ -299,7 +299,7 @@ const ColorInput: React.FC<ColorInputProps> = ({
                   setPercentValue?.(newAlpha);
                 }
               }}
-              className="w-60 rounded-md border p-3 text-brand-light bg-brand-background shadow-sm font-poppins"
+              className="w-60 rounded-md border p-3 text-brand-light bg-brand-background shadow-sm font-inter"
             >
               <ColorPickerSelection className="h-48" />
               <div className="flex items-center gap-4">

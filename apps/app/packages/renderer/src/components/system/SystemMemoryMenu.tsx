@@ -87,7 +87,7 @@ const SystemMemoryMenu: React.FC = () => {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger className="text-brand-light/90 dark h-[34px] relative flex items-center space-x-2 w-32 px-3 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
+      <PopoverTrigger className="text-brand-light/90 dark h-[34px] relative flex items-center space-x-2 w-32 px-3 font-medium hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
         <LuGauge className="w-4 h-4" />
         <span className="text-[11px]">Memory</span>
         <span className="ml-1 text-[11px] text-brand-light/60">
@@ -96,7 +96,7 @@ const SystemMemoryMenu: React.FC = () => {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] p-4 font-poppins"
+        className="bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] p-4 font-inter"
         style={{ width: contentWidth }}
       >
         {data ? (

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LuChevronDown,
   LuChevronUp,
@@ -19,6 +19,7 @@ import {
   LuWand,
   LuPlus,
   LuX,
+  LuGripHorizontal,
 } from "react-icons/lu";
 
 import {
@@ -39,8 +40,16 @@ import {
 import { useDrawingStore } from "@/lib/drawing";
 import { useMaskStore } from "@/lib/mask";
 import ColorInput from "@/components/properties/ColorInput";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface FloatingBarProps {}
+
+const FLOATING_BAR_STORAGE_KEY = "preview-floating-bar-position-v1";
+const FLOATING_BAR_MARGIN = 18;
 
 const TextButton = ({
   active,
@@ -50,18 +59,38 @@ const TextButton = ({
   onClick: () => void;
 }) => {
   return (
-    <div
+    <button
+      type="button"
+      aria-label="Text tool"
       onClick={onClick}
-      className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${active ? "text-brand-light bg-brand-accent-two-shade" : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"}`}
+      className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${active ? "text-brand bg-brand-light" : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"}`}
     >
       <LuType className="w-5 h-5" />
-    </div>
+    </button>
   );
 };
+
+const SmallTooltip = ({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactElement;
+}) => (
+  <Tooltip>
+    <TooltipTrigger asChild>{children}</TooltipTrigger>
+    <TooltipContent side="bottom" sideOffset={6} className="px-2 py-1 text-[10px]">
+      {label}
+    </TooltipContent>
+  </Tooltip>
+);
 
 // Removed individual ShapeButton in favor of a dropdown selector for shapes
 
 const FloatingBar: React.FC<FloatingBarProps> = () => {
+  const barRef = useRef<HTMLDivElement>(null);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const latestBarPositionRef = useRef({ x: 24, y: 24 });
   const scale = useViewportStore((s) => s.scale);
   const minScale = useViewportStore((s) => s.minScale);
   const maxScale = useViewportStore((s) => s.maxScale);
@@ -108,6 +137,8 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
   const [drawOpen, setDrawOpen] = useState(false);
   const [maskOpen, setMaskOpen] = useState(false);
   const [tempSizeValue, setTempSizeValue] = useState<string>("3");
+  const [isDragging, setIsDragging] = useState(false);
+  const [barPosition, setBarPosition] = useState({ x: 24, y: 24 });
 
   const maskTool = useMaskStore((s) => s.tool);
   const setMaskTool = useMaskStore((s) => s.setTool);
@@ -127,21 +158,164 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
   }, [drawingTool, brushSize, highlighterSize, eraserSize, getCurrentSize]);
   const sliderMin = useMemo(() => Math.round(minScale * 100), [minScale]);
   const sliderMax = useMemo(() => Math.round(maxScale * 100), [maxScale]);
+
+  const clampBarPosition = useCallback((x: number, y: number) => {
+    const width = barRef.current?.offsetWidth ?? 320;
+    const height = barRef.current?.offsetHeight ?? 64;
+    const maxX = Math.max(FLOATING_BAR_MARGIN, window.innerWidth - width - FLOATING_BAR_MARGIN);
+    const maxY = Math.max(FLOATING_BAR_MARGIN, window.innerHeight - height - FLOATING_BAR_MARGIN);
+    return {
+      x: Math.min(Math.max(x, FLOATING_BAR_MARGIN), maxX),
+      y: Math.min(Math.max(y, FLOATING_BAR_MARGIN), maxY),
+    };
+  }, []);
+
+  const getDockedPosition = useCallback(
+    (dock: "top-right" | "top-left" | "bottom-center") => {
+      const width = barRef.current?.offsetWidth ?? 320;
+      const height = barRef.current?.offsetHeight ?? 64;
+      switch (dock) {
+        case "top-left":
+          return clampBarPosition(FLOATING_BAR_MARGIN, 24);
+        case "bottom-center":
+          return clampBarPosition(
+            Math.round((window.innerWidth - width) / 2),
+            window.innerHeight - height - FLOATING_BAR_MARGIN,
+          );
+        case "top-right":
+        default:
+          return clampBarPosition(Math.round((window.innerWidth - width) / 2), 24);
+      }
+    },
+    [clampBarPosition],
+  );
+
+  useEffect(() => {
+    const applyStoredPosition = () => {
+      const raw = window.localStorage.getItem(FLOATING_BAR_STORAGE_KEY);
+      if (!raw) {
+        setBarPosition(getDockedPosition("top-right"));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw) as { x?: number; y?: number };
+        if (typeof parsed.x === "number" && typeof parsed.y === "number") {
+          setBarPosition(clampBarPosition(parsed.x, parsed.y));
+          return;
+        }
+      } catch {
+        // ignore malformed local storage and fall back to default dock
+      }
+      setBarPosition(getDockedPosition("top-right"));
+    };
+
+    applyStoredPosition();
+    const onResize = () => setBarPosition((prev) => clampBarPosition(prev.x, prev.y));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [clampBarPosition, getDockedPosition]);
+
+  useEffect(() => {
+    latestBarPositionRef.current = barPosition;
+  }, [barPosition]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const onPointerMove = (event: PointerEvent) => {
+      const next = clampBarPosition(
+        event.clientX - dragOffsetRef.current.x,
+        event.clientY - dragOffsetRef.current.y,
+      );
+      setBarPosition(next);
+    };
+    const onPointerUp = () => {
+      setIsDragging(false);
+      window.localStorage.setItem(
+        FLOATING_BAR_STORAGE_KEY,
+        JSON.stringify(latestBarPositionRef.current),
+      );
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+  }, [isDragging, clampBarPosition]);
+
+  const startDrag = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) return;
+      dragOffsetRef.current = {
+        x: event.clientX - barPosition.x,
+        y: event.clientY - barPosition.y,
+      };
+      setIsDragging(true);
+      event.preventDefault();
+    },
+    [barPosition],
+  );
+
+  const dockFloatingBar = useCallback(
+    (dock: "top-right" | "top-left" | "bottom-center") => {
+      const next = getDockedPosition(dock);
+      setBarPosition(next);
+      window.localStorage.setItem(FLOATING_BAR_STORAGE_KEY, JSON.stringify(next));
+    },
+    [getDockedPosition],
+  );
+
   return (
-    <div className="w-64 absolute top-7 left-1/2 -translate-x-1/2 rounded-lg px-6 z-50 ">
+    <div
+      ref={barRef}
+      className="w-64 fixed rounded-lg px-6 z-[120]"
+      style={{ left: `${barPosition.x}px`, top: `${barPosition.y}px` }}
+    >
       <div className="w-full h-full flex items-center justify-between">
-        <div className="flex flex-row-reverse justify-center items-center gap-x-1.5 absolute top-0 left-1/2 -translate-x-1/2 p-2 bg-brand border border-brand-light/5 rounded-lg shadow-lg">
+        <div className="relative flex flex-row-reverse justify-center items-center gap-x-1.5 p-2 bg-brand border border-brand-light/5 rounded-lg shadow-lg">
+          <div className="absolute -left-7 flex flex-col gap-y-1">
+            <button
+              type="button"
+              onPointerDown={startDrag}
+              className={`h-6 w-6 rounded-md border border-brand-light/10 bg-brand text-brand-light/80 hover:bg-brand-light/15 hover:text-brand-light transition-all duration-200 cursor-grab active:cursor-grabbing flex items-center justify-center ${isDragging ? "ring-2 ring-brand-light/50" : ""}`}
+              aria-label="Drag toolbar"
+            >
+              <LuGripHorizontal className="h-3.5 w-3.5" />
+            </button>
+            <div className="flex flex-col gap-y-1 rounded-md border border-brand-light/10 bg-brand p-1">
+              <button
+                type="button"
+                aria-label="Dock toolbar top center"
+                onClick={() => dockFloatingBar("top-right")}
+                className="h-1.5 w-4 self-center rounded-full bg-brand-light/70 hover:bg-brand-light transition-colors"
+              />
+              <button
+                type="button"
+                aria-label="Dock toolbar top left"
+                onClick={() => dockFloatingBar("top-left")}
+                className="h-1.5 w-4 self-center rounded-full bg-brand-light/50 hover:bg-brand-light transition-colors"
+              />
+              <button
+                type="button"
+                aria-label="Dock toolbar bottom center"
+                onClick={() => dockFloatingBar("bottom-center")}
+                className="h-1.5 w-4 self-center rounded-full bg-brand-light/35 hover:bg-brand-light transition-colors"
+              />
+            </div>
+          </div>
           <div className="flex items-center gap-x-1">
             <DropdownMenu open={zoomOpen} onOpenChange={setZoomOpen}>
-              <DropdownMenuTrigger className="text-brand-light/90 dark w-18  flex items-center font-medium justify-between px-2 text-xs border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-md py-[7px] transition-all duration-300 cursor-pointer">
-                {zoomLevel}%
-                {zoomOpen ? (
-                  <LuChevronUp className="w-3.5 h-3.5" />
-                ) : (
-                  <LuChevronDown className="w-3.5 h-3.5" />
-                )}
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="dark w-60 bg-brand-background font-poppins">
+              <SmallTooltip label="Zoom">
+                <DropdownMenuTrigger className="text-brand-light/85 dark w-18  flex items-center font-medium justify-between px-2 text-xs border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/15 rounded-md py-[7px] transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60">
+                  {zoomLevel}%
+                  {zoomOpen ? (
+                    <LuChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <LuChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </DropdownMenuTrigger>
+              </SmallTooltip>
+              <DropdownMenuContent className="dark w-60 bg-brand-background font-inter z-[140]">
                 <DropdownMenuLabel className="flex flex-col justify-center py-2 pb-0 px-1.5">
                   <span className="text-brand-light text-xs font-medium">
                     Size
@@ -222,31 +396,37 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
             </DropdownMenu>
           </div>
           <div className="flex items-center gap-x-1">
-            <div
-              onClick={() => setTool("draw")}
-              className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${tool === "draw" ? "text-brand-light bg-brand-accent-two-shade" : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"}`}
-            >
-              {drawingTool === "brush" && <LuPenTool className="w-5 h-5" />}
-              {drawingTool === "highlighter" && (
-                <LuHighlighter className="w-5 h-5" />
-              )}
-              {drawingTool === "eraser" && <LuEraser className="w-5 h-5" />}
-            </div>
-            <Popover open={drawOpen} onOpenChange={setDrawOpen}>
-              <PopoverTrigger
-                className={`rounded h-8 px-0.5 -ml-0.5 transition-all duration-300 cursor-pointer ${
-                  drawOpen
-                    ? "text-brand-light bg-brand-light/10"
-                    : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"
-                }`}
+            <SmallTooltip label="Draw tool">
+              <button
+                type="button"
+                aria-label="Draw tool"
+                onClick={() => setTool("draw")}
+                className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${tool === "draw" ? "text-brand bg-brand-light" : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"}`}
               >
-                {drawOpen ? (
-                  <LuChevronUp className="w-3.5 h-3.5" />
-                ) : (
-                  <LuChevronDown className="w-3.5 h-3.5" />
+                {drawingTool === "brush" && <LuPenTool className="w-5 h-5" />}
+                {drawingTool === "highlighter" && (
+                  <LuHighlighter className="w-5 h-5" />
                 )}
-              </PopoverTrigger>
-              <PopoverContent className="dark w-56 bg-brand-background font-poppins p-3">
+                {drawingTool === "eraser" && <LuEraser className="w-5 h-5" />}
+              </button>
+            </SmallTooltip>
+            <Popover open={drawOpen} onOpenChange={setDrawOpen}>
+              <SmallTooltip label="Draw options">
+                <PopoverTrigger
+                  className={`rounded h-8 px-0.5 -ml-0.5 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${
+                    drawOpen
+                      ? "text-brand-light bg-brand-light/15"
+                      : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"
+                  }`}
+                >
+                  {drawOpen ? (
+                    <LuChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <LuChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </PopoverTrigger>
+              </SmallTooltip>
+              <PopoverContent className="dark w-56 bg-brand-background font-inter p-3 z-[140]">
                 <div className="flex flex-col gap-y-3">
                   {/* Drawing Tools */}
                   <div className="flex flex-col gap-y-0.5">
@@ -261,7 +441,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                         }}
                         className={`flex items-center gap-x-3 px-3 py-1.5 w-1/3 cursor-pointer justify-center transition-all duration-200 ${
                           drawingTool === "brush"
-                            ? "bg-brand-accent-two-shade text-brand-light"
+                            ? "bg-brand-light text-brand"
                             : "text-brand-light/80 hover:bg-brand-light/5"
                         }`}
                       >
@@ -274,7 +454,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                         }}
                         className={`flex items-center gap-x-3 px-3 py-1.5 w-1/3 justify-center cursor-pointer transition-all duration-200 ${
                           drawingTool === "highlighter"
-                            ? "bg-brand-accent-two-shade text-brand-light"
+                            ? "bg-brand-light text-brand"
                             : "text-brand-light/80 hover:bg-brand-light/5"
                         }`}
                       >
@@ -287,7 +467,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                         }}
                         className={`flex items-center gap-x-3 px-3 py-1.5 w-1/3 justify-center cursor-pointer transition-all duration-200 ${
                           drawingTool === "eraser"
-                            ? "bg-brand-accent-two-shade text-brand-light"
+                            ? "bg-brand-light text-brand"
                             : "text-brand-light/80 hover:bg-brand-light/5"
                         }`}
                       >
@@ -397,45 +577,53 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                 </div>
               </PopoverContent>
             </Popover>
-            <TextButton
-              active={tool === "text"}
-              onClick={() => setTool("text")}
-            />
-            <div
-              onClick={() => setTool("mask")}
-              className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${tool === "mask" ? "text-brand-light bg-brand-accent-two-shade" : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"}`}
-            >
-              {maskTool === "lasso" && <LuLasso className="w-5 h-5" />}
-              {maskTool === "shape" && maskShape === "rectangle" && (
-                <LuSquare className="w-5 h-5" />
-              )}
-              {maskTool === "shape" && maskShape === "ellipse" && (
-                <LuCircle className="w-5 h-5" />
-              )}
-              {maskTool === "shape" && maskShape === "polygon" && (
-                <LuTriangle className="w-5 h-5" />
-              )}
-              {maskTool === "shape" && maskShape === "star" && (
-                <LuStar className="w-5 h-5" />
-              )}
-              {maskTool === "draw" && <LuBrush className="w-5 h-5" />}
-              {maskTool === "touch" && <LuWand className="w-5 h-5" />}
-            </div>
-            <Popover open={maskOpen} onOpenChange={setMaskOpen}>
-              <PopoverTrigger
-                className={`rounded h-8 px-0.5 -ml-0.5 transition-all duration-300 cursor-pointer ${
-                  maskOpen
-                    ? "text-brand-light bg-brand-light/10"
-                    : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"
-                }`}
+            <SmallTooltip label="Text tool">
+              <TextButton
+                active={tool === "text"}
+                onClick={() => setTool("text")}
+              />
+            </SmallTooltip>
+            <SmallTooltip label="Mask tool">
+              <button
+                type="button"
+                aria-label="Mask tool"
+                onClick={() => setTool("mask")}
+                className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${tool === "mask" ? "text-brand bg-brand-light" : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"}`}
               >
-                {maskOpen ? (
-                  <LuChevronUp className="w-3.5 h-3.5" />
-                ) : (
-                  <LuChevronDown className="w-3.5 h-3.5" />
+                {maskTool === "lasso" && <LuLasso className="w-5 h-5" />}
+                {maskTool === "shape" && maskShape === "rectangle" && (
+                  <LuSquare className="w-5 h-5" />
                 )}
-              </PopoverTrigger>
-              <PopoverContent className="dark w-56 bg-brand-background font-poppins p-3 pt-3 pb-5">
+                {maskTool === "shape" && maskShape === "ellipse" && (
+                  <LuCircle className="w-5 h-5" />
+                )}
+                {maskTool === "shape" && maskShape === "polygon" && (
+                  <LuTriangle className="w-5 h-5" />
+                )}
+                {maskTool === "shape" && maskShape === "star" && (
+                  <LuStar className="w-5 h-5" />
+                )}
+                {maskTool === "draw" && <LuBrush className="w-5 h-5" />}
+                {maskTool === "touch" && <LuWand className="w-5 h-5" />}
+              </button>
+            </SmallTooltip>
+            <Popover open={maskOpen} onOpenChange={setMaskOpen}>
+              <SmallTooltip label="Mask options">
+                <PopoverTrigger
+                  className={`rounded h-8 px-0.5 -ml-0.5 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${
+                    maskOpen
+                      ? "text-brand-light bg-brand-light/15"
+                      : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"
+                  }`}
+                >
+                  {maskOpen ? (
+                    <LuChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <LuChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </PopoverTrigger>
+              </SmallTooltip>
+              <PopoverContent className="dark w-56 bg-brand-background font-inter p-3 pt-3 pb-5 z-[140]">
                 <div className="mb-2.5 w-full flex ">
                   <label className="text-brand-light text-[11px] font-medium">
                     Masking Tool
@@ -453,7 +641,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                         }}
                         className={`flex flex-col relative items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
                           maskTool === "touch" && tool === "mask"
-                            ? "bg-brand-accent-two-shade border-brand-accent-two text-brand-light"
+                            ? "bg-brand-light border-brand-light text-brand"
                             : "text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5"
                         }`}
                       >
@@ -469,7 +657,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                         }}
                         className={`flex flex-col items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
                           maskTool === "lasso" && tool === "mask"
-                            ? "bg-brand-accent-two-shade border-brand-accent-two text-brand-light"
+                            ? "bg-brand-light border-brand-light text-brand"
                             : "text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5"
                         }`}
                       >
@@ -483,7 +671,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                         }}
                         className={`flex flex-col items-center gap-y-0.5 px-1.5 py-1.5 cursor-pointer justify-center transition-all duration-200 rounded-sm border ${
                           maskTool === "shape" && tool === "mask"
-                            ? "bg-brand-accent-two-shade border-brand-accent-two text-brand-light"
+                            ? "bg-brand-light border-brand-light text-brand"
                             : "text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5"
                         }`}
                       >
@@ -513,7 +701,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                           onClick={() => setMaskShape("rectangle")}
                           className={`flex items-center justify-center p-1.5 cursor-pointer transition-all duration-200 rounded-sm border ${
                             maskShape === "rectangle"
-                              ? "bg-brand-accent-two-shade border-brand-accent-two text-brand-light"
+                              ? "bg-brand-light border-brand-light text-brand"
                               : "text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5"
                           }`}
                         >
@@ -523,7 +711,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                           onClick={() => setMaskShape("ellipse")}
                           className={`flex items-center justify-center p-1.5 cursor-pointer transition-all duration-200 rounded-sm border ${
                             maskShape === "ellipse"
-                              ? "bg-brand-accent-two-shade border-brand-accent-two text-brand-light"
+                              ? "bg-brand-light border-brand-light text-brand"
                               : "text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5"
                           }`}
                         >
@@ -533,7 +721,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                           onClick={() => setMaskShape("polygon")}
                           className={`flex items-center justify-center p-1.5 cursor-pointer transition-all duration-200 rounded-sm border ${
                             maskShape === "polygon"
-                              ? "bg-brand-accent-two-shade border-brand-accent-two text-brand-light"
+                              ? "bg-brand-light border-brand-light text-brand"
                               : "text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5"
                           }`}
                         >
@@ -543,7 +731,7 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                           onClick={() => setMaskShape("star")}
                           className={`flex items-center justify-center p-1.5 cursor-pointer transition-all duration-200 rounded-sm border ${
                             maskShape === "star"
-                              ? "bg-brand-accent-two-shade border-brand-accent-two text-brand-light"
+                              ? "bg-brand-light border-brand-light text-brand"
                               : "text-brand-light/80 bg-brand border-brand-light/10 hover:bg-brand-light/5"
                           }`}
                         >
@@ -624,35 +812,41 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                 </div>
               </PopoverContent>
             </Popover>
-            <div
-              onClick={() => setTool("shape")}
-              className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${
-                tool === "shape"
-                  ? "text-brand-light bg-brand-accent-two-shade"
-                  : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"
-              }`}
-            >
-              {shape === "rectangle" && <LuSquare className="w-5 h-5" />}
-              {shape === "ellipse" && <LuCircle className="w-5 h-5" />}
-              {shape === "polygon" && <LuTriangle className="w-5 h-5" />}
-              {shape === "line" && <LuMinus className="w-5 h-5" />}
-              {shape === "star" && <LuStar className="w-5 h-5" />}
-            </div>
-            <DropdownMenu open={shapeOpen} onOpenChange={setShapeOpen}>
-              <DropdownMenuTrigger
-                className={`rounded h-8 px-0.5 -ml-0.5 transition-all duration-300 cursor-pointer ${
-                  shapeOpen
-                    ? "text-brand-light bg-brand-light/10"
-                    : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"
+            <SmallTooltip label="Shape tool">
+              <button
+                type="button"
+                aria-label="Shape tool"
+                onClick={() => setTool("shape")}
+                className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${
+                  tool === "shape"
+                    ? "text-brand bg-brand-light"
+                    : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"
                 }`}
               >
-                {shapeOpen ? (
-                  <LuChevronUp className="w-3.5 h-3.5" />
-                ) : (
-                  <LuChevronDown className="w-3.5 h-3.5" />
-                )}
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="dark w-44 bg-brand-background font-poppins">
+                {shape === "rectangle" && <LuSquare className="w-5 h-5" />}
+                {shape === "ellipse" && <LuCircle className="w-5 h-5" />}
+                {shape === "polygon" && <LuTriangle className="w-5 h-5" />}
+                {shape === "line" && <LuMinus className="w-5 h-5" />}
+                {shape === "star" && <LuStar className="w-5 h-5" />}
+              </button>
+            </SmallTooltip>
+            <DropdownMenu open={shapeOpen} onOpenChange={setShapeOpen}>
+              <SmallTooltip label="Shape options">
+                <DropdownMenuTrigger
+                  className={`rounded h-8 px-0.5 -ml-0.5 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${
+                    shapeOpen
+                      ? "text-brand-light bg-brand-light/15"
+                      : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"
+                  }`}
+                >
+                  {shapeOpen ? (
+                    <LuChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <LuChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </DropdownMenuTrigger>
+              </SmallTooltip>
+              <DropdownMenuContent className="dark w-44 bg-brand-background font-inter z-[140]">
                 <DropdownMenuItem
                   key="shape-rectangle"
                   textValue="Rectangle"
@@ -719,35 +913,41 @@ const FloatingBar: React.FC<FloatingBarProps> = () => {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <div
-              onClick={() => setTool(tool === "hand" ? "hand" : "pointer")}
-              className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer ${
-                tool === "pointer" || tool === "hand"
-                  ? "text-brand-light bg-brand-accent-two-shade"
-                  : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"
-              }`}
-            >
-              {tool === "hand" ? (
-                <LuHand className="w-5 h-5" />
-              ) : (
-                <LuMousePointer2 className="w-5 h-5" />
-              )}
-            </div>
-            <DropdownMenu open={toolOpen} onOpenChange={setToolOpen}>
-              <DropdownMenuTrigger
-                className={`rounded py-2 px-0.5 -ml-0.5 h-8 transition-all duration-300 cursor-pointer ${
-                  toolOpen
-                    ? "text-brand-light bg-brand-light/10"
-                    : "text-brand-light/90 hover:text-brand-light hover:bg-brand-light/10"
+            <SmallTooltip label="Select tool">
+              <button
+                type="button"
+                aria-label="Select tool"
+                onClick={() => setTool(tool === "hand" ? "hand" : "pointer")}
+                className={`rounded-md h-8 w-8 p-1.5 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${
+                  tool === "pointer" || tool === "hand"
+                    ? "text-brand bg-brand-light"
+                    : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"
                 }`}
               >
-                {toolOpen ? (
-                  <LuChevronUp className="w-3.5 h-3.5" />
+                {tool === "hand" ? (
+                  <LuHand className="w-5 h-5" />
                 ) : (
-                  <LuChevronDown className="w-3.5 h-3.5" />
+                  <LuMousePointer2 className="w-5 h-5" />
                 )}
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="dark w-36 bg-brand-background font-poppins ">
+              </button>
+            </SmallTooltip>
+            <DropdownMenu open={toolOpen} onOpenChange={setToolOpen}>
+              <SmallTooltip label="Select options">
+                <DropdownMenuTrigger
+                  className={`rounded py-2 px-0.5 -ml-0.5 h-8 transition-all duration-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-light/60 ${
+                    toolOpen
+                      ? "text-brand-light bg-brand-light/15"
+                      : "text-brand-light/80 hover:text-brand-light hover:bg-brand-light/15"
+                  }`}
+                >
+                  {toolOpen ? (
+                    <LuChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <LuChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </DropdownMenuTrigger>
+              </SmallTooltip>
+              <DropdownMenuContent className="dark w-36 bg-brand-background font-inter z-[140]">
                 <DropdownMenuItem
                   key="tool-pointer"
                   textValue="Pointer"

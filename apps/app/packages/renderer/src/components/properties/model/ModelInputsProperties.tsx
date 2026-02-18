@@ -462,7 +462,7 @@ const VariantSelector: React.FC<{
         <PopoverContent
           align="start"
           sideOffset={8}
-          className="w-(--radix-popover-trigger-width) font-poppins p-2 bg-brand border border-brand-light/10 rounded-[8px] shadow-xl z-100"
+          className="w-(--radix-popover-trigger-width) font-inter p-2 bg-brand border border-brand-light/10 rounded-[8px] shadow-xl z-100"
         >
           <div className="space-y-1.5">
             {variants.map((variant) => {

@@ -52,7 +52,7 @@ const DeleteAlertDialog: React.FC<
 > = ({ onDelete, open, onOpenChange }) => {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="dark bg-brand font-poppins">
+      <AlertDialogContent className="dark bg-brand font-inter">
         <AlertDialogHeader>
           <AlertDialogTitle className="text-brand-light text-base">
             Delete Media
@@ -422,7 +422,7 @@ const Item: React.FC<ItemProps> = ({
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="dark w-40 flex flex-col text-brand-light bg-brand-background font-poppins"
+                className="dark w-40 flex flex-col text-brand-light bg-brand-background font-inter"
               >
                 {item.type === "video" && (
                   <>

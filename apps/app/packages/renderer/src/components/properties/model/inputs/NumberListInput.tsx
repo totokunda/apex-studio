@@ -169,7 +169,7 @@ const NumberListInput: React.FC<NumberListInputProps> = ({
             </TooltipTrigger>
             <TooltipContent
               sideOffset={6}
-              className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+              className="max-w-xs whitespace-pre-wrap text-[10px] font-inter bg-brand-background border border-brand-light/10"
             >
               {description}
             </TooltipContent>

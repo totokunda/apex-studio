@@ -419,7 +419,7 @@ const ModelClip: React.FC<Props> = ({
                 y={timelineHeight - 19}
                 text={currentClip?.group?.name ?? currentClip?.manifest?.metadata?.name ?? ""}
                 fontSize={10}
-                fontFamily="Poppins"
+                fontFamily="Inter"
                 fontStyle="500"
                 fill="white"
                 align="left"
@@ -494,7 +494,7 @@ const ModelClip: React.FC<Props> = ({
                         text={`${it.count}`}
                         fontSize={11}
                         fontStyle="500"
-                        fontFamily="Poppins"
+                        fontFamily="Inter"
                         fill="rgba(255,255,255,0.82)"
                       />
                     </Group>

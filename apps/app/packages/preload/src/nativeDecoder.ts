@@ -1,21 +1,19 @@
 /**
- * Native decoder interface backed by a dedicated worker_thread.
+ * Native decoder interface backed by node:worker_threads.
  *
- * This keeps decode off the renderer main thread while preserving the same
- * API shape for renderer consumers (now async).
+ * Renderer now owns the Web Worker transport. Preload keeps a pure
+ * worker_threads transport for any preload/main-world callers.
  */
 
-import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
 
 type DecoderWorkerRequest =
-  | { id: number; type: "loadFile"; payload: { filePath: string } }
+  | { id: number; type: "loadFile"; payload: { filePath: string; decoderKey?: string } }
   | {
       id: number;
       type: "decodeFrame";
@@ -25,6 +23,7 @@ type DecoderWorkerRequest =
         height: number;
         timestamp: number;
         keyframeOnly: boolean;
+        decoderKey?: string;
       };
     }
   | {
@@ -36,6 +35,7 @@ type DecoderWorkerRequest =
         height: number;
         startTime: number;
         endTime: number;
+        decoderKey?: string;
       };
     };
 
@@ -48,29 +48,18 @@ type Pending = {
   reject: (reason?: unknown) => void;
 };
 
-type NativeAddon = {
-  loadFile: (filePath: string) => NativeDecoderFileInfo;
-  decodeFrameInto: (
-    filePath: string,
-    buffer: Uint8Array,
-    timestamp: number,
-    keyframeOnly?: boolean,
-  ) => { timestamp: number };
-  decodeNextFrame: (
-    filePath: string,
-    buffer: Uint8Array,
-    startTime?: number,
-    endTime?: number,
-  ) => { timestamp: number } | null;
-};
+class DecoderWorkerOperationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DecoderWorkerOperationError";
+  }
+}
 
 let decodeWorker: Worker | null = null;
-let workerEnabled = true;
-let directAddon: NativeAddon | null = null;
 let nextRequestId = 1;
 const pending = new Map<number, Pending>();
 
-function rejectAllPending(error: Error) {
+function rejectAllPending(error: Error): void {
   for (const { reject } of pending.values()) reject(error);
   pending.clear();
 }
@@ -108,7 +97,6 @@ function getWorkerPath(): string {
 }
 
 function ensureDecodeWorker(): Worker {
-  if (!workerEnabled) throw new Error("native decoder worker disabled");
   if (decodeWorker) return decodeWorker;
 
   const worker = new Worker(getWorkerPath(), {
@@ -123,7 +111,7 @@ function ensureDecodeWorker(): Worker {
       entry.resolve(msg.result);
       return;
     }
-    entry.reject(new Error(msg.error || "Native decoder worker error"));
+    entry.reject(new DecoderWorkerOperationError(msg.error || "Native decoder worker error"));
   });
 
   worker.on("error", (error) => {
@@ -133,13 +121,19 @@ function ensureDecodeWorker(): Worker {
 
   worker.on("exit", (code) => {
     decodeWorker = null;
-    if (code !== 0) {
-      rejectAllPending(new Error(`Native decoder worker exited with code ${code}`));
-    }
+    if (code === 0) return;
+    rejectAllPending(new Error(`Native decoder worker exited with code ${code}`));
   });
 
   decodeWorker = worker;
   return worker;
+}
+
+function terminateDecodeWorker(): void {
+  const worker = decodeWorker;
+  decodeWorker = null;
+  if (!worker) return;
+  void worker.terminate();
 }
 
 function postToDecodeWorker<T>(type: DecoderWorkerRequest["type"], payload: object): Promise<T> {
@@ -152,58 +146,15 @@ function postToDecodeWorker<T>(type: DecoderWorkerRequest["type"], payload: obje
   });
 }
 
-function getDirectAddon(): NativeAddon {
-  if (directAddon) return directAddon;
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  directAddon = require(getAddonPath()) as NativeAddon;
-  return directAddon;
-}
-
-function runDirect<T>(type: DecoderWorkerRequest["type"], payload: any): T {
-  const addon = getDirectAddon();
-  if (type === "loadFile") {
-    return addon.loadFile(payload.filePath) as T;
-  }
-  if (type === "decodeFrame") {
-    const data = new Uint8Array(payload.width * payload.height * 4);
-    const res = addon.decodeFrameInto(
-      payload.filePath,
-      data,
-      payload.timestamp,
-      payload.keyframeOnly,
-    );
-    return { timestamp: res.timestamp, data } as T;
-  }
-  if (type === "decodeNextFrame") {
-    const data = new Uint8Array(payload.width * payload.height * 4);
-    const start = payload.startTime >= 0 ? payload.startTime : undefined;
-    const end = payload.endTime >= 0 ? payload.endTime : undefined;
-    const res = addon.decodeNextFrame(payload.filePath, data, start, end);
-    if (!res) return null as T;
-    return { timestamp: res.timestamp, data } as T;
-  }
-  throw new Error(`Unknown decoder op: ${type}`);
-}
-
 async function callDecoder<T>(type: DecoderWorkerRequest["type"], payload: object): Promise<T> {
-  if (!workerEnabled) return runDirect<T>(type, payload);
   try {
     return await postToDecodeWorker<T>(type, payload);
   } catch (error) {
-    workerEnabled = false;
-    if (decodeWorker) {
-      try {
-        decodeWorker.terminate();
-      } catch {
-        // ignore
-      }
-      decodeWorker = null;
+    if (error instanceof DecoderWorkerOperationError) {
+      throw error;
     }
-    console.warn(
-      "[native-decoder] worker failed; falling back to direct addon decode:",
-      error instanceof Error ? error.message : String(error),
-    );
-    return runDirect<T>(type, payload);
+    terminateDecodeWorker();
+    throw error;
   }
 }
 
@@ -230,24 +181,22 @@ export type NativeDecoderFileInfo = {
   };
 };
 
-/**
- * Load a video file and return its metadata. Decoder state is cached natively by file path.
- */
-export async function nativeDecoderLoadFile(filePath: string): Promise<NativeDecoderFileInfo> {
-  const result = await callDecoder<NativeDecoderFileInfo>("loadFile", { filePath });
+export async function nativeDecoderLoadFile(
+  filePath: string,
+  decoderKey?: string,
+): Promise<NativeDecoderFileInfo> {
+  const result = await callDecoder<NativeDecoderFileInfo>("loadFile", { filePath, decoderKey });
   if (!result?.video) throw new Error("No video stream found");
   return result;
 }
 
-/**
- * Decode a single frame at timestamp seconds.
- */
 export async function nativeDecoderDecodeFrame(
   filePath: string,
   width: number,
   height: number,
   timestamp: number,
   keyframeOnly = false,
+  decoderKey?: string,
 ): Promise<{ timestamp: number; data: Uint8Array }> {
   const result = await callDecoder<{ timestamp: number; data: Uint8Array }>("decodeFrame", {
     filePath,
@@ -255,20 +204,19 @@ export async function nativeDecoderDecodeFrame(
     height,
     timestamp,
     keyframeOnly,
+    decoderKey,
   });
   const data = result.data instanceof Uint8Array ? result.data : new Uint8Array(result.data);
   return { timestamp: result.timestamp, data };
 }
 
-/**
- * Decode the next sequential frame (or seek when startTime >= 0).
- */
 export async function nativeDecoderDecodeNextFrame(
   filePath: string,
   width: number,
   height: number,
   startTime = -1,
   endTime = -1,
+  decoderKey?: string,
 ): Promise<{ timestamp: number; data: Uint8Array } | null> {
   const result = await callDecoder<{ timestamp: number; data: Uint8Array } | null>(
     "decodeNextFrame",
@@ -278,6 +226,7 @@ export async function nativeDecoderDecodeNextFrame(
       height,
       startTime,
       endTime,
+      decoderKey,
     },
   );
   if (!result) return null;

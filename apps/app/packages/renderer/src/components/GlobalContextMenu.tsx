@@ -513,7 +513,7 @@ const GlobalContextMenu: React.FC = () => {
               top: position.y,
               zIndex: 100,
             }}
-            className="w-52 font-poppins select-none rounded-md border border-brand-light/10 bg-brand-background-light shadow-lg"
+            className="w-52 font-inter select-none rounded-md border border-brand-light/10 bg-brand-background-light shadow-lg"
           >
             {content}
           </div>,

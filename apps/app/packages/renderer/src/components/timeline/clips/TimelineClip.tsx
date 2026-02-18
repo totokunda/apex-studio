@@ -18,6 +18,7 @@ import { useAssetControlsStore } from "@/lib/assetControl";
 import { Image, Group, Rect, Text, Line } from "react-konva";
 import Konva from "konva";
 import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
+import { SELECTION_STROKE_COLOR } from "@/lib/selectionStroke";
 import {
   MediaInfo,
   ShapeClipProps,
@@ -1910,7 +1911,7 @@ const TimelineClip: React.FC<
                 cornerRadius={safeCornerRadius}
                 fillLinearGradientStartPoint={{ x: 0, y: 0 }}
                 fillLinearGradientEndPoint={{ x: clipWidth, y: 0 }}
-                fillLinearGradientColorStops={[0, "#AE81CE", 1, "#6A5ACD"]}
+                fillLinearGradientColorStops={[0, SELECTION_STROKE_COLOR, 1, "#6A5ACD"]}
                 opacity={0.9}
               />
               {/* Stacked preview cards */}
@@ -2010,7 +2011,7 @@ const TimelineClip: React.FC<
                     y={assetMode ? 12 : 16}
                     text={"Group"}
                     fontSize={assetMode ? 9.5 : 10.5}
-                    fontFamily="Poppins"
+                    fontFamily="Inter"
                     fontStyle="500"
                     fill="white"
                     align="left"
@@ -2061,7 +2062,7 @@ const TimelineClip: React.FC<
                             y={startY - 1}
                             text={`${it.count}`}
                             fontSize={assetMode ? 9.5 : 11}
-                            fontFamily="Poppins"
+                            fontFamily="Inter"
                             fill="rgba(255,255,255,0.82)"
                           />
                         </Group>
@@ -2195,7 +2196,7 @@ const TimelineClip: React.FC<
                     ((currentClip as ShapeClipProps)?.shapeType?.slice(1) ?? "")
                   }
                   fontSize={9.5}
-                  fontFamily="Poppins"
+                  fontFamily="Inter"
                   fontStyle="500"
                   fill="white"
                   align="left"
@@ -2224,7 +2225,7 @@ const TimelineClip: React.FC<
                 }
                 fontSize={10}
                 fontFamily={
-                  (currentClip as TextClipProps)?.fontFamily ?? "Poppins"
+                  (currentClip as TextClipProps)?.fontFamily ?? "Inter"
                 }
                 fontStyle="500"
                 fill="#151517"
@@ -2251,7 +2252,7 @@ const TimelineClip: React.FC<
                 y={timelineHeight / 2}
                 text={(currentClip as FilterClipProps)?.name ?? ""}
                 fontSize={9.5}
-                fontFamily={"Poppins"}
+                fontFamily={"Inter"}
                 fontStyle="500"
                 fill="#ffffff"
                 align="left"
@@ -2277,7 +2278,7 @@ const TimelineClip: React.FC<
                 y={timelineHeight / 2}
                 text="Drawing"
                 fontSize={9.5}
-                fontFamily="Poppins"
+                fontFamily=""
                 fontStyle="500"
                 fill="white"
                 align="left"

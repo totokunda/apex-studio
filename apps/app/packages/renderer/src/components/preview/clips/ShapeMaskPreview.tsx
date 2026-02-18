@@ -8,6 +8,7 @@ import {
   RegularPolygon,
 } from "react-konva";
 import { useClipStore } from "@/lib/clip";
+import { SELECTION_STROKE_COLOR } from "@/lib/selectionStroke";
 import { useViewportStore } from "@/lib/viewport";
 import { useControlsStore } from "@/lib/control";
 import { useMaskStore } from "@/lib/mask";
@@ -618,7 +619,7 @@ const ShapeMaskPreview: React.FC<ShapeMaskPreviewProps> = ({
       <Transformer
         visible={canInteract && isSelected && !isFullscreen}
         ref={transformerRef}
-        borderStroke="#AE81CE"
+        borderStroke={SELECTION_STROKE_COLOR}
         anchorCornerRadius={8}
         anchorStroke="#E3E3E3"
         anchorStrokeWidth={1}

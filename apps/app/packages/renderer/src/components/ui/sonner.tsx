@@ -9,17 +9,17 @@ const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner
       theme={theme as ToasterProps["theme"]}
-      className="toaster group font-poppins"
+      className="toaster group font-inter"
       toastOptions={{
         classNames: {
           toast:
-            "group text-start !text-[11.5px] rounded-md! toast group-[.toaster]:bg-brand-background! font-poppins group-[.toaster]:text-brand-light group-[.toaster]:border-border group-[.toaster]:shadow-lg",
+            "group text-start !text-[11.5px] rounded-md! toast group-[.toaster]:bg-brand-background! font-inter group-[.toaster]:text-brand-light group-[.toaster]:border-border group-[.toaster]:shadow-lg",
           description:
-            "group-[.toast]:text-muted-foreground !text-[10.5px] font-poppins",
+            "group-[.toast]:text-muted-foreground !text-[10.5px] font-inter",
           actionButton:
-            "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground !text-[10.5px] font-poppins",
+            "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground !text-[10.5px] font-inter",
           cancelButton:
-            "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground !text-[10.5px] font-poppins",
+            "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground !text-[10.5px] font-inter",
         },
       }}
       {...props}

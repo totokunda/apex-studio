@@ -425,7 +425,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg w-full bg-brand-background/90 backdrop-blur-sm text-foreground p-0 gap-0 overflow-hidden dark font-poppins border border-brand-light/10">
+      <DialogContent className="max-w-lg w-full bg-brand-background/90 backdrop-blur-sm text-foreground p-0 gap-0 overflow-hidden dark font-inter border border-brand-light/10">
         <DialogHeader className="px-5 py-3.5 border-b border-brand-light/10 flex-shrink-0 bg-brand-background">
           <DialogTitle className="text-start text-[13px] font-medium text-brand-light">
             Export
@@ -449,7 +449,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     >
                       <SelectValue placeholder="Select export type" />
                     </SelectTrigger>
-                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                    <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                       <SelectItem
                         value="video"
                         className="text-[11px] font-medium"
@@ -539,7 +539,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     >
                       <SelectValue placeholder="Select resolution" />
                     </SelectTrigger>
-                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                    <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                       {RESOLUTION_OPTIONS.map((opt) => (
                         <SelectItem
                           key={opt.value}
@@ -568,7 +568,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       >
                         <SelectValue placeholder="Select bitrate" />
                       </SelectTrigger>
-                      <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                      <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                         {BITRATE_OPTIONS.map((opt) => (
                           <SelectItem
                             key={opt.value}
@@ -598,7 +598,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       >
                         <SelectValue placeholder="Select format" />
                       </SelectTrigger>
-                      <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                      <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                         {IMAGE_FORMAT_OPTIONS.map((opt) => (
                           <SelectItem
                             key={opt.value}
@@ -632,7 +632,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       >
                         <SelectValue placeholder="Select codec" />
                       </SelectTrigger>
-                      <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                      <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                         {CODEC_OPTIONS.map((opt) => (
                           <SelectItem
                             key={opt.value}
@@ -662,7 +662,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       >
                         <SelectValue placeholder="Select format" />
                       </SelectTrigger>
-                      <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                      <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                         {FORMAT_OPTIONS.map((opt) => (
                           <SelectItem
                             key={opt.value}
@@ -805,7 +805,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                         >
                           <SelectValue placeholder="Select audio format" />
                         </SelectTrigger>
-                        <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                        <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                           {AUDIO_FORMAT_OPTIONS.map((opt) => (
                             <SelectItem
                               key={opt.value}

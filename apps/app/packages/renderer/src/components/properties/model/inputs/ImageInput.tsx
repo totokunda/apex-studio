@@ -351,7 +351,7 @@ const PopoverImage: React.FC<PopoverImageProps> = ({
       align="start"
       sideOffset={20}
       className={cn(
-        "p-2 z-90 dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-poppins transition-all duration-150",
+        "p-2 z-90 dark h-full flex flex-col gap-y-3 border border-brand-light/10 rounded-[7px] font-inter transition-all duration-150",
         selectedTab === "timeline" ? "w-[600px]" : "w-96",
       )}
       onOpenAutoFocus={() => {
@@ -1623,7 +1623,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
                       <button
                         onClick={() => setIsPopoverOpen(true)}
                         className={cn(
-                          "z-30 duration-150 flex items-center px-6 py-2  bg-brand-light hover:bg-brand-light/90 shadow-md justify-center rounded text-[10.5px] font-poppins font-medium text-brand-accent-two-shade transition-colors",
+                          "z-30 duration-150 flex items-center px-6 py-2  bg-brand-light hover:bg-brand-light/90 shadow-md justify-center rounded text-[10.5px] font-inter font-medium text-brand-accent-two-shade transition-colors",
                           {
                             "w-28 gap-x-1": !!height,
                             "w-40 gap-x-2": !height,
@@ -1644,7 +1644,7 @@ const ImageInput: React.FC<ImageInputProps> = ({
                           <button
                             onClick={() => setIsDialogOpen(true)}
                             className={cn(
-                              "z-30 duration-150 justify-center shadow-md flex items-center  px-6 py-2 font-poppins font-medium bg-brand-accent-two-shade  hover:bg-brand-accent-two-shade/90 rounded text-[10.5px] text-brand-light transition-colors",
+                              "z-30 duration-150 justify-center shadow-md flex items-center  px-6 py-2 font-inter font-medium bg-brand-accent-two-shade  hover:bg-brand-accent-two-shade/90 rounded text-[10.5px] text-brand-light transition-colors",
                               {
                                 "w-28 gap-x-1": !!height,
                                 "w-40 gap-x-2": !height,

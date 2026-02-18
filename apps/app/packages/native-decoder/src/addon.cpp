@@ -4,6 +4,7 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <deque>
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
@@ -86,68 +87,71 @@ static int convertFrameToRGBA(AVFrame* srcFrame, uint8_t* dstData, int width, in
   AVPixelFormat srcFmt = static_cast<AVPixelFormat>(srcFrame->format);
   int dstStride = width * 4;
   int result = -1;
+  const bool sameDimensions = (srcFrame->width == width && srcFrame->height == height);
 
-  // libyuv naming on little-endian:
-  //   "ARGB" = B,G,R,A in memory = BGRA
-  //   "ABGR" = R,G,B,A in memory = RGBA  ← what we want
-
-  if (srcFmt == AV_PIX_FMT_YUV420P || srcFmt == AV_PIX_FMT_YUVJ420P) {
-    result = libyuv::I420ToABGR(
-        srcFrame->data[0], srcFrame->linesize[0],
-        srcFrame->data[1], srcFrame->linesize[1],
-        srcFrame->data[2], srcFrame->linesize[2],
-        dstData, dstStride, width, height);
-  } else if (srcFmt == AV_PIX_FMT_NV12) {
-    result = libyuv::NV12ToABGR(
-        srcFrame->data[0], srcFrame->linesize[0],
-        srcFrame->data[1], srcFrame->linesize[1],
-        dstData, dstStride, width, height);
-  } else if (srcFmt == AV_PIX_FMT_NV21) {
-    result = libyuv::NV21ToABGR(
-        srcFrame->data[0], srcFrame->linesize[0],
-        srcFrame->data[1], srcFrame->linesize[1],
-        dstData, dstStride, width, height);
-  } else if (srcFmt == AV_PIX_FMT_YUV422P || srcFmt == AV_PIX_FMT_YUVJ422P) {
-    result = libyuv::I422ToABGR(
-        srcFrame->data[0], srcFrame->linesize[0],
-        srcFrame->data[1], srcFrame->linesize[1],
-        srcFrame->data[2], srcFrame->linesize[2],
-        dstData, dstStride, width, height);
-  } else if (srcFmt == AV_PIX_FMT_YUV444P || srcFmt == AV_PIX_FMT_YUVJ444P) {
-    result = libyuv::I444ToABGR(
-        srcFrame->data[0], srcFrame->linesize[0],
-        srcFrame->data[1], srcFrame->linesize[1],
-        srcFrame->data[2], srcFrame->linesize[2],
-        dstData, dstStride, width, height);
-  } else if (srcFmt == AV_PIX_FMT_UYVY422) {
-    // No direct UYVYToABGR in libyuv — go through ARGB then swap
-    result = libyuv::UYVYToARGB(
-        srcFrame->data[0], srcFrame->linesize[0],
-        dstData, dstStride, width, height);
-    if (result == 0) {
+  // libyuv fast paths are only safe for 1:1 conversion. For resizing, use swscale.
+  if (sameDimensions) {
+    // libyuv naming on little-endian:
+    //   "ARGB" = B,G,R,A in memory = BGRA
+    //   "ABGR" = R,G,B,A in memory = RGBA  ← what we want
+    if (srcFmt == AV_PIX_FMT_YUV420P || srcFmt == AV_PIX_FMT_YUVJ420P) {
+      result = libyuv::I420ToABGR(
+          srcFrame->data[0], srcFrame->linesize[0],
+          srcFrame->data[1], srcFrame->linesize[1],
+          srcFrame->data[2], srcFrame->linesize[2],
+          dstData, dstStride, width, height);
+    } else if (srcFmt == AV_PIX_FMT_NV12) {
+      result = libyuv::NV12ToABGR(
+          srcFrame->data[0], srcFrame->linesize[0],
+          srcFrame->data[1], srcFrame->linesize[1],
+          dstData, dstStride, width, height);
+    } else if (srcFmt == AV_PIX_FMT_NV21) {
+      result = libyuv::NV21ToABGR(
+          srcFrame->data[0], srcFrame->linesize[0],
+          srcFrame->data[1], srcFrame->linesize[1],
+          dstData, dstStride, width, height);
+    } else if (srcFmt == AV_PIX_FMT_YUV422P || srcFmt == AV_PIX_FMT_YUVJ422P) {
+      result = libyuv::I422ToABGR(
+          srcFrame->data[0], srcFrame->linesize[0],
+          srcFrame->data[1], srcFrame->linesize[1],
+          srcFrame->data[2], srcFrame->linesize[2],
+          dstData, dstStride, width, height);
+    } else if (srcFmt == AV_PIX_FMT_YUV444P || srcFmt == AV_PIX_FMT_YUVJ444P) {
+      result = libyuv::I444ToABGR(
+          srcFrame->data[0], srcFrame->linesize[0],
+          srcFrame->data[1], srcFrame->linesize[1],
+          srcFrame->data[2], srcFrame->linesize[2],
+          dstData, dstStride, width, height);
+    } else if (srcFmt == AV_PIX_FMT_UYVY422) {
+      // No direct UYVYToABGR in libyuv — go through ARGB then swap
+      result = libyuv::UYVYToARGB(
+          srcFrame->data[0], srcFrame->linesize[0],
+          dstData, dstStride, width, height);
+      if (result == 0) {
+        result = libyuv::ARGBToABGR(
+            dstData, dstStride, dstData, dstStride, width, height);
+      }
+    } else if (srcFmt == AV_PIX_FMT_YUYV422) {
+      // No direct YUY2ToABGR in libyuv — go through ARGB then swap
+      result = libyuv::YUY2ToARGB(
+          srcFrame->data[0], srcFrame->linesize[0],
+          dstData, dstStride, width, height);
+      if (result == 0) {
+        result = libyuv::ARGBToABGR(
+            dstData, dstStride, dstData, dstStride, width, height);
+      }
+    } else if (srcFmt == AV_PIX_FMT_RGBA) {
+      // Already RGBA — just copy
+      libyuv::ARGBCopy(
+          srcFrame->data[0], srcFrame->linesize[0],
+          dstData, dstStride, width, height);
+      result = 0;
+    } else if (srcFmt == AV_PIX_FMT_BGRA) {
+      // BGRA → RGBA: swap R and B
       result = libyuv::ARGBToABGR(
-          dstData, dstStride, dstData, dstStride, width, height);
+          srcFrame->data[0], srcFrame->linesize[0],
+          dstData, dstStride, width, height);
     }
-  } else if (srcFmt == AV_PIX_FMT_YUYV422) {
-    // No direct YUY2ToABGR in libyuv — go through ARGB then swap
-    result = libyuv::YUY2ToARGB(
-        srcFrame->data[0], srcFrame->linesize[0],
-        dstData, dstStride, width, height);
-    if (result == 0) {
-      result = libyuv::ARGBToABGR(
-          dstData, dstStride, dstData, dstStride, width, height);
-    }
-  } else if (srcFmt == AV_PIX_FMT_RGBA) {
-    // Already RGBA — just copy
-    libyuv::ARGBCopy(
-        srcFrame->data[0], srcFrame->linesize[0],
-        dstData, dstStride, width, height);
-    result = 0;
-  } else if (srcFmt == AV_PIX_FMT_BGRA) {
-    // BGRA → RGBA: swap R and B
-    result = libyuv::ARGBToABGR(
-        srcFrame->data[0], srcFrame->linesize[0],
-        dstData, dstStride, width, height);
   }
 
   if (result != 0) {
@@ -346,27 +350,52 @@ static bool copyPixelBufferToRGBA(CVPixelBufferRef pixelBuffer, uint8_t* dstData
   int srcHeight = static_cast<int>(CVPixelBufferGetHeight(pixelBuffer));
 
   bool ok = true;
-  int copyWidth = std::min(width, srcWidth);
-  int copyHeight = std::min(height, srcHeight);
   int dstStride = width * 4;
-  if (!src || copyWidth <= 0 || copyHeight <= 0) {
+  const bool sameDimensions = (srcWidth == width && srcHeight == height);
+  if (!src || srcWidth <= 0 || srcHeight <= 0) {
     ok = false;
-  } else if (srcIsBGRA) {
-    ok = libyuv::ARGBToABGR(src, static_cast<int>(srcStride), dstData, dstStride, copyWidth, copyHeight) == 0;
-  } else {
-    for (int y = 0; y < copyHeight; ++y) {
-      std::memcpy(dstData + y * dstStride, src + y * srcStride, static_cast<size_t>(copyWidth) * 4);
+  } else if (sameDimensions) {
+    if (srcIsBGRA) {
+      ok = libyuv::ARGBToABGR(src, static_cast<int>(srcStride), dstData, dstStride, width, height) == 0;
+    } else {
+      for (int y = 0; y < height; ++y) {
+        std::memcpy(dstData + y * dstStride, src + y * srcStride, static_cast<size_t>(width) * 4);
+      }
     }
-  }
-
-  // Zero-fill any padded area if source dimensions differ.
-  if (ok && (copyWidth != width || copyHeight != height)) {
-    for (int y = 0; y < height; ++y) {
-      uint8_t* row = dstData + y * dstStride;
-      if (y >= copyHeight) {
-        std::memset(row, 0, dstStride);
-      } else if (copyWidth < width) {
-        std::memset(row + copyWidth * 4, 0, static_cast<size_t>(width - copyWidth) * 4);
+  } else {
+    const size_t srcBytes = static_cast<size_t>(srcWidth) * static_cast<size_t>(srcHeight) * 4;
+    std::vector<uint8_t> srcRgba(srcBytes);
+    if (srcRgba.empty()) {
+      ok = false;
+    } else {
+      const int srcRgbaStride = srcWidth * 4;
+      if (srcIsBGRA) {
+        ok = libyuv::ARGBToABGR(
+                 src,
+                 static_cast<int>(srcStride),
+                 srcRgba.data(),
+                 srcRgbaStride,
+                 srcWidth,
+                 srcHeight) == 0;
+      } else {
+        for (int y = 0; y < srcHeight; ++y) {
+          std::memcpy(
+              srcRgba.data() + y * srcRgbaStride,
+              src + y * srcStride,
+              static_cast<size_t>(srcWidth) * 4);
+        }
+      }
+      if (ok) {
+        ok = libyuv::ARGBScale(
+                 srcRgba.data(),
+                 srcRgbaStride,
+                 srcWidth,
+                 srcHeight,
+                 dstData,
+                 dstStride,
+                 width,
+                 height,
+                 libyuv::kFilterBilinear) == 0;
       }
     }
   }
@@ -399,6 +428,7 @@ private:
 
   // ── Decode cursor state ──
   int64_t lastDecodedPts = AV_NOPTS_VALUE;
+  int64_t lastServedPts = AV_NOPTS_VALUE;
   bool    decoderFlushed = true;
   bool    decoderEofSignaled = false;
 
@@ -406,6 +436,23 @@ private:
   AVPacket* pkt = nullptr;
   AVFrame*  frame = nullptr;
   AVFrame*  swFrame = nullptr;
+
+  struct CachedFrame {
+    int64_t pts = AV_NOPTS_VALUE;
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> rgba;
+  };
+
+  std::deque<CachedFrame> historyCache;
+  std::deque<CachedFrame> aheadCache;
+  size_t historyCacheBytes = 0;
+  size_t aheadCacheBytes = 0;
+
+  static constexpr size_t kHistoryMaxFrames = 3;
+  static constexpr size_t kAheadMaxFrames = 4;
+  static constexpr size_t kHistoryBudgetBytes = 96 * 1024 * 1024;
+  static constexpr size_t kAheadBudgetBytes = 128 * 1024 * 1024;
 
 #if defined(__APPLE__)
   struct VTDecodeOutput {
@@ -673,6 +720,160 @@ private:
     return convertFrameToRGBA(src, dstData, width, height) == 0;
   }
 
+  static size_t rgbaByteSize(int width, int height) {
+    if (width <= 0 || height <= 0) return 0;
+    return static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  }
+
+  void clearFrameCaches() {
+    historyCache.clear();
+    aheadCache.clear();
+    historyCacheBytes = 0;
+    aheadCacheBytes = 0;
+  }
+
+  void trimHistoryCache() {
+    while (!historyCache.empty() &&
+           (historyCache.size() > kHistoryMaxFrames ||
+            historyCacheBytes > kHistoryBudgetBytes)) {
+      historyCacheBytes -= historyCache.front().rgba.size();
+      historyCache.pop_front();
+    }
+  }
+
+  void trimAheadCache() {
+    while (!aheadCache.empty() &&
+           (aheadCache.size() > kAheadMaxFrames ||
+            aheadCacheBytes > kAheadBudgetBytes)) {
+      aheadCacheBytes -= aheadCache.front().rgba.size();
+      aheadCache.pop_front();
+    }
+  }
+
+  void pushHistoryEntry(CachedFrame&& entry) {
+    if (entry.pts == AV_NOPTS_VALUE || entry.rgba.empty()) return;
+    if (!historyCache.empty() && historyCache.back().pts == entry.pts) return;
+    historyCacheBytes += entry.rgba.size();
+    historyCache.emplace_back(std::move(entry));
+    trimHistoryCache();
+  }
+
+  void pushAheadEntry(CachedFrame&& entry) {
+    if (entry.pts == AV_NOPTS_VALUE || entry.rgba.empty()) return;
+    if (!aheadCache.empty() && aheadCache.back().pts == entry.pts) return;
+    aheadCacheBytes += entry.rgba.size();
+    aheadCache.emplace_back(std::move(entry));
+    trimAheadCache();
+  }
+
+  void noteServedFrameCopy(int64_t pts, const uint8_t* rgba, int width, int height) {
+    const size_t bytes = rgbaByteSize(width, height);
+    if (pts == AV_NOPTS_VALUE || !rgba || bytes == 0) return;
+    CachedFrame entry;
+    entry.pts = pts;
+    entry.width = width;
+    entry.height = height;
+    entry.rgba.assign(rgba, rgba + bytes);
+    pushHistoryEntry(std::move(entry));
+    lastServedPts = pts;
+  }
+
+  bool serveHistoryFrameNear(int64_t targetPts, int64_t tolerancePts,
+                             uint8_t* dstData, int width, int height, int64_t* outPts) {
+    if (historyCache.empty()) return false;
+    size_t bestIndex = historyCache.size();
+    int64_t bestDiff = INT64_MAX;
+    for (size_t i = 0; i < historyCache.size(); ++i) {
+      const CachedFrame& entry = historyCache[i];
+      if (entry.width != width || entry.height != height || entry.rgba.empty()) continue;
+      const int64_t diff = std::llabs(entry.pts - targetPts);
+      if (diff > tolerancePts) continue;
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIndex = i;
+      }
+    }
+    if (bestIndex == historyCache.size()) return false;
+
+    const CachedFrame& entry = historyCache[bestIndex];
+    std::memcpy(dstData, entry.rgba.data(), entry.rgba.size());
+    *outPts = entry.pts;
+    lastServedPts = entry.pts;
+    return true;
+  }
+
+  bool consumeAheadForTarget(int64_t targetPts, int64_t tolerancePts,
+                             uint8_t* dstData, int width, int height, int64_t* outPts) {
+    if (aheadCache.empty()) return false;
+    size_t selected = aheadCache.size();
+    for (size_t i = 0; i < aheadCache.size(); ++i) {
+      const CachedFrame& entry = aheadCache[i];
+      if (entry.width != width || entry.height != height || entry.rgba.empty()) continue;
+      if (entry.pts + tolerancePts >= targetPts) {
+        selected = i;
+        break;
+      }
+    }
+    if (selected == aheadCache.size()) return false;
+
+    for (size_t i = 0; i < selected; ++i) {
+      CachedFrame consumed = std::move(aheadCache.front());
+      aheadCacheBytes -= consumed.rgba.size();
+      aheadCache.pop_front();
+      pushHistoryEntry(std::move(consumed));
+    }
+
+    CachedFrame frameHit = std::move(aheadCache.front());
+    aheadCacheBytes -= frameHit.rgba.size();
+    aheadCache.pop_front();
+    if (frameHit.width != width || frameHit.height != height || frameHit.rgba.empty()) {
+      return false;
+    }
+
+    std::memcpy(dstData, frameHit.rgba.data(), frameHit.rgba.size());
+    *outPts = frameHit.pts;
+    lastServedPts = frameHit.pts;
+    pushHistoryEntry(std::move(frameHit));
+    return true;
+  }
+
+  bool consumeNextAheadFrame(uint8_t* dstData, int width, int height, int64_t* outPts) {
+    while (!aheadCache.empty()) {
+      CachedFrame frameHit = std::move(aheadCache.front());
+      aheadCacheBytes -= frameHit.rgba.size();
+      aheadCache.pop_front();
+      if (frameHit.width != width || frameHit.height != height || frameHit.rgba.empty()) continue;
+      std::memcpy(dstData, frameHit.rgba.data(), frameHit.rgba.size());
+      *outPts = frameHit.pts;
+      lastServedPts = frameHit.pts;
+      pushHistoryEntry(std::move(frameHit));
+      return true;
+    }
+    return false;
+  }
+
+  void prefetchAheadFrames(int width, int height, int maxFrames) {
+    if (maxFrames <= 0) return;
+    const size_t frameBytes = rgbaByteSize(width, height);
+    if (frameBytes == 0 || frameBytes > kAheadBudgetBytes) return;
+
+    int produced = 0;
+    while (produced < maxFrames &&
+           aheadCache.size() < kAheadMaxFrames &&
+           aheadCacheBytes + frameBytes <= kAheadBudgetBytes) {
+      int64_t pts = decodeOneFrame();
+      if (pts == AV_NOPTS_VALUE) break;
+      CachedFrame entry;
+      entry.pts = pts;
+      entry.width = width;
+      entry.height = height;
+      entry.rgba.resize(frameBytes);
+      if (!writeCurrentFrameToRGBA(entry.rgba.data(), width, height)) break;
+      pushAheadEntry(std::move(entry));
+      produced++;
+    }
+  }
+
 public:
   ~VideoDecoder() { cleanup(); }
 
@@ -699,8 +900,10 @@ public:
     audioStreamIndex = -1;
     usingHwAccel = false;
     lastDecodedPts = AV_NOPTS_VALUE;
+    lastServedPts = AV_NOPTS_VALUE;
     decoderFlushed = true;
     decoderEofSignaled = false;
+    clearFrameCaches();
   }
 
   bool open(const std::string& filename) {
@@ -836,8 +1039,10 @@ public:
       avcodec_flush_buffers(videoCodecCtx);
     }
     lastDecodedPts = AV_NOPTS_VALUE;
+    lastServedPts = AV_NOPTS_VALUE;
     decoderFlushed = false;
     decoderEofSignaled = false;
+    clearFrameCaches();
     return true;
   }
 
@@ -954,6 +1159,17 @@ public:
                         bool keyframeOnly = false) {
     targetPts = clampSeekPts(targetPts);
     const int64_t fdur = std::max<int64_t>(1, frameDurationPts());
+    if (!keyframeOnly) {
+      int64_t cachedPts = AV_NOPTS_VALUE;
+      if (consumeAheadForTarget(targetPts, fdur / 2, dstData, width, height, &cachedPts)) {
+        prefetchAheadFrames(width, height, 1);
+        return cachedPts;
+      }
+      if (serveHistoryFrameNear(targetPts, fdur, dstData, width, height, &cachedPts)) {
+        return cachedPts;
+      }
+    }
+
     const double fpsValue = std::max(1.0, fps());
     const int64_t minForwardFrames = std::max<int64_t>(
         1, static_cast<int64_t>(std::llround(fpsValue * 3.0)));
@@ -982,6 +1198,7 @@ public:
       // Micro backward scrub jitter: reuse current frame instead of reseeking.
       if (targetPts <= lastDecodedPts) {
         if (!writeCurrentFrameToRGBA(dstData, width, height)) return AV_NOPTS_VALUE;
+        noteServedFrameCopy(lastDecodedPts, dstData, width, height);
         return lastDecodedPts;
       }
       // Near EOF, the next forward frame may not exist. Clamp to current.
@@ -990,6 +1207,7 @@ public:
           lastDecodedPts >= maxPts - fdur &&
           targetPts <= lastDecodedPts + fdur) {
         if (!writeCurrentFrameToRGBA(dstData, width, height)) return AV_NOPTS_VALUE;
+        noteServedFrameCopy(lastDecodedPts, dstData, width, height);
         return lastDecodedPts;
       }
     }
@@ -998,6 +1216,7 @@ public:
       int64_t pts = decodeOneFrame();
       if (pts == AV_NOPTS_VALUE) return AV_NOPTS_VALUE;
       if (!writeCurrentFrameToRGBA(dstData, width, height)) return AV_NOPTS_VALUE;
+      noteServedFrameCopy(pts, dstData, width, height);
       return pts;
     }
 
@@ -1020,11 +1239,13 @@ public:
       }
 
       if (!writeCurrentFrameToRGBA(dstData, width, height)) return AV_NOPTS_VALUE;
+      noteServedFrameCopy(pts, dstData, width, height);
       return pts;
     }
 
     if (fallbackPts != AV_NOPTS_VALUE) {
       if (!writeCurrentFrameToRGBA(dstData, width, height)) return AV_NOPTS_VALUE;
+      noteServedFrameCopy(fallbackPts, dstData, width, height);
       return fallbackPts;
     }
     return AV_NOPTS_VALUE;
@@ -1035,12 +1256,22 @@ public:
   // the decoded frame's PTS exceeds the end boundary.
   int64_t decodeNextFrameInto(uint8_t* dstData, int width, int height,
                               int64_t endPts = AV_NOPTS_VALUE) {
+    int64_t cachedPts = AV_NOPTS_VALUE;
+    if (consumeNextAheadFrame(dstData, width, height, &cachedPts)) {
+      if (endPts != AV_NOPTS_VALUE && cachedPts > endPts + frameDurationPts() / 2)
+        return AV_NOPTS_VALUE;
+      prefetchAheadFrames(width, height, 1);
+      return cachedPts;
+    }
+
     int64_t pts = decodeOneFrame();
     if (pts == AV_NOPTS_VALUE) return AV_NOPTS_VALUE;
     // Check end boundary (with half-frame tolerance so we don't drop the last frame)
     if (endPts != AV_NOPTS_VALUE && pts > endPts + frameDurationPts() / 2)
       return AV_NOPTS_VALUE;
     if (!writeCurrentFrameToRGBA(dstData, width, height)) return AV_NOPTS_VALUE;
+    noteServedFrameCopy(pts, dstData, width, height);
+    prefetchAheadFrames(width, height, 1);
     return pts;
   }
 
@@ -1049,15 +1280,30 @@ public:
   // Returns the PTS of that first frame, or AV_NOPTS_VALUE on error.
   int64_t seekToStart(int64_t startPts, uint8_t* dstData, int width, int height) {
     const int64_t fdur = std::max<int64_t>(1, frameDurationPts());
+    int64_t cachedPts = AV_NOPTS_VALUE;
+    if (consumeAheadForTarget(startPts, fdur / 2, dstData, width, height, &cachedPts)) {
+      prefetchAheadFrames(width, height, 2);
+      return cachedPts;
+    }
+    if (!decoderFlushed && lastServedPts != AV_NOPTS_VALUE &&
+        std::llabs(lastServedPts - startPts) <= fdur &&
+        serveHistoryFrameNear(startPts, fdur, dstData, width, height, &cachedPts)) {
+      prefetchAheadFrames(width, height, 2);
+      return cachedPts;
+    }
     // Clip boundaries are often contiguous (next start ~= previous end). If we
     // already decoded a frame within one frame of the new start, reuse it
     // instead of forcing a backward seek + GOP walk.
     if (!decoderFlushed && lastDecodedPts != AV_NOPTS_VALUE &&
         lastDecodedPts >= startPts && lastDecodedPts - startPts <= fdur) {
       if (!writeCurrentFrameToRGBA(dstData, width, height)) return AV_NOPTS_VALUE;
+      noteServedFrameCopy(lastDecodedPts, dstData, width, height);
+      prefetchAheadFrames(width, height, 2);
       return lastDecodedPts;
     }
-    return seekAndDecode(startPts, dstData, width, height, false);
+    int64_t pts = seekAndDecode(startPts, dstData, width, height, false);
+    if (pts != AV_NOPTS_VALUE) prefetchAheadFrames(width, height, 2);
+    return pts;
   }
 
   int videoWidth() const {
@@ -1126,8 +1372,14 @@ static void evictIfNeeded() {
   }
 }
 
-static VideoDecoder* getDecoder(Napi::Env env, const std::string& filename) {
-  auto it = g_decoderPool.find(filename);
+static std::string makeDecoderPoolKey(const std::string& filename, const std::string& decoderKey) {
+  if (decoderKey.empty()) return filename;
+  return decoderKey + "|" + filename;
+}
+
+static VideoDecoder* getDecoder(Napi::Env env, const std::string& filename, const std::string& decoderKey) {
+  const std::string poolKey = makeDecoderPoolKey(filename, decoderKey);
+  auto it = g_decoderPool.find(poolKey);
   if (it == g_decoderPool.end()) {
     evictIfNeeded();
     auto decoder = std::make_unique<VideoDecoder>();
@@ -1138,7 +1390,7 @@ static VideoDecoder* getDecoder(Napi::Env env, const std::string& filename) {
     DecoderEntry entry;
     entry.decoder = std::move(decoder);
     entry.lastUsed = std::chrono::steady_clock::now();
-    it = g_decoderPool.emplace(filename, std::move(entry)).first;
+    it = g_decoderPool.emplace(poolKey, std::move(entry)).first;
   } else {
     it->second.lastUsed = std::chrono::steady_clock::now();
   }
@@ -1157,7 +1409,11 @@ Napi::Object LoadFile(const Napi::CallbackInfo& info) {
     return Napi::Object::New(env);
   }
   std::string filename = info[0].As<Napi::String>().Utf8Value();
-  VideoDecoder* dec = getDecoder(env, filename);
+  std::string decoderKey = filename;
+  if (info.Length() > 1 && info[1].IsString()) {
+    decoderKey = info[1].As<Napi::String>().Utf8Value();
+  }
+  VideoDecoder* dec = getDecoder(env, filename, decoderKey);
   if (!dec) return Napi::Object::New(env);
 
   AVFormatContext* fmt = dec->getFormatContext();
@@ -1192,7 +1448,7 @@ Napi::Object LoadFile(const Napi::CallbackInfo& info) {
   return r;
 }
 
-// decodeFrameInto(path, buffer, timestamp, keyframeOnly?) → { timestamp }
+// decodeFrameInto(path, buffer, timestamp, keyframeOnly?, outWidth?, outHeight?, decoderKey?) → { timestamp }
 //
 // Smart seeking with cursor awareness:
 //  - Scrubbing forward frame-by-frame: no seek needed, just decode forward
@@ -1209,21 +1465,44 @@ Napi::Value DecodeFrameInto(const Napi::CallbackInfo& info) {
   auto arr = info[1].As<Napi::TypedArrayOf<uint8_t>>();
   double ts = info[2].As<Napi::Number>().DoubleValue();
   bool kfOnly = (info.Length() > 3 && info[3].IsBoolean()) ? info[3].As<Napi::Boolean>().Value() : false;
+  std::string decoderKey = filename;
+  if (info.Length() > 4 && info[4].IsString()) {
+    decoderKey = info[4].As<Napi::String>().Utf8Value();
+  }
+  if (info.Length() > 6 && info[6].IsString()) {
+    decoderKey = info[6].As<Napi::String>().Utf8Value();
+  }
 
-  VideoDecoder* dec = getDecoder(env, filename);
+  VideoDecoder* dec = getDecoder(env, filename, decoderKey);
   if (!dec) return env.Undefined();
-  int w = dec->videoWidth();
-  int h = dec->videoHeight();
-  if (w <= 0 || h <= 0) {
+  int srcW = dec->videoWidth();
+  int srcH = dec->videoHeight();
+  if (srcW <= 0 || srcH <= 0) {
     Napi::Error::New(env, "No video stream").ThrowAsJavaScriptException();
     return env.Undefined();
   }
-  if (arr.ByteLength() < static_cast<size_t>(w) * h * 4) {
+
+  int outW = srcW;
+  int outH = srcH;
+  if (info.Length() > 4 && info[4].IsNumber()) {
+    if (info.Length() < 6 || !info[4].IsNumber() || !info[5].IsNumber()) {
+      Napi::TypeError::New(env, "Expected output width/height as numbers").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    outW = info[4].As<Napi::Number>().Int32Value();
+    outH = info[5].As<Napi::Number>().Int32Value();
+  }
+  if (outW <= 0 || outH <= 0) {
+    Napi::TypeError::New(env, "Output width/height must be > 0").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  if (arr.ByteLength() < static_cast<size_t>(outW) * static_cast<size_t>(outH) * 4) {
     Napi::Error::New(env, "Buffer too small").ThrowAsJavaScriptException();
     return env.Undefined();
   }
 
-  int64_t resultPts = dec->seekAndDecode(dec->tsToPts(ts), arr.Data(), w, h, kfOnly);
+  int64_t resultPts = dec->seekAndDecode(dec->tsToPts(ts), arr.Data(), outW, outH, kfOnly);
   if (resultPts == AV_NOPTS_VALUE) {
     Napi::Error::New(env, "Could not decode frame").ThrowAsJavaScriptException();
     return env.Undefined();
@@ -1234,7 +1513,7 @@ Napi::Value DecodeFrameInto(const Napi::CallbackInfo& info) {
   return result;
 }
 
-// decodeNextFrame(path, buffer, startTime?, endTime?) → { timestamp } | null
+// decodeNextFrame(path, buffer, startTime?, endTime?, outWidth?, outHeight?, decoderKey?) → { timestamp } | null
 //
 // Sequential decode for playback / batch extraction.
 //
@@ -1258,6 +1537,13 @@ Napi::Value DecodeNextFrame(const Napi::CallbackInfo& info) {
 
   std::string filename = info[0].As<Napi::String>().Utf8Value();
   auto arr = info[1].As<Napi::TypedArrayOf<uint8_t>>();
+  std::string decoderKey = filename;
+  if (info.Length() > 4 && info[4].IsString()) {
+    decoderKey = info[4].As<Napi::String>().Utf8Value();
+  }
+  if (info.Length() > 6 && info[6].IsString()) {
+    decoderKey = info[6].As<Napi::String>().Utf8Value();
+  }
 
   // Optional start time: if provided and >= 0, seek to this position
   double startSec = -1.0;
@@ -1269,15 +1555,31 @@ Napi::Value DecodeNextFrame(const Napi::CallbackInfo& info) {
   if (info.Length() > 3 && info[3].IsNumber())
     endSec = info[3].As<Napi::Number>().DoubleValue();
 
-  VideoDecoder* dec = getDecoder(env, filename);
+  VideoDecoder* dec = getDecoder(env, filename, decoderKey);
   if (!dec) return env.Undefined();
-  int w = dec->videoWidth();
-  int h = dec->videoHeight();
-  if (w <= 0 || h <= 0) {
+  int srcW = dec->videoWidth();
+  int srcH = dec->videoHeight();
+  if (srcW <= 0 || srcH <= 0) {
     Napi::Error::New(env, "No video stream").ThrowAsJavaScriptException();
     return env.Undefined();
   }
-  if (arr.ByteLength() < static_cast<size_t>(w) * h * 4) {
+
+  int outW = srcW;
+  int outH = srcH;
+  if (info.Length() > 4 && info[4].IsNumber()) {
+    if (info.Length() < 6 || !info[4].IsNumber() || !info[5].IsNumber()) {
+      Napi::TypeError::New(env, "Expected output width/height as numbers").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    outW = info[4].As<Napi::Number>().Int32Value();
+    outH = info[5].As<Napi::Number>().Int32Value();
+  }
+  if (outW <= 0 || outH <= 0) {
+    Napi::TypeError::New(env, "Output width/height must be > 0").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  if (arr.ByteLength() < static_cast<size_t>(outW) * static_cast<size_t>(outH) * 4) {
     Napi::Error::New(env, "Buffer too small").ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -1287,14 +1589,14 @@ Napi::Value DecodeNextFrame(const Napi::CallbackInfo& info) {
 
   if (startSec >= 0.0) {
     // Seek to start position (uses smart seek — skips if already nearby)
-    pts = dec->seekToStart(dec->tsToPts(startSec), arr.Data(), w, h);
+    pts = dec->seekToStart(dec->tsToPts(startSec), arr.Data(), outW, outH);
     // Check end boundary on the first frame too
     if (pts != AV_NOPTS_VALUE && endPts != AV_NOPTS_VALUE &&
         pts > endPts + dec->frameDurationPts() / 2)
       return env.Null();
   } else {
     // Continue sequential decode from current position
-    pts = dec->decodeNextFrameInto(arr.Data(), w, h, endPts);
+    pts = dec->decodeNextFrameInto(arr.Data(), outW, outH, endPts);
   }
 
   if (pts == AV_NOPTS_VALUE) return env.Null();

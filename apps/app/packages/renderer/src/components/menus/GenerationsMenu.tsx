@@ -78,7 +78,7 @@ const DeleteAlertDialog: React.FC<
 > = ({ onDelete, open, onOpenChange }) => {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="dark bg-brand font-poppins">
+      <AlertDialogContent className="dark bg-brand font-inter">
         <AlertDialogHeader>
           <AlertDialogTitle className="text-brand-light text-base">
             Delete Generation
@@ -246,7 +246,7 @@ const GenerationsGridRow = ({
 
                 <DropdownMenuContent
                   align="start"
-                  className="dark w-40 flex flex-col text-brand-light bg-brand-background font-poppins"
+                  className="dark w-40 flex flex-col text-brand-light bg-brand-background font-inter"
                 >
                   <DropdownMenuItem
                     className="py-1 rounded"
@@ -568,7 +568,7 @@ const GenerationsMenu: React.FC = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="dark w-44 flex flex-col text-brand-light bg-brand-background font-poppins text-[12px]"
+              className="dark w-44 flex flex-col text-brand-light bg-brand-background font-inter text-[12px]"
             >
               <DropdownMenuCheckboxItem
                 className="text-[11px] font-medium"
@@ -625,7 +625,7 @@ const GenerationsMenu: React.FC = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="dark w-48 flex flex-col text-brand-light bg-brand-background font-poppins"
+              className="dark w-48 flex flex-col text-brand-light bg-brand-background font-inter"
             >
               <DropdownMenuCheckboxItem
                 className="text-[11px] font-medium"
@@ -682,7 +682,7 @@ const GenerationsMenu: React.FC = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="dark w-48 flex flex-col text-brand-light bg-brand-background font-poppins"
+              className="dark w-48 flex flex-col text-brand-light bg-brand-background font-inter"
             >
               <DropdownMenuCheckboxItem
                 className="text-[11px] font-medium"

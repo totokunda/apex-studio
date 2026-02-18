@@ -8,9 +8,13 @@ function resolveAddonPath() {
   const fromWorkerData = workerData && typeof workerData.addonPath === "string"
     ? workerData.addonPath
     : "";
+  const fromEnv = typeof process.env?.NATIVE_DECODER_ADDON_PATH === "string"
+    ? process.env.NATIVE_DECODER_ADDON_PATH
+    : "";
   const cwd = process.cwd();
   const candidates = [
     fromWorkerData,
+    fromEnv,
     path.join(cwd, "packages", "native-decoder", "build", "Release", "addon.node"),
     path.join(cwd, "native-decoder", "build", "Release", "addon.node"),
   ].filter(Boolean);
@@ -30,18 +34,26 @@ if (!addonPath) throw new Error("Native decoder addon path could not be resolved
 const addon = require(addonPath);
 
 function decodeFrame(payload) {
-  const { filePath, width, height, timestamp, keyframeOnly } = payload;
+  const { filePath, width, height, timestamp, keyframeOnly, decoderKey } = payload;
   const data = new Uint8Array(width * height * 4);
-  const result = addon.decodeFrameInto(filePath, data, timestamp, !!keyframeOnly);
+  const result = addon.decodeFrameInto(
+    filePath,
+    data,
+    timestamp,
+    !!keyframeOnly,
+    width,
+    height,
+    decoderKey
+  );
   return { timestamp: result.timestamp, data };
 }
 
 function decodeNext(payload) {
-  const { filePath, width, height, startTime, endTime } = payload;
+  const { filePath, width, height, startTime, endTime, decoderKey } = payload;
   const data = new Uint8Array(width * height * 4);
-  const start = typeof startTime === "number" ? startTime : undefined;
-  const end = typeof endTime === "number" ? endTime : undefined;
-  const result = addon.decodeNextFrame(filePath, data, start, end);
+  const start = typeof startTime === "number" && startTime >= 0 ? startTime : undefined;
+  const end = typeof endTime === "number" && endTime >= 0 ? endTime : undefined;
+  const result = addon.decodeNextFrame(filePath, data, start, end, width, height, decoderKey);
   if (!result) return null;
   return { timestamp: result.timestamp, data };
 }
@@ -49,7 +61,7 @@ function decodeNext(payload) {
 function run(type, payload) {
   switch (type) {
     case "loadFile":
-      return addon.loadFile(payload.filePath);
+      return addon.loadFile(payload.filePath, payload.decoderKey);
     case "decodeFrame":
       return decodeFrame(payload);
     case "decodeNextFrame":
@@ -59,21 +71,26 @@ function run(type, payload) {
   }
 }
 
-if (!parentPort) throw new Error("nativeDecoder.worker.cjs requires parentPort");
-
-parentPort.on("message", (message) => {
+function handleMessage(message, respond) {
   const { id, type, payload } = message || {};
   if (typeof id !== "number" || !type) return;
   try {
     const result = run(type, payload || {});
     if (result && result.data instanceof Uint8Array) {
-      parentPort.postMessage({ id, ok: true, result }, [result.data.buffer]);
+      respond({ id, ok: true, result }, [result.data.buffer]);
       return;
     }
-    parentPort.postMessage({ id, ok: true, result });
+    respond({ id, ok: true, result });
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
-    parentPort.postMessage({ id, ok: false, error: text });
+    respond({ id, ok: false, error: text });
   }
-});
+}
 
+if (!parentPort) throw new Error("nativeDecoder.worker.cjs requires parentPort");
+
+parentPort.on("message", (message) => {
+  handleMessage(message, (response, transferList) => {
+    parentPort.postMessage(response, transferList);
+  });
+});

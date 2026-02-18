@@ -1007,7 +1007,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
   };
 
   return (
-    <main className="w-full h-screen flex flex-col bg-black font-poppins">
+    <main className="w-full h-screen flex flex-col bg-black font-inter">
       <div className="relative flex-1 overflow-hidden">
         <div className="absolute inset-0 bg-linear-to-br from-slate-950 via-black to-slate-900" />
         <div className="absolute inset-0 backdrop-blur-md bg-black" />
@@ -1098,7 +1098,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                               >
                                 <SelectValue placeholder="Select a version" />
                               </SelectTrigger>
-                              <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                              <SelectContent className="bg-brand-background text-brand-light font-inter z-101 dark">
                                 {availableServerBundles.map((b) => {
                                   const key = `${b.tag}::${b.assetName}`;
                                   return (
@@ -1344,7 +1344,7 @@ const Installer: React.FC<{ hasBackend: boolean; setShowInstaller: (show: boolea
                           >
                             <SelectValue placeholder="Select mask model" />
                           </SelectTrigger>
-                          <SelectContent className="bg-brand-background text-brand-light font-poppins z-101 dark">
+                          <SelectContent className="bg-brand-background text-brand-light font-inter z-101 dark">
                             {MASK_MODEL_OPTIONS.map((opt) => (
                               <SelectItem
                                 key={opt.value}

@@ -592,7 +592,7 @@ const Launcher: React.FC = () => {
     };
 
     return (
-      <main className="w-full min-h-screen flex flex-col bg-black text-center font-poppins relative overflow-hidden">
+      <main className="w-full min-h-screen flex flex-col bg-black text-center font-inter relative overflow-hidden">
         <div className="pointer-events-none absolute inset-0">
           <div className="absolute -top-24 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-brand-accent-two-shade/15 blur-3xl" />
           <div className="absolute -bottom-32 right-[-120px] h-[520px] w-[520px] rounded-full bg-brand-accent-shade/10 blur-3xl" />
@@ -797,7 +797,7 @@ const Launcher: React.FC = () => {
     // launch the UI (e.g. when using a separately-run backend).
     if (isDevMode) {
       return (
-        <main className="w-full min-h-screen flex flex-col bg-black text-center font-poppins relative overflow-hidden">
+        <main className="w-full min-h-screen flex flex-col bg-black text-center font-inter relative overflow-hidden">
           <div className="pointer-events-none absolute inset-0">
             <div className="absolute -top-24 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-brand-accent-two-shade/15 blur-3xl" />
             <div className="absolute -bottom-32 right-[-120px] h-[520px] w-[520px] rounded-full bg-brand-accent-shade/10 blur-3xl" />
@@ -880,7 +880,7 @@ const Launcher: React.FC = () => {
 
 
   return (
-    <main className="w-full h-screen flex flex-col bg-black text-center font-poppins">
+    <main className="w-full h-screen flex flex-col bg-black text-center font-inter">
       <div className="flex items-start justify-between gap-4">
         <div className="px-12 py-8 gap-2.5 flex flex-col">
           <div className="text-sm uppercase tracking-[0.35em] text-brand-light/50 text-start">
@@ -972,7 +972,7 @@ const Launcher: React.FC = () => {
           }
         }}
       >
-        <DialogContent className="dark bg-brand-background/95 font-poppins backdrop-blur-md border border-brand-light/10 py-4 ">
+        <DialogContent className="dark bg-brand-background/95 font-inter backdrop-blur-md border border-brand-light/10 py-4 ">
           <DialogHeader>
             <DialogTitle className="text-brand-light text-base font-medium">Create project</DialogTitle>
             <DialogDescription className="text-brand-light/70 text-xs ">
@@ -1029,7 +1029,7 @@ const Launcher: React.FC = () => {
           }
         }}
       >
-        <AlertDialogContent className="dark bg-brand-background/95 font-poppins backdrop-blur-md border border-brand-light/10">
+        <AlertDialogContent className="dark bg-brand-background/95 font-inter backdrop-blur-md border border-brand-light/10">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-brand-light text-base font-medium">
               Delete project?

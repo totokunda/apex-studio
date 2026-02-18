@@ -428,16 +428,6 @@
     "xcode_version": "16.0",
     "nodedir": "/Users/tosinkuye/Library/Caches/node-gyp/20.19.6",
     "python": "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
-    "standalone_static_library": 1,
-    "prefix": "/Users/tosinkuye/.nvm/versions/node/v20.19.6",
-    "user_agent": "npm/10.8.2 node/v20.19.6 darwin arm64 workspaces/false",
-    "cache": "/Users/tosinkuye/.npm",
-    "node_gyp": "/Users/tosinkuye/.nvm/versions/node/v20.19.6/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js",
-    "npm_version": "10.8.2",
-    "init_module": "/Users/tosinkuye/.npm-init.js",
-    "userconfig": "/Users/tosinkuye/.npmrc",
-    "globalconfig": "/Users/tosinkuye/.nvm/versions/node/v20.19.6/etc/npmrc",
-    "local_prefix": "/Users/tosinkuye/apex-workspace/apex-studio/apps/app/packages",
-    "global_prefix": "/Users/tosinkuye/.nvm/versions/node/v20.19.6"
+    "standalone_static_library": 1
   }
 }

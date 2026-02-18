@@ -1498,7 +1498,7 @@ export const PreprocessorClip: React.FC<PropsPreprocessorClip> = ({
             fontSize={9.5}
             fontStyle={"500"}
             visible={preprocessor.status !== "complete"}
-            fontFamily={"Poppins"}
+            fontFamily={"Inter"}
             listening={true}
             fill={"white"}
             ref={textRef}

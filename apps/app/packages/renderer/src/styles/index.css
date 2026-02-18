@@ -6,17 +6,19 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --font-poppins: "Poppins", sans-serif;
   --font-inter: "Inter", sans-serif;
+
   --color-brand-background: #151517;
   --color-brand-background-dark: #0b0b0d;
   --color-brand: #222124;
   --color-brand-background-light: #2b2a2e;
   --color-brand-light: #e3e3e3;
   --color-brand-lighter: #e8e8e8;
+  --color-brand-accent-light: #b289b9;
   --color-brand-accent: #ae81ce;
-  --color-brand-accent-shade: #a477c4;
-  --color-brand-accent-two-shade: #9a6dba;
+   --color-brand-accent-shade: #a477c4; 
+   --color-brand-accent-two-shade: #9a6dba;
+
 }
 
 *:focus-visible {
@@ -27,10 +29,12 @@ body {
   background: #000000;
   /* disable scrollbar */
   overflow: hidden;
+  font-family: var(--font-inter);
 }
 
 button {
   cursor: pointer;
+  font-family: var(--font-inter);
 }
 
 input {

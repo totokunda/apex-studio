@@ -159,7 +159,7 @@ const App: React.FC = () => {
 
   if (isBootstrapping) {
     return (
-      <main className="w-full h-screen flex flex-col bg-black text-center font-poppins">
+      <main className="w-full h-screen flex flex-col bg-black text-center font-inter">
         <div className="relative flex-1 overflow-hidden">
           <div className="absolute inset-0 bg-linear-to-br from-slate-950 via-black to-slate-900" />
           <div className="absolute inset-0 backdrop-blur-md bg-black/50" />
@@ -203,7 +203,7 @@ const App: React.FC = () => {
     >
       <main
         ref={containerRef}
-        className="w-full text-center font-poppins bg-black h-screen flex flex-col"
+        className="w-full text-center font-inter bg-black h-screen flex flex-col"
       >
         <Topbar />
         <Toaster />

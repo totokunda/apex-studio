@@ -41,7 +41,7 @@ const CategorySelector: React.FC<CategorySelectorProps> = ({
             <LuChevronDown className="w-3.5 h-3.5 text-brand-light/60" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] font-poppins bg-brand border-brand-light/10">
+        <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] font-inter bg-brand border-brand-light/10">
           <DropdownMenuRadioGroup
             value={String(value)}
             onValueChange={onChange}

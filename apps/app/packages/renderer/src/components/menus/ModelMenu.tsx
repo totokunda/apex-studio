@@ -515,7 +515,7 @@ export const ModelItem: React.FC<{
             }}
             type="button"
             className={cn(
-              "text-[10px] w-full font-medium disabled:opacity-50 z-20 disabled:cursor-default! flex items-center transition-all duration-200 justify-center gap-x-1 rounded-bl-md px-2 py-2.5 border-0 text-brand-light hover:text-white backdrop-blur-sm bg-brand-background-light hover:bg-brand/90 border-r border-brand-light/5",
+              "text-[10px] w-full font-semibold disabled:opacity-50 z-20 disabled:cursor-default! flex items-center transition-all duration-200 justify-center gap-x-1 rounded-bl-md px-2 py-2.5 border-0 text-brand-light hover:text-white backdrop-blur-sm bg-brand-background-light hover:bg-brand/90 border-r border-brand-light/5",
             )}
             title={
              "Add clip at playhead"
@@ -531,7 +531,7 @@ export const ModelItem: React.FC<{
               setSelectedManifestId(manifest.metadata?.id || "");
             }}
             type="button"
-            className="text-[10px] font-medium w-full flex items-center transition-all duration-200 border-0 justify-center gap-x-1 text-brand-light hover:text-white backdrop-blur-sm bg-brand-background-light hover:bg-brand/90  border-brand-light/5 rounded-br-md px-2 py-2.5"
+            className="text-[10px] font-semibold w-full flex items-center transition-all duration-200 border-0 justify-center gap-x-1 text-brand-light hover:text-white backdrop-blur-sm bg-brand-background-light hover:bg-brand/90  border-brand-light/5 rounded-br-md px-2 py-2.5"
             title="Show more info"
           >
             <LuSettings className="w-3 h-3" />
@@ -543,7 +543,7 @@ export const ModelItem: React.FC<{
   return (
     <div
       className={cn(
-        "group flex flex-col transition-all font-poppins duration-200 rounded-md relative shadow-md cursor-grab active:cursor-grabbing",
+        "group flex flex-col transition-all font-inter duration-200 rounded-md relative shadow-md cursor-grab active:cursor-grabbing",
         {
           "w-48": true,
           "opacity-[0.975]": isDragging,
@@ -633,7 +633,6 @@ const ModelCategory: React.FC<{
     }
   };
   
-
   return (
     <div className="flex flex-col gap-y-1 w-full px-4">
       <div
@@ -1199,7 +1198,7 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
       <style>{`
         .carousel-container::-webkit-scrollbar { display: none; }
       `}</style>
-      <div className="flex flex-col h-full w-full  mt-2">
+      <div className="flex flex-col h-full w-full  mt-2 border-t border-brand-light/5">
         <div className="flex flex-1 min-h-0 w-full">
           <CategorySidebar
             categories={isSearching ? [] : categories}

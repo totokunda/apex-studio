@@ -953,6 +953,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   ]);
 
   const handleGenerate = useCallback(async () => {
+    setIsPreparingGeneration(true);
     let manifest: any = manifestData || (clip as any)?.manifest;
     if (hasModel && manifestId) {
       try {
@@ -1147,7 +1148,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       </Tabs>
       </div>
       {hasValidPreprocessor && (
-        <div className="absolute bottom-0 left-0 right-0 p-5 bg-brand border-t border-brand-light/10" style={{ zIndex: 100, pointerEvents: 'auto' }}>
+        <div className="absolute bottom-0 left-0 right-0 border-brand-light/5 bg-brand-background p-3" style={{ zIndex: 100, pointerEvents: 'auto' }}>
           <button
             disabled={isPreparingPreprocessor}
             onClick={preprocessor?.status === 'running' ? handleStopPreprocessor : handleRunPreprocessor}
@@ -1191,7 +1192,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
                 onClick={handleGenerate}
                 disabled={isGenerateDisabled || isPreparingGeneration}
                 className={cn(
-                  "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] text-brand-lighter bg-brand-accent-two-shade flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
+                  "w-full py-2.5 px-6 rounded-lg font-medium text-[12px] bg-brand-accent-shade hover:bg-brand-accent-two-shade text-brand-lighter flex items-center justify-center gap-x-2 transition-all duration-200 shadow-lg hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-brand-light/10 disabled:text-brand-light/50",
                 )}
               >
                 <RiAiGenerate size={16} />
@@ -1209,7 +1210,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           if (!open) setPendingModelDownloads([]);
         }}
       >
-        <DialogContent className="max-w-xl bg-brand-background text-brand-light border border-brand-light/10 p-0 gap-0 font-poppins">
+        <DialogContent className="max-w-xl bg-brand-background text-brand-light border border-brand-light/10 p-0 gap-0 font-inter">
           <DialogHeader className="px-4 py-3 border-b border-brand-light/10">
             <DialogTitle className="text-[13px] font-medium text-brand-light">
               Model Download Required

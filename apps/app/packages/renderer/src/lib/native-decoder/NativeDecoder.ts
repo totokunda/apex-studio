@@ -1,7 +1,7 @@
 /**
  * NativeDecoder.ts — Worker-backed native decoder interface
  *
- * Calls the native decoder through the preload worker-thread bridge.
+ * Calls the native decoder through a renderer-local Web Worker bridge.
  * Used for scrubbing (decodeFrame) and playback (decodeNextFrame).
  */
 
@@ -10,16 +10,55 @@ import {
   nativeDecoderLoadFile,
   nativeDecoderDecodeFrame,
   nativeDecoderDecodeNextFrame,
-  type NativeDecoderFileInfo,
-  fileURLToPath
-} from "@app/preload";
+} from "./workerClient";
 
-export type FileInfo = NativeDecoderFileInfo;
+import type { FileInfo } from "./types";
+export type { FileInfo } from "./types";
+
 export type DecodeResult = { view: Uint8Array; width: number; height: number };
 export type DecodeNextFrameResult = DecodeResult & { timestamp: number };
 
-// ─── WebGL shaders ───
+function fileUrlToPath(input: string): string {
+  if (!input.startsWith("file://")) return input;
+  const parsed = new URL(input);
+  const decoded = decodeURIComponent(parsed.pathname);
+  if (/^\/[A-Za-z]:/.test(decoded)) return decoded.slice(1);
+  return decoded;
+}
 
+const FOUR_K_MIN_WIDTH = 3840;
+const FOUR_K_MIN_HEIGHT = 2160;
+const TARGET_SHORT_EDGE = 1080;
+
+function toEven(value: number): number {
+  const rounded = Math.max(2, Math.round(value));
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+}
+
+function getDecodeDimensions(
+  sourceWidth: number,
+  sourceHeight: number
+): { width: number; height: number } {
+  if (sourceWidth <= 0 || sourceHeight <= 0) {
+    return { width: 0, height: 0 };
+  }
+
+  const longEdge = Math.max(sourceWidth, sourceHeight);
+  const shortEdge = Math.min(sourceWidth, sourceHeight);
+  const is4KOrAbove = longEdge >= FOUR_K_MIN_WIDTH && shortEdge >= FOUR_K_MIN_HEIGHT;
+
+  if (!is4KOrAbove) {
+    return { width: sourceWidth, height: sourceHeight };
+  }
+
+  const scale = TARGET_SHORT_EDGE / shortEdge;
+  return {
+    width: toEven(sourceWidth * scale),
+    height: toEven(sourceHeight * scale),
+  };
+}
+
+// ─── WebGL shaders ───
 const VERTEX_SHADER = `
   attribute vec2 a_position;
   attribute vec2 a_texCoord;
@@ -59,6 +98,20 @@ class NativeDecoder {
   private _vao: { position: WebGLBuffer; texCoord: WebGLBuffer } | null = null;
   private _imageData: ImageData | null = null;
   public _lastStartTime = -1;
+  private _decodeFrameInFlight = false;
+  private _latestDecodeFrameRequestId = 0;
+  private _activeDecodeFrameRequest: {
+    requestId: number;
+    timestamp: number;
+    keyframeOnly: boolean;
+    resolves: Array<(value: (DecodeResult & { timestamp: number }) | null) => void>;
+  } | null = null;
+  private _queuedDecodeFrameRequest: {
+    requestId: number;
+    timestamp: number;
+    keyframeOnly: boolean;
+    resolves: Array<(value: (DecodeResult & { timestamp: number }) | null) => void>;
+  } | null = null;
 
   constructor(decoderId: string) {
     this._decoderId = decoderId;
@@ -85,10 +138,13 @@ class NativeDecoder {
   async loadFile(filePath: string): Promise<FileInfo> {
     this._filePath = filePath;
     try {
-      const info = await nativeDecoderLoadFile(filePath);
+      const info = await nativeDecoderLoadFile(filePath, this._decoderId);
       this._info = info;
-      this._width = info.video?.width ?? 0;
-      this._height = info.video?.height ?? 0;
+      const sourceWidth = info.video?.width ?? 0;
+      const sourceHeight = info.video?.height ?? 0;
+      const { width, height } = getDecodeDimensions(sourceWidth, sourceHeight);
+      this._width = width;
+      this._height = height;
       this._loaded = true;
       this._lastStartTime = -1;
       return info;
@@ -110,37 +166,131 @@ class NativeDecoder {
     this._width = 0;
     this._height = 0;
     this._lastStartTime = -1;
+    this._latestDecodeFrameRequestId++;
+    if (this._queuedDecodeFrameRequest) {
+      for (const resolve of this._queuedDecodeFrameRequest.resolves) {
+        resolve(null);
+      }
+      this._queuedDecodeFrameRequest = null;
+    }
+    this._activeDecodeFrameRequest = null;
     this._resetCanvas();
+  }
+
+  private async _runDecodeFrameQueue(
+    firstRequest: {
+      requestId: number;
+      timestamp: number;
+      keyframeOnly: boolean;
+      resolves: Array<(value: (DecodeResult & { timestamp: number }) | null) => void>;
+    }
+  ): Promise<void> {
+    let current: {
+      requestId: number;
+      timestamp: number;
+      keyframeOnly: boolean;
+      resolves: Array<(value: (DecodeResult & { timestamp: number }) | null) => void>;
+    } | null = firstRequest;
+    while (current) {
+      this._activeDecodeFrameRequest = current;
+      if (!this._loaded || !this._filePath) {
+        for (const resolve of current.resolves) {
+          resolve(null);
+        }
+      } else {
+        try {
+          const { timestamp: ts, data } = await nativeDecoderDecodeFrame(
+            this._filePath,
+            this._width,
+            this._height,
+            current.timestamp,
+            current.keyframeOnly,
+            this._decoderId
+          );
+          if (
+            current.requestId === this._latestDecodeFrameRequestId &&
+            this._loaded &&
+            this._filePath
+          ) {
+            const resolved = {
+              view: data,
+              width: this._width,
+              height: this._height,
+              timestamp: ts,
+            };
+            for (const resolve of current.resolves) {
+              resolve(resolved);
+            }
+          } else {
+            for (const resolve of current.resolves) {
+              resolve(null);
+            }
+          }
+        } catch {
+          for (const resolve of current.resolves) {
+            resolve(null);
+          }
+        }
+      }
+
+      this._activeDecodeFrameRequest = null;
+      const next = this._queuedDecodeFrameRequest;
+      this._queuedDecodeFrameRequest = null;
+      current = next;
+    }
+    this._decodeFrameInFlight = false;
   }
 
   // ─── One-shot decode (scrubbing) ───
 
   /**
    * Decode a single frame at the given timestamp.
-   * Worker-thread backed call via preload bridge.
+   * Latest-only queue: keep at most one in-flight + one pending request.
    */
   async decodeFrame(
     timestamp: number,
     keyframeOnly = false
   ): Promise<(DecodeResult & { timestamp: number }) | null> {
     if (!this._loaded || !this._filePath) return null;
-    try {
-      const { timestamp: ts, data } = await nativeDecoderDecodeFrame(
-        this._filePath,
-        this._width,
-        this._height,
-        timestamp,
-        keyframeOnly
-      );
-      return {
-        view: data,
-        width: this._width,
-        height: this._height,
-        timestamp: ts,
-      };
-    } catch {
-      return null;
-    }
+
+    return await new Promise<(DecodeResult & { timestamp: number }) | null>((resolve) => {
+      if (
+        this._decodeFrameInFlight &&
+        this._activeDecodeFrameRequest &&
+        this._activeDecodeFrameRequest.timestamp === timestamp &&
+        this._activeDecodeFrameRequest.keyframeOnly === keyframeOnly
+      ) {
+        this._activeDecodeFrameRequest.resolves.push(resolve);
+        return;
+      }
+
+      if (
+        this._decodeFrameInFlight &&
+        this._queuedDecodeFrameRequest &&
+        this._queuedDecodeFrameRequest.timestamp === timestamp &&
+        this._queuedDecodeFrameRequest.keyframeOnly === keyframeOnly
+      ) {
+        this._queuedDecodeFrameRequest.resolves.push(resolve);
+        return;
+      }
+
+      const requestId = ++this._latestDecodeFrameRequestId;
+      const request = { requestId, timestamp, keyframeOnly, resolves: [resolve] };
+
+      if (!this._decodeFrameInFlight) {
+        this._decodeFrameInFlight = true;
+        void this._runDecodeFrameQueue(request);
+        return;
+      }
+
+      // Replace pending work with the newest scrub target.
+      if (this._queuedDecodeFrameRequest) {
+        for (const queuedResolve of this._queuedDecodeFrameRequest.resolves) {
+          queuedResolve(null);
+        }
+      }
+      this._queuedDecodeFrameRequest = request;
+    });
   }
 
   // ─── Sequential decode (playback) ───
@@ -163,7 +313,8 @@ class NativeDecoder {
         this._width,
         this._height,
         start,
-        end
+        end,
+        this._decoderId
       );
       if (!result) return null;
       return {
@@ -373,7 +524,7 @@ export function useNativeDecoder(
         setLoading(true);
         setError(null);
         // convert file url to local path
-        const localPath = fileURLToPath(filePath);
+        const localPath = fileUrlToPath(filePath);
         const fileInfo = await dec.loadFile(localPath);
         if (cancelled) {
           dec.destroy();

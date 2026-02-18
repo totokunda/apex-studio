@@ -22,6 +22,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
+      "@app/decoder": ["../decoder/src/decode.ts"],
+      "@app/decoder/*": ["../decoder/src/*"],
       "@app/export-renderer": ["../export-renderer/src/index.ts"],
       "@app/*": ["../*"]
     }

@@ -1272,7 +1272,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-4xl w-full h-[80vh] flex flex-col bg-background text-foreground p-0 gap-0 overflow-hidden dark font-poppins border-brand-light/10">
+      <DialogContent className="max-w-4xl w-full h-[80vh] flex flex-col bg-background text-foreground p-0 gap-0 overflow-hidden dark font-inter border-brand-light/10">
         <DialogHeader className="px-6 py-6 border-b border-brand-light/10 shrink-0 bg-brand-background">
           <DialogTitle className="text-start text-[13px] font-medium">
             {" "}
@@ -1704,7 +1704,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                   <SelectTrigger className="w-[100px] h-7.5! bg-secondary/50 border-none text-[11px] font-medium rounded-[6px]">
                     <SelectValue placeholder="Select ratio" />
                   </SelectTrigger>
-                  <SelectContent className="bg-background text-foreground font-poppins dark z-101!">
+                  <SelectContent className="bg-background text-foreground font-inter dark z-101!">
                     {ASPECT_RATIOS.map((ratio) => (
                       <SelectItem
                         key={ratio.value}

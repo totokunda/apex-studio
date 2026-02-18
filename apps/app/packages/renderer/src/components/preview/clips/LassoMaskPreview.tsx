@@ -6,6 +6,7 @@ import {
   Transformer,
 } from "react-konva";
 import { useClipStore, getLocalFrame } from "@/lib/clip";
+import { SELECTION_STROKE_COLOR } from "@/lib/selectionStroke";
 import { useViewportStore } from "@/lib/viewport";
 import { useControlsStore } from "@/lib/control";
 import { useMaskStore } from "@/lib/mask";
@@ -377,7 +378,7 @@ const LassoMaskPreview: React.FC<LassoMaskPreviewProps> = ({
       {canInteract && isSelected && !isFullscreen && (
         <Transformer
           ref={transformerRef}
-          borderStroke="#AE81CE"
+          borderStroke={SELECTION_STROKE_COLOR}
           borderStrokeWidth={2}
           enabledAnchors={[]}
           rotateEnabled={false}

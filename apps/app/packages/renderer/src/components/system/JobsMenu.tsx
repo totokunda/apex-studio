@@ -536,7 +536,7 @@ const JobsMenu: React.FC = () => {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger className="text-brand-light/90 dark h-[34px] relative flex items-center space-x-2 w-fit px-3 font-medium border border-brand-light/10 hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
+      <PopoverTrigger className="text-brand-light/90 dark h-[34px] relative flex items-center space-x-2 w-fit px-3 font-medium  hover:text-brand-light bg-brand hover:bg-brand-light/10 rounded-[6px] py-[7px] transition-all duration-300 cursor-pointer">
         <GrTasks className="w-3 h-3" />
         <span className="text-[11px]">Jobs</span>
         {activeCount > 0 && (
@@ -547,7 +547,7 @@ const JobsMenu: React.FC = () => {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] p-3 font-poppins w-[360px] max-h-[70vh] overflow-y-auto"
+        className="bg-brand-background/90 backdrop-blur-md border border-brand-light/10 rounded-[8px] p-3 font-inter w-[360px] max-h-[70vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between mb-2">
           <span className="text-[11px] uppercase tracking-wide text-brand-light/80 font-medium">

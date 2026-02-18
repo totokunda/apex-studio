@@ -344,17 +344,25 @@ const ImagePreview: React.FC<
     if (!displayWidth || !displayHeight) return;
 
     try {
-      const height = mediaInfoRef.current.image?.height;
-      const width = mediaInfoRef.current.image?.width;
+      const targetWidth = Math.max(1, Math.floor(displayWidth));
+      const targetHeight = Math.max(1, Math.floor(displayHeight));
       const asset = getAssetById(selectedAssetId);
       if (!asset) return;
-      const image = await fetchImage(asset.path, height, width, {
+
+      let canvas = canvasRef.current;
+      if (!canvas) return;
+      if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+      }
+
+      const image = await fetchImage(asset.path, targetWidth, targetHeight, {
         mediaInfo: mediaInfoRef.current,
       });
 
       if (!image) return;
 
-      let canvas = canvasRef.current;
+      canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;

@@ -151,7 +151,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-sm w-full bg-brand-background/90 backdrop-blur-sm text-foreground p-0 gap-0 overflow-hidden dark font-poppins border border-brand-light/10">
+      <DialogContent className="max-w-sm w-full bg-brand-background/90 backdrop-blur-sm text-foreground p-0 gap-0 overflow-hidden dark font-inter border border-brand-light/10">
         <DialogHeader className="px-5 py-3.5 border-b border-brand-light/10 flex-shrink-0 bg-brand-background">
           <DialogTitle className="text-start text-[13px] font-medium text-brand-light">
             {title}
@@ -214,7 +214,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
                   >
                     <SelectValue placeholder="Select resolution" />
                   </SelectTrigger>
-                  <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                  <SelectContent className="bg-brand-light text-brand-accent font-inter z-[101] dark">
                     {RESOLUTION_OPTIONS.map((opt) => (
                       <SelectItem
                         key={opt.value}
@@ -244,7 +244,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
                     >
                       <SelectValue placeholder="Select format" />
                     </SelectTrigger>
-                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                    <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                       {IMAGE_FORMAT_OPTIONS.map((opt) => (
                         <SelectItem
                           key={opt.value}
@@ -268,7 +268,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
                     >
                       <SelectValue placeholder="Select format" />
                     </SelectTrigger>
-                    <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                    <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                       {VIDEO_FORMAT_OPTIONS.map((opt) => (
                         <SelectItem
                           key={opt.value}
@@ -301,7 +301,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
                 >
                   <SelectValue placeholder="Select format" />
                 </SelectTrigger>
-                <SelectContent className="bg-brand-background text-brand-light font-poppins z-[101] dark">
+                <SelectContent className="bg-brand-background text-brand-light font-inter z-[101] dark">
                   {AUDIO_FORMAT_OPTIONS.map((opt) => (
                     <SelectItem
                       key={opt.value}
@@ -342,7 +342,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
           </Button>
           <Button
             type="button"
-            className="h-7 px-5 bg-brand-accent hover:bg-brand-accent-two-shade text-white text-[11px] font-medium rounded-[6px] border border-brand-accent-two-shade"
+            className="h-7 px-5 bg-brand-accent hover:bg-brand-accent-two-shade text-brand-light text-[11px] font-medium rounded-[6px] border border-brand-accent-two-shade"
             onClick={handleExportClick}
             disabled={isExporting}
           >

@@ -71,7 +71,7 @@ const SelectInput: React.FC<SelectInputProps> = ({
                 </TooltipTrigger>
                 <TooltipContent
                   sideOffset={6}
-                  className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+                  className="max-w-xs whitespace-pre-wrap text-[10px] font-inter bg-brand-background border border-brand-light/10"
                 >
                   {description}
                 </TooltipContent>
@@ -86,7 +86,7 @@ const SelectInput: React.FC<SelectInputProps> = ({
                   <LuChevronDown className="w-3.5 h-3.5 text-brand-light/60" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] font-poppins bg-brand-background border-brand-light/10">
+              <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] font-inter bg-brand-background border-brand-light/10">
                 <DropdownMenuRadioGroup
                   value={String(selectedOption?.value)}
                   onValueChange={onChange}
@@ -129,7 +129,7 @@ const SelectInput: React.FC<SelectInputProps> = ({
                 <LuChevronDown className="w-3.5 h-3.5 text-brand-light/60" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] font-poppins bg-brand-background border-brand-light/10">
+            <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] font-inter bg-brand-background border-brand-light/10">
               <DropdownMenuRadioGroup
                 value={String(selectedOption?.value)}
                 onValueChange={onChange}
@@ -170,7 +170,7 @@ const SelectInput: React.FC<SelectInputProps> = ({
               </TooltipTrigger>
               <TooltipContent
                 sideOffset={6}
-                className="max-w-xs whitespace-pre-wrap text-[10px] font-poppins bg-brand-background border border-brand-light/10"
+                className="max-w-xs whitespace-pre-wrap text-[10px] font-inter bg-brand-background border border-brand-light/10"
               >
                 {description}
               </TooltipContent>

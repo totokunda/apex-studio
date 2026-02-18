@@ -102,7 +102,7 @@ const AttentionPanel: React.FC<AttentionPanelProps> = ({ clipId }) => {
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="p-0 bg-brand-background border-brand-light/10 font-poppins"
+          className="p-0 bg-brand-background border-brand-light/10 font-inter"
           style={{ width: triggerRef.current?.offsetWidth || 320 }}
         >
           <Command className="bg-brand-background">
