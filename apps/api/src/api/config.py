@@ -27,6 +27,12 @@ from src.utils.config_store import (
     read_json_dict,
     write_json_dict_atomic,
 )
+from src.utils.model_variant_selection import (
+    MODEL_DOWNLOAD_PROFILE_ENV_KEY,
+    MODEL_DOWNLOAD_PROFILE_DEFAULT,
+    get_effective_model_download_profile,
+    normalize_model_download_profile,
+)
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -162,6 +168,14 @@ class RenderStepEnabledRequest(BaseModel):
 
 class RenderStepEnabledResponse(BaseModel):
     enabled: bool
+
+
+class ModelDownloadProfileRequest(BaseModel):
+    profile: str
+
+
+class ModelDownloadProfileResponse(BaseModel):
+    profile: str
 
 
 class MemorySettingsRequest(BaseModel):
@@ -485,6 +499,36 @@ def set_enable_video_render_steps(request: RenderStepEnabledRequest):
         raise HTTPException(
             status_code=400,
             detail=f"Failed to set ENABLE_VIDEO_RENDER_STEP: {str(e)}",
+        )
+
+
+@router.get(
+    "/model-download-profile",
+    response_model=ModelDownloadProfileResponse,
+)
+def get_model_download_profile():
+    """Get the active model download profile used by smart variant selection."""
+    profile = get_effective_model_download_profile(MODEL_DOWNLOAD_PROFILE_DEFAULT)
+    # Keep env in sync so long-running workers pick up the same value.
+    os.environ[MODEL_DOWNLOAD_PROFILE_ENV_KEY] = profile
+    return ModelDownloadProfileResponse(profile=profile)
+
+
+@router.post(
+    "/model-download-profile",
+    response_model=ModelDownloadProfileResponse,
+)
+def set_model_download_profile(request: ModelDownloadProfileRequest):
+    """Set the model download profile used by automatic variant selection."""
+    try:
+        profile = normalize_model_download_profile(request.profile)
+        os.environ[MODEL_DOWNLOAD_PROFILE_ENV_KEY] = profile
+        _update_persisted_config(**{MODEL_DOWNLOAD_PROFILE_ENV_KEY: profile})
+        return ModelDownloadProfileResponse(profile=profile)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to set model download profile: {str(e)}",
         )
 
 

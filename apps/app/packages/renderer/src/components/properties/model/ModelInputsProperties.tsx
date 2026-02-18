@@ -1,9 +1,524 @@
-import React from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useClipStore } from "@/lib/clip";
-import { ModelClipProps } from "@/lib/types";
+import { GenerationModelClipProps, ModelClipProps } from "@/lib/types";
 import { ModelInputsPanel } from "./ModelInputsPanel";
-import { UIPanel } from "@/lib/manifest/api";
+import type {
+  UIPanel,
+  ManifestGroup,
+  ManifestDocument,
+} from "@/lib/manifest/api";
 import { InputControlsProvider } from "@/lib/inputControl";
+import { getOffloadDefaultsForManifest } from "@app/preload";
+import { LuChevronDown } from "react-icons/lu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+import {
+  ensureExternalAssetUrl,
+  getLastPathSegment,
+  inferExternalFolderFromPath,
+} from "@/lib/externalAssets";
+import {
+  getVariantScopedValue,
+  getVariantStorageKey,
+  getVariantStorageLookupKeys,
+} from "@/lib/manifest/variantStorageKey";
+
+const extractManifestInputValues = (
+  manifest: ManifestDocument | undefined | null,
+): Record<string, any> => {
+  const ui = manifest?.spec?.ui || (manifest as any)?.ui;
+  const inputs = Array.isArray(ui?.inputs) ? (ui.inputs as Array<any>) : [];
+  const out: Record<string, any> = {};
+  const seen = new Set<string>();
+  for (const inp of inputs) {
+    if (!inp || typeof inp.id !== "string") continue;
+    if (seen.has(inp.id)) continue;
+    seen.add(inp.id);
+    if (inp.value !== undefined) out[inp.id] = inp.value;
+  }
+  return out;
+};
+
+const cloneManifestWithInputValues = (
+  manifest: ManifestDocument,
+  values?: Record<string, any>,
+): ManifestDocument => {
+  let cloned: any = manifest;
+  try {
+    cloned = JSON.parse(JSON.stringify(manifest));
+  } catch {
+    // best effort fallback
+    cloned = { ...manifest };
+  }
+
+  const ui = cloned?.spec?.ui || cloned?.ui;
+  if (!ui || !Array.isArray(ui.inputs)) return cloned as ManifestDocument;
+
+  ui.inputs = ui.inputs.map((inp: any) => {
+    if (!inp || typeof inp.id !== "string") return inp;
+    const { value: _existingValue, ...rest } = inp;
+    if (!values || !Object.prototype.hasOwnProperty.call(values, inp.id)) {
+      return rest;
+    }
+    return { ...rest, value: values[inp.id] };
+  });
+  return cloned as ManifestDocument;
+};
+
+const normalizeId = (value: unknown): string => String(value ?? "").trim();
+
+const resolveVariantIdForGeneration = (
+  generation: GenerationModelClipProps,
+  group: ManifestGroup | undefined,
+): string | undefined => {
+  const byVariantId = normalizeId(generation?.variantId);
+  if (byVariantId) return byVariantId;
+
+  const manifestId = normalizeId(generation?.manifestId);
+  if (!manifestId || !group?.variants?.length) return undefined;
+
+  const matched = group.variants.find((variant) => {
+    const variantId = normalizeId((variant as any)?.id);
+    const metaId = normalizeId((variant as any)?.manifest?.metadata?.id);
+    const manifestDocId = normalizeId((variant as any)?.manifest?.id);
+    return (
+      variantId === manifestId ||
+      metaId === manifestId ||
+      manifestDocId === manifestId
+    );
+  });
+  return normalizeId((matched as any)?.id) || undefined;
+};
+
+const pickLatestGenerationForVariant = (args: {
+  generations?: GenerationModelClipProps[];
+  group?: ManifestGroup;
+  targetVariantId: string;
+  targetManifest?: ManifestDocument;
+}): GenerationModelClipProps | undefined => {
+  const candidates = (args.generations || []).filter(
+    (generation) => !!generation && !!generation.assetId,
+  );
+  if (!candidates.length) return undefined;
+
+  const byVariant = candidates
+    .filter(
+      (generation) =>
+        resolveVariantIdForGeneration(generation, args.group) ===
+        args.targetVariantId,
+    )
+    .sort((a, b) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0));
+  if (byVariant.length) return byVariant[0];
+
+  const targetIds = new Set(
+    [
+      normalizeId(args.targetManifest?.metadata?.id),
+      normalizeId((args.targetManifest as any)?.id),
+      normalizeId(args.targetVariantId),
+    ].filter((id) => id.length > 0),
+  );
+
+  if (targetIds.size === 0) return undefined;
+
+  const byManifest = candidates
+    .filter((generation) => {
+      const manifestId = normalizeId(generation?.manifestId);
+      if (manifestId && targetIds.has(manifestId)) return true;
+      const variantId = normalizeId(generation?.variantId);
+      return variantId ? targetIds.has(variantId) : false;
+    })
+    .sort((a, b) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0));
+  return byManifest[0];
+};
+
+// ── Variant selector ────────────────────────────────────────────────
+
+const VariantPreview: React.FC<{
+  src: string | undefined;
+  alt: string;
+  className?: string;
+}> = ({ src, alt, className }) => {
+  const [resolvedSrc, setResolvedSrc] = useState<string | undefined>(src);
+  const triedFallbackRef = useRef(false);
+
+  useEffect(() => {
+    triedFallbackRef.current = false;
+    setResolvedSrc(src);
+  }, [src]);
+
+  const ensureFallback = useCallback(async () => {
+    if (triedFallbackRef.current) return;
+    triedFallbackRef.current = true;
+    if (!src) return;
+    const folder = inferExternalFolderFromPath(src);
+    const seg = getLastPathSegment(src);
+    if (!seg) return;
+    try {
+      const url = await ensureExternalAssetUrl({ folder, filePath: seg });
+      if (url) setResolvedSrc(url);
+    } catch {
+      // ignore
+    }
+  }, [src]);
+
+  useEffect(() => {
+    const raw = String(src || "").trim().toLowerCase();
+    if (!raw) return;
+    const isAlreadyResolved =
+      raw.startsWith("app://") ||
+      raw.startsWith("http://") ||
+      raw.startsWith("https://") ||
+      raw.startsWith("blob:") ||
+      raw.startsWith("data:");
+    if (!isAlreadyResolved) {
+      void ensureFallback();
+    }
+  }, [src, ensureFallback]);
+
+  const isVideo = useMemo(() => {
+    const value = String(resolvedSrc || "").toLowerCase();
+    if (!value) return false;
+    try {
+      const url = new URL(value);
+      const ext = (url.pathname.split(".").pop() || "").toLowerCase();
+      return ["mp4", "webm", "mov", "m4v", "ogg", "m3u8"].includes(ext);
+    } catch {
+      return (
+        value.endsWith(".mp4") ||
+        value.endsWith(".webm") ||
+        value.endsWith(".mov") ||
+        value.endsWith(".m4v") ||
+        value.endsWith(".ogg") ||
+        value.endsWith(".m3u8")
+      );
+    }
+  }, [resolvedSrc]);
+
+  return (
+    <div
+      className={cn(
+        "shrink-0 overflow-hidden rounded-[6px] bg-brand-light/10",
+        className,
+      )}
+    >
+      {resolvedSrc ? (
+        isVideo ? (
+          <video
+            src={resolvedSrc}
+            className="h-full w-full object-cover"
+            autoPlay
+            muted
+            loop
+            playsInline
+            onError={() => {
+              void ensureFallback();
+            }}
+          />
+        ) : (
+          <img
+            src={resolvedSrc}
+            alt={alt}
+            className="h-full w-full object-cover"
+            onError={() => {
+              void ensureFallback();
+            }}
+          />
+        )
+      ) : (
+        <div className="h-full w-full" />
+      )}
+    </div>
+  );
+};
+
+const VariantSelector: React.FC<{
+  clipId: string;
+  group: ManifestGroup;
+  currentManifestId: string | undefined;
+  currentVariantId?: string;
+  isGenerating?: boolean;
+}> = ({
+  clipId,
+  group,
+  currentManifestId,
+  currentVariantId,
+  isGenerating = false,
+}) => {
+  const updateClip = useClipStore((s) => s.updateClip);
+  const switchingRef = useRef(false);
+  const [isVariantDropdownOpen, setIsVariantDropdownOpen] = useState(false);
+
+  const variants = useMemo(() => group.variants ?? [], [group]);
+
+  const activeVariantId = useMemo(() => {
+    const byClipVariantId = String(currentVariantId || "").trim();
+    if (byClipVariantId) {
+      const direct = variants.find((v) => String(v.id) === byClipVariantId);
+      if (direct) return direct.id;
+    }
+    for (const v of variants) {
+      if (v.id === currentManifestId) return v.id;
+      if (v.manifest?.metadata?.id === currentManifestId) return v.id;
+      if (v.manifest?.id === currentManifestId) return v.id;
+    }
+    return variants[0]?.id ?? null;
+  }, [variants, currentManifestId, currentVariantId]);
+
+  const handleChange = useCallback(
+    async (selectedId: string) => {
+      // Guard: skip if already the active variant or if a switch is in progress
+      if (selectedId === activeVariantId || switchingRef.current) return;
+
+      const variant = variants.find((v) => v.id === selectedId);
+      if (!variant?.manifest) return;
+      const targetManifest = variant.manifest as ManifestDocument;
+
+      switchingRef.current = true;
+      try {
+        const store = useClipStore.getState();
+        const currentClip = store.getClipById(clipId) as
+          | ModelClipProps
+          | undefined;
+        if (!currentClip?.manifest) return;
+
+        const currentKey = getVariantStorageKey({
+          group: currentClip.group,
+          manifest: currentClip.manifest,
+          preferredVariantId: currentClip.variantId,
+        });
+        const currentValues = extractManifestInputValues(currentClip.manifest);
+        const currentSelectedComponents = (currentClip.selectedComponents ||
+          {}) as Record<string, any>;
+        const nextInputValuesByVariant = {
+          ...(currentClip.modelInputValuesByVariant || {}),
+          [currentKey]: currentValues,
+        };
+        const nextSelectedComponentsByVariant = {
+          ...(currentClip.selectedComponentsByVariant || {}),
+          [currentKey]: currentSelectedComponents,
+        };
+
+        const targetStorageKey = getVariantStorageKey({
+          group: currentClip.group || group,
+          manifest: targetManifest,
+          preferredVariantId: selectedId,
+        });
+        const targetLookupKeys = getVariantStorageLookupKeys({
+          group: currentClip.group || group,
+          manifest: targetManifest,
+          preferredVariantId: selectedId,
+          includeLegacy: false,
+        });
+        const targetValues = getVariantScopedValue(
+          nextInputValuesByVariant,
+          targetLookupKeys,
+        );
+        const targetSelectedComponents = getVariantScopedValue(
+          nextSelectedComponentsByVariant,
+          targetLookupKeys,
+        );
+        const generationForVariant = pickLatestGenerationForVariant({
+          generations: currentClip.generations,
+          group: currentClip.group || group,
+          targetVariantId: selectedId,
+          targetManifest,
+        });
+        const selectedComponentsForTarget =
+          generationForVariant?.selectedComponents || targetSelectedComponents;
+        const nextSelectedByVariant = selectedComponentsForTarget
+          ? {
+              ...nextSelectedComponentsByVariant,
+              [targetStorageKey]: selectedComponentsForTarget,
+            }
+          : nextSelectedComponentsByVariant;
+        const hydratedTargetManifest = cloneManifestWithInputValues(
+          targetManifest,
+          targetValues,
+        );
+
+        // Swap manifest and clear stale generation/asset state
+        const patch: Partial<ModelClipProps> = {
+          manifest: hydratedTargetManifest,
+          modelStatus: generationForVariant?.modelStatus ?? undefined,
+          assetId: generationForVariant?.assetId ?? undefined,
+          previewPath: undefined,
+          variantId: selectedId,
+          selectedComponents: selectedComponentsForTarget,
+          modelInputValues: targetValues,
+          modelInputValuesByVariant: nextInputValuesByVariant,
+          selectedComponentsByVariant: nextSelectedByVariant,
+          transform: generationForVariant?.transform
+            ? { ...(generationForVariant.transform as any) }
+            : (currentClip as any)?.transform,
+          startFrame:
+            typeof generationForVariant?.startFrame === "number"
+              ? generationForVariant.startFrame
+              : (currentClip as any)?.startFrame,
+          endFrame:
+            typeof generationForVariant?.endFrame === "number"
+              ? generationForVariant.endFrame
+              : (currentClip as any)?.endFrame,
+          trimStart:
+            typeof generationForVariant?.trimStart === "number"
+              ? generationForVariant.trimStart
+              : (currentClip as any)?.trimStart,
+          trimEnd:
+            typeof generationForVariant?.trimEnd === "number"
+              ? generationForVariant.trimEnd
+              : (currentClip as any)?.trimEnd,
+        } as any;
+
+        // Best-effort: fetch offload defaults for the new manifest
+        try {
+          const mfId = String(targetManifest.metadata?.id || "").trim();
+          if (mfId) {
+            const defaults = await getOffloadDefaultsForManifest(mfId);
+            if (defaults) (patch as any).offload = defaults;
+          }
+        } catch {
+          // ignore
+        }
+
+        updateClip(clipId, patch as any);
+      } finally {
+        switchingRef.current = false;
+      }
+    },
+    [clipId, updateClip, variants, activeVariantId],
+  );
+
+  const activeVariant = useMemo(() => {
+    if (!activeVariantId) return null;
+    return variants.find((variant) => variant.id === activeVariantId) ?? null;
+  }, [activeVariantId, variants]);
+
+  const activeVariantPreviewPath =
+    activeVariant?.manifest?.metadata?.demo_path ??
+    activeVariant?.manifest?.demo_path ??
+    group?.metadata?.demo_path ??
+    group?.demo_path;
+
+  if (variants.length < 2) return null;
+
+  if (isGenerating) {
+    return (
+      <div className="px-3 pt-3 pb-3 w-full min-w-0 max-w-full overflow-hidden border-b border-brand-light/5 bg-brand-background">
+        <div className="w-full min-h-9 px-3 py-2.5 rounded-[6px] border shadow border-brand-light/5 bg-brand-background-light/80 text-brand-light grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 overflow-hidden">
+          <VariantPreview
+            src={activeVariantPreviewPath}
+            alt={activeVariant?.label || "Variant"}
+            className="h-12 w-12"
+          />
+          <div className="min-w-0 text-left">
+            <p className="text-[12px] font-medium truncate">
+              {activeVariant?.label || "Select variant"}
+            </p>
+            {activeVariant?.description ? (
+              <p className="truncate text-[11px] text-brand-light/80 leading-tight mt-0.5">
+                {activeVariant.description}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-3 pt-3 pb-3 w-full min-w-0 max-w-full overflow-hidden border-b border-brand-light/5 bg-brand-background">
+      
+      <Popover
+        open={isVariantDropdownOpen}
+        onOpenChange={setIsVariantDropdownOpen}
+      >
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="w-full min-h-9 px-3 py-2.5 rounded-[6px] border shadow border-brand-light/5 bg-brand-background-light/80 text-brand-light hover:border-brand-light/20 hover:bg-brand-background-light/90 transition-all grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 overflow-hidden"
+          >
+            <VariantPreview
+              src={activeVariantPreviewPath}
+              alt={activeVariant?.label || "Variant"}
+              className="h-12 w-12"
+            />
+            <div className="min-w-0 text-left">
+              <p className="text-[12px] font-medium truncate">
+                {activeVariant?.label || "Select variant"}
+              </p>
+              {activeVariant?.description ? (
+                <p className="truncate text-[11px] text-brand-light/80 leading-tight mt-0.5">
+                  {activeVariant.description}
+                </p>
+              ) : null}
+            </div>
+            <LuChevronDown
+              className={cn(
+                "w-3.5 h-3.5 text-brand-light/70 transition-transform duration-200 shrink-0 ml-2",
+                isVariantDropdownOpen && "rotate-180",
+              )}
+            />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          sideOffset={8}
+          className="w-(--radix-popover-trigger-width) font-poppins p-2 bg-brand border border-brand-light/10 rounded-[8px] shadow-xl z-100"
+        >
+          <div className="space-y-1.5">
+            {variants.map((variant) => {
+              const isActive = variant.id === activeVariantId;
+              return (
+                <button
+                  key={variant.id}
+                  type="button"
+                  title={variant.description || variant.label}
+                  onClick={() => {
+                    if (!isActive) {
+                      void handleChange(variant.id);
+                    }
+                    setIsVariantDropdownOpen(false);
+                  }}
+                  className={cn(
+                    "w-full rounded-[6px] px-2.5 py-2 transition-colors border border-transparent grid grid-cols-[auto_minmax(0,1fr)] gap-2.5 items-start text-left",
+                    isActive
+                      ? "bg-brand-light/15 border-brand-light/10"
+                      : "hover:bg-brand-light/8 hover:border-brand-light/10",
+                  )}
+                >
+                  <VariantPreview
+                    src={
+                      variant.manifest?.metadata?.demo_path ??
+                      variant.manifest?.demo_path ??
+                      group?.metadata?.demo_path ??
+                      group?.demo_path
+                    }
+                    alt={variant.label || "Variant"}
+                    className="h-10 w-10 mt-0.5"
+                  />
+                  <div className="min-w-0">
+                    <p
+                      className={cn(
+                        "text-[11px] font-medium truncate",
+                        isActive ? "text-brand-light" : "text-brand-light/90",
+                      )}
+                    >
+                      {variant.label}
+                    </p>
+                    <p className="mt-0.5 text-[10px] leading-[1.35] text-brand-light/70 line-clamp-2">
+                      {variant.description || "No description available"}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+};
+
+// ── Main properties panel ────────────────────────────────────────────
 
 interface ModelInputsPropertiesProps {
   clipId: string;
@@ -15,73 +530,101 @@ export const ModelInputsProperties: React.FC<ModelInputsPropertiesProps> = ({
   panelSize,
 }) => {
   const clip = useClipStore((s) => s.getClipById(clipId)) as ModelClipProps;
+  const isGenerating =
+    clip?.modelStatus === "pending" || clip?.modelStatus === "running";
+
+  // IMPORTANT: use clip.manifest (which carries per-clip input values) for
+  // rendering panels/inputs. Using useManifestQuery here would return the
+  // raw manifest WITHOUT input values, causing "set default" calls during
+  // render that trigger an infinite update loop.
+  const manifest = clip?.manifest;
+
+  const group: ManifestGroup | undefined = clip?.group;
+  const showVariantSelector =
+    group && Array.isArray(group.variants) && group.variants.length > 1;
 
   return (
     <InputControlsProvider clipId={clipId}>
-    <div className="flex flex-col gap-y-2">
-      <div className="text-brand-light text-[10px] flex flex-col divide-y divide-brand-light/5">
-        {(() => {
-          const basePanels = (clip.manifest?.spec?.ui?.panels ||
-            []) as UIPanel[];
-          const components = clip.manifest?.spec?.components || [];
-          const schedulerOptions = components
-            .filter((c: any) => String(c?.type) === "scheduler")
-            .flatMap((c: any) =>
-              Array.isArray(c?.scheduler_options) ? c.scheduler_options : [],
-            );
-          const hasSchedulerOptions =
-            schedulerOptions && schedulerOptions.length > 0;
-          const alreadyHasSchedulerPanel = basePanels.some(
-            (p) => String(p?.name || "").toLowerCase() === "scheduler",
-          );
-          let panelsToRender =
-            hasSchedulerOptions && !alreadyHasSchedulerPanel
-              ? [
-                  ...basePanels,
-                  {
-                    name: "scheduler",
-                    label: "Scheduler",
-                    collapsible: true,
-                    default_open: false,
-                    layout: { flow: "column", rows: [] },
-                  } as UIPanel,
-                ]
-              : basePanels;
+      <div className="flex w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-7">
+        {/* Variant selector (shown when clip belongs to a multi-variant group) */}
+        {showVariantSelector && (
+          <VariantSelector
+            clipId={clipId}
+            group={group}
+            currentManifestId={
+              String(manifest?.metadata?.id || (manifest as any)?.id || "")
+                .trim() || undefined
+            }
+            currentVariantId={clip?.variantId}
+            isGenerating={isGenerating}
+          />
+        )}
 
-          // Append Attention panel at the very end if options exist and panel not present
-          const attentionOptions = (clip.manifest?.spec
-            ?.attention_types_detail || []) as any[];
-          const hasAttentionOptions =
-            Array.isArray(attentionOptions) && attentionOptions.length > 0;
-          const alreadyHasAttentionPanel = panelsToRender.some(
-            (p) => String(p?.name || "").toLowerCase() === "attention",
-          );
-          if (hasAttentionOptions && !alreadyHasAttentionPanel) {
-            panelsToRender = [
-              ...panelsToRender,
-              {
-                name: "attention",
-                label: "Attention",
-                collapsible: true,
-                default_open: false,
-                layout: { flow: "column", rows: [] },
-              } as UIPanel,
-            ];
-          }
-          return panelsToRender.map((panel) => {
-            return (
-              <ModelInputsPanel
-                key={panel.name}
-                panel={panel}
-                inputs={clip.manifest?.spec?.ui?.inputs || []}
-                clipId={clipId}
-                panelSize={panelSize}
-              />
+        <div className="text-brand-light text-[10px] flex w-full min-w-0 max-w-full flex-col divide-y divide-brand-light/5 overflow-x-hidden">
+          {(() => {
+            const basePanels = (manifest?.spec?.ui?.panels ||
+              []) as UIPanel[];
+            const components = manifest?.spec?.components || [];
+            const schedulerOptions = components
+              .filter((c: any) => String(c?.type) === "scheduler")
+              .flatMap((c: any) =>
+                Array.isArray(c?.scheduler_options)
+                  ? c.scheduler_options
+                  : [],
+              );
+            const hasSchedulerOptions =
+              schedulerOptions && schedulerOptions.length > 0;
+            const alreadyHasSchedulerPanel = basePanels.some(
+              (p) => String(p?.name || "").toLowerCase() === "scheduler",
             );
-          });
-        })()}
+            let panelsToRender =
+              hasSchedulerOptions && !alreadyHasSchedulerPanel
+                ? [
+                    ...basePanels,
+                    {
+                      name: "scheduler",
+                      label: "Scheduler",
+                      collapsible: true,
+                      default_open: false,
+                      layout: { flow: "column", rows: [] },
+                    } as UIPanel,
+                  ]
+                : basePanels;
+
+            // Append Attention panel at the very end if options exist and panel not present
+            const attentionOptions = (manifest?.spec
+              ?.attention_types_detail || []) as any[];
+            const hasAttentionOptions =
+              Array.isArray(attentionOptions) && attentionOptions.length > 0;
+            const alreadyHasAttentionPanel = panelsToRender.some(
+              (p) => String(p?.name || "").toLowerCase() === "attention",
+            );
+            if (hasAttentionOptions && !alreadyHasAttentionPanel) {
+              panelsToRender = [
+                ...panelsToRender,
+                {
+                  name: "attention",
+                  label: "Attention",
+                  collapsible: true,
+                  default_open: false,
+                  layout: { flow: "column", rows: [] },
+                } as UIPanel,
+              ];
+            }
+            return panelsToRender.map((panel) => {
+              return (
+                <ModelInputsPanel
+                  key={panel.name}
+                  panel={panel}
+                  inputs={manifest?.spec?.ui?.inputs || []}
+                  clipId={clipId}
+                  panelSize={panelSize}
+                />
+              );
+            });
+          })()}
+        </div>
       </div>
-    </div>
     </InputControlsProvider>
   );
 };

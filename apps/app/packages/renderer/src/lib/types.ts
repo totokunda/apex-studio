@@ -7,7 +7,7 @@ import {
   Input,
 } from "mediabunny";
 import type { Preprocessor } from "./preprocessor/index.js";
-import type { ManifestDocument } from "./manifest/api.js";
+import type { ManifestDocument, ManifestGroup } from "./manifest/api.js";
 
 export type ClipType =
   | "video"
@@ -42,6 +42,14 @@ export interface MediaAdjustments {
   noise?: number; // isFilter
   blur?: number; // isFilter
   vignette?: number;
+  // Found Footage / Stylize Effects
+  colorTintColor?: string; // hex color for tint (e.g. "#00ff4c" for night vision green)
+  colorTintIntensity?: number; // 0-100
+  scanLines?: number; // 0-100
+  chromaticAberration?: number; // 0-100
+  interlace?: number; // 0-100
+  pixelate?: number; // 0-100
+  jitter?: number; // 0-100
 }
 
 export interface ClipTransform {
@@ -345,6 +353,9 @@ export type GenerationModelClipProps = {
   modelStatus: "pending" | "running" | "complete" | "failed";
   assetId: string;
   createdAt: number;
+  // Manifest/variant identity used to recreate the exact generation context.
+  manifestId?: string;
+  variantId?: string;
   selectedComponents?: Record<string, any>;
   values?: Record<string, any>;
   src?: string;
@@ -365,9 +376,17 @@ export type ModelClipProps = ClipProps & {
   previewPath?: string;
   type: "model";
   manifest: ManifestDocument;
+  // Currently selected manifest variant id for this clip.
+  variantId?: string;
+  /** The parent model group (family) this clip belongs to.
+   *  When present, enables variant selection in the properties panel. */
+  group?: ManifestGroup;
   // Persist only per-clip UI input values here; the manifest JSON
   // saved to disk remains free of user-specific `value` fields.
   modelInputValues?: Record<string, any>;
+  // Variant-scoped snapshots used when switching between manifest variants.
+  modelInputValuesByVariant?: Record<string, Record<string, any>>;
+  selectedComponentsByVariant?: Record<string, Record<string, any>>;
   speed?: number;
   modelStatus?: "pending" | "running" | "complete" | "failed";
   // Persist user selections for model components (e.g., scheduler, transformer, vae, text_encoder)

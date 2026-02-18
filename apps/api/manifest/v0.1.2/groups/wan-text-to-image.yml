@@ -1,0 +1,25 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-wan-text-to-image
+  name: Wan Text to Image
+  description: Wan 2.2 A14B is a 14B parameter model for high-quality text-to-image generation built on the Wan architecture.
+  tags:
+    - wan
+    - t2i
+    - 14b
+    - "2.2"
+  author: Wan-AI
+  license: Apache-2.0
+  demo_path: models/wan-2.2-14b-text-to-image.png
+  categories:
+    - text-to-image
+
+variants:
+  - id: wan-2-2-a14b-text-to-image
+    label: "Wan 2.2 A14B"
+    description: "14B parameter text-to-image model from the Wan 2.2 family, producing detailed and coherent images from natural language descriptions."
+    manifest_ref: image/wan-2.2-a14b-text-to-image
+    default: true

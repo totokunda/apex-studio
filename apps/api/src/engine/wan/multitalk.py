@@ -50,6 +50,10 @@ class WanMultitalkEngine(WanShared):
         render_on_step_interval: int = 1,
         attention_kwargs: Dict[str, Any] = {},
         chunking_profile: str = "none",
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         """
@@ -75,6 +79,12 @@ class WanMultitalkEngine(WanShared):
             bbox: Bounding boxes for multiple people
             shift: Timestep transform shift parameter
         """
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         safe_emit_progress(progress_callback, 0.0, "Starting multitalk pipeline")
         use_cfg_guidance = guidance_scale > 1.0 and negative_prompt is not None
@@ -396,6 +406,7 @@ class WanMultitalkEngine(WanShared):
                 offload=offload,
                 dtype=torch.float32,
                 normalize_latents_dtype=torch.float32,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
             )
 
             cur_motion_frames_latent_num = int(1 + (cur_motion_frames_num - 1) // 4)
@@ -412,6 +423,7 @@ class WanMultitalkEngine(WanShared):
                     offload=offload,
                     dtype=torch.float32,
                     normalize_latents_dtype=torch.float32,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
                 )
                 latent_motion_frames = motion_latents[0]
             else:
@@ -625,7 +637,11 @@ class WanMultitalkEngine(WanShared):
             safe_emit_progress(
                 clip_decode_progress, 0.0, f"Decoding latents (clip {clip_idx})"
             )
-            videos = self.vae_decode(latents, offload=offload)
+            videos = self.vae_decode(
+                latents,
+                offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+            )
             safe_emit_progress(
                 clip_decode_progress, 0.6, f"Decoded latents (clip {clip_idx})"
             )
@@ -656,7 +672,7 @@ class WanMultitalkEngine(WanShared):
                 break
 
             # update next condition frames
-            is_first_clip = False
+            
             cur_motion_frames_num = motion_frames
             cond_frame = (
                 videos[:, :, -cur_motion_frames_num:].to(torch.float32).to(self.device)
@@ -681,6 +697,9 @@ class WanMultitalkEngine(WanShared):
             audio_start_idx += num_frames - cur_motion_frames_num
             audio_end_idx = audio_start_idx + clip_length
             miss_lengths = []
+            
+            if audio_end_idx >= min(max_num_frames, len(full_audio_embs[0])) and is_first_clip:
+               break
 
             if audio_end_idx >= min(max_num_frames, len(full_audio_embs[0])):
                 arrive_last_frame = True
@@ -702,6 +721,8 @@ class WanMultitalkEngine(WanShared):
                         miss_lengths.append(miss_length)
                     else:
                         miss_lengths.append(0)
+            
+            is_first_clip = False
 
             if max_num_frames <= num_frames:
                 break
@@ -735,7 +756,7 @@ class WanMultitalkEngine(WanShared):
             return postprocessed_video
 
     def _render_step(self, latents, render_on_step_callback):
-        video = self.vae_decode(latents)
+        video = self.vae_decode(latents, vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None))
         gen_video_list = self._preview_video_list + [video]
         gen_video_samples = torch.cat(gen_video_list, dim=2)[
             :, :, : int(self._preview_max_num_frames)

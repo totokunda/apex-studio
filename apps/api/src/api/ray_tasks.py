@@ -14,10 +14,15 @@ import hashlib
 import os
 import re
 import shutil
-from src.utils.save_audio_video import save_video_ovi, save_video_ltx2
+from src.api.savers.audio_video import save_video_ovi, save_video_ltx2
+from src.api.savers.engine_results import save_engine_output
+from src.api.savers.foley import mux_foley_audio_onto_input_video
+from src.api.savers.mmaudio import save_mmaudio_output
+from src.api.savers.mp4 import optimize_mp4_for_editor_in_place
+from src.api.savers.preview_url import make_preview_url
+from src.api.savers.postprocessors import save_frames_with_source_audio
 import inspect
 import yaml
-import numpy as np
 import json
 from src.utils.cache import empty_cache
 from src.utils.warm_pool import EngineWarmPool, stable_hash_dict
@@ -31,7 +36,8 @@ from src.utils.defaults import (
     get_cache_path,
 )
 from src.utils.config_store import read_json_dict
-from src.api.manifest import get_manifest, MANIFEST_BASE_PATH
+from src.api.manifest import get_manifest, invalidate_manifest_caches
+from src.manifest.paths import ensure_local_manifest_path
 import gc
 import ctypes
 import ctypes.util
@@ -407,224 +413,6 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _optimize_mp4_for_editor_in_place(
-    video_path: str,
-    *,
-    fps: Optional[int] = None,
-    gop_frames: Optional[int] = None,
-) -> bool:
-    """
-    Best-effort post-pass for MP4s intended for interactive playback in editors.
-
-    Goals:
-    - Make MP4 seekable/streamable via `-movflags +faststart`
-    - Optionally enforce CFR + a shorter GOP for smoother scrubbing
-    - Keep behavior best-effort: on failure, leave the original file intact
-
-    Controlled by env:
-    - APEX_VIDEO_EDITOR_OPTIMIZE: enable/disable (default: true)
-    - APEX_VIDEO_EDITOR_ENGINE_GOP: engine-result GOP in frames (default: 1)
-    - APEX_VIDEO_EDITOR_PREPROCESSOR_GOP: preprocessor-result GOP in frames (default: 4)
-    - APEX_VIDEO_EDITOR_GOP_FRAMES: keyframe interval in frames (default: unset)
-    - APEX_VIDEO_EDITOR_GOP_SECONDS: keyframe interval in seconds (default: 1.0)
-    - APEX_VIDEO_EDITOR_CRF: x264 CRF (default: 18)
-    - APEX_VIDEO_EDITOR_PRESET: x264 preset (default: veryfast)
-    - APEX_VIDEO_EDITOR_NO_BFRAMES: disable B-frames for monotonic timestamps (default: true)
-    """
-    try:
-        import shlex
-
-        from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
-
-        if not _env_flag("APEX_VIDEO_EDITOR_OPTIMIZE", default=True):
-            return False
-
-        if not (isinstance(video_path, str) and os.path.isfile(video_path)):
-            return False
-
-        base = Path(video_path)
-        if base.suffix.lower() != ".mp4":
-            return False
-
-        # Read tunables.
-        # Prefer explicit GOP frames if provided; fall back to env override; then GOP seconds.
-        gop_frames_int: Optional[int] = None
-        if gop_frames is not None:
-            try:
-                gop_frames_int = int(gop_frames)
-            except Exception:
-                gop_frames_int = None
-        if gop_frames_int is None:
-            try:
-                _raw = os.environ.get("APEX_VIDEO_EDITOR_GOP_FRAMES")
-                if _raw is not None and str(_raw).strip() != "":
-                    gop_frames_int = int(str(_raw).strip())
-            except Exception:
-                gop_frames_int = None
-        if gop_frames_int is not None:
-            gop_frames_int = max(1, min(1000, int(gop_frames_int)))
-
-        try:
-            gop_seconds = float(
-                os.environ.get("APEX_VIDEO_EDITOR_GOP_SECONDS", "1.0") or "1.0"
-            )
-        except Exception:
-            gop_seconds = 1.0
-        gop_seconds = max(0.25, min(10.0, gop_seconds))
-
-        try:
-            crf = int(os.environ.get("APEX_VIDEO_EDITOR_CRF", "18") or "18")
-        except Exception:
-            crf = 18
-        crf = max(0, min(51, crf))
-
-        preset = str(
-            os.environ.get("APEX_VIDEO_EDITOR_PRESET", "veryfast") or "veryfast"
-        ).strip()
-        if not preset:
-            preset = "veryfast"
-
-        no_bframes = _env_flag("APEX_VIDEO_EDITOR_NO_BFRAMES", default=True)
-
-        # If we don't know the FPS, keep it as-is and only ensure faststart.
-        fps_int: Optional[int] = None
-        if fps is not None:
-            try:
-                fps_int = int(max(1, round(float(fps))))
-            except Exception:
-                fps_int = None
-
-        temp_out_path = base.with_name(f"{base.stem}_editor{base.suffix}")
-
-        # Hard timeout so this post-pass can never wedge a server/worker indefinitely.
-        try:
-            timeout_s = float(
-                os.environ.get("APEX_VIDEO_EDITOR_FFMPEG_TIMEOUT_SECONDS", "60") or "60"
-            )
-        except Exception:
-            timeout_s = 60.0
-        timeout_s = max(5.0, min(60.0 * 10.0, float(timeout_s)))
-
-        ffmpeg_path = get_ffmpeg_path()
-
-        # GOP tuning for smoother seeking/scrubbing (requires re-encode).
-        gop: Optional[int] = None
-        if gop_frames_int is not None:
-            gop = int(gop_frames_int)
-        elif fps_int is not None:
-            gop = int(max(1, round(float(fps_int) * float(gop_seconds))))
-
-        # Common flags for daemon-safe invocations:
-        # - `-nostdin` + `stdin=DEVNULL` prevents ffmpeg from interacting with process stdin.
-        # - `-hide_banner` keeps logs small; we also force loglevel error.
-        common: List[str] = [
-            ffmpeg_path,
-            "-hide_banner",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(base),
-            # Video only: audio is muxed later in our pipeline.
-            "-an",
-            "-map",
-            "0:v:0",
-        ]
-
-        # If we don't know FPS and no GOP override is requested, prefer a fast stream copy
-        # to just relocate the moov atom (`+faststart`) without re-encoding.
-        candidate_cmds: List[List[str]] = []
-        if fps_int is None and gop is None:
-            candidate_cmds.append(
-                common
-                + [
-                    "-c:v",
-                    "copy",
-                    "-movflags",
-                    "+faststart",
-                    str(temp_out_path),
-                ]
-            )
-
-        # Re-encode path (needed for CFR/GOP/B-frames tuning).
-        cmd: List[str] = (
-            common
-            + [
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-preset",
-                preset,
-                "-crf",
-                str(crf),
-                "-sc_threshold",
-                "0",
-            ]
-        )
-
-        if gop is not None:
-            cmd.extend(
-                [
-                    "-g",
-                    str(gop),
-                    "-keyint_min",
-                    str(gop),
-                ]
-            )
-        # Enforce CFR in the output when FPS is known.
-        if fps_int is not None:
-            cmd.extend(["-fps_mode", "cfr", "-r", str(fps_int)])
-
-        if no_bframes:
-            # Avoid B-frame reordering; often improves editor scrubbing and makes timestamps simpler.
-            cmd.extend(["-x264-params", "bframes=0"])
-
-        cmd.extend(
-            [
-                "-movflags",
-                "+faststart",
-                str(temp_out_path),
-            ]
-        )
-
-        candidate_cmds.append(cmd)
-
-        last_err: Optional[str] = None
-        for attempt, cmd_i in enumerate(candidate_cmds, start=1):
-            try:
-                log_path = base.with_name(f"{base.stem}_editor_ffmpeg_{attempt}.log")
-                logger.info(
-                    "Optimizing MP4 for editor (%s/%s): %s (timeout=%.1fs)",
-                    attempt,
-                    len(candidate_cmds),
-                    shlex.join(cmd_i),
-                    timeout_s,
-                )
-                rc, lp, _ = run_ffmpeg(cmd_i, timeout_s=timeout_s, log_path=log_path)
-                if rc != 0 or not temp_out_path.is_file():
-                    last_err = f"returncode={rc}; log={lp}"
-                    continue
-
-                logger.info("MP4 editor optimization succeeded (attempt %s).", attempt)
-                temp_out_path.replace(base)
-                return True
-            except Exception as e:
-                last_err = str(e)
-                try:
-                    if temp_out_path.exists():
-                        temp_out_path.unlink(missing_ok=True)  # type: ignore[arg-type]
-                except Exception:
-                    pass
-
-        if last_err:
-            logger.warning("MP4 editor optimization failed: %s", last_err)
-        return False
-    except Exception:
-        return False
-
-
 def _free_unused_modules_in_warm_pool_impl(
     *,
     active: Optional[List[str]] = None,
@@ -958,6 +746,7 @@ def _save_manifest_yaml(yaml_path: Path, doc: Dict[str, Any]) -> None:
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
         yaml_text = yaml.safe_dump(doc, sort_keys=False)
         yaml_path.write_text(yaml_text, encoding="utf-8")
+        invalidate_manifest_caches()
     except Exception as e:
         logger.error(f"Failed to write updated manifest YAML {yaml_path}: {e}")
 
@@ -1019,7 +808,10 @@ def _remove_lora_from_manifest(
         if not lora_name:
             return False
         manifest = get_manifest(manifest_id)
-        manifest_path = MANIFEST_BASE_PATH / Path(manifest.get("full_path"))
+        relative_path = manifest.get("full_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            return False
+        manifest_path = ensure_local_manifest_path(relative_path)
         doc = _load_manifest_yaml(manifest_path)
         if doc is None:
             return False
@@ -1316,7 +1108,10 @@ def _ensure_lora_registered_in_manifests(
     """
     try:
         manifest = get_manifest(manifest_id)
-        manifest_path = MANIFEST_BASE_PATH / Path(manifest.get("full_path"))
+        relative_path = manifest.get("full_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            return None
+        manifest_path = ensure_local_manifest_path(relative_path)
         doc = _load_manifest_yaml(manifest_path)
         if doc is None:
             return
@@ -1467,7 +1262,10 @@ def _mark_lora_verified_in_manifests(
     """
     try:
         manifest = get_manifest(manifest_id)
-        manifest_path = MANIFEST_BASE_PATH / Path(manifest.get("full_path"))
+        relative_path = manifest.get("full_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            return None
+        manifest_path = ensure_local_manifest_path(relative_path)
         doc = _load_manifest_yaml(manifest_path)
         if doc is None:
             return None
@@ -2051,6 +1849,10 @@ def download_unified(
                     "message": "LoRA downloaded and initialized",
                     "local_paths": lora_item.local_paths,
                 }
+                try:
+                    invalidate_manifest_caches()
+                except Exception:
+                    pass
                 if verified is not None:
                     result["verified"] = bool(verified)
                 return result
@@ -2168,11 +1970,6 @@ def download_unified(
                 overall_progress = max(0.0, min(1.0, overall_progress))
                 self.last_overall = overall_progress
 
-                if filename:
-                    filename_parts = filename.split("_")
-                    if len(filename_parts) > 1:
-                        filename_parts = filename_parts[1:]
-                    filename = "_".join(filename_parts)
 
                 meta = {"label": label, "bucket": norm_type}
                 if downloaded is not None:
@@ -2258,6 +2055,11 @@ def download_unified(
         except Exception:
             pass
         has_error = any(r.get("status") == "error" for r in results)
+        if norm_type in {"component", "lora"}:
+            try:
+                invalidate_manifest_caches()
+            except Exception:
+                pass
         return {
             "job_id": job_id,
             "status": "error" if has_error else "complete",
@@ -2360,6 +2162,10 @@ def download_components(
 
         has_error = any(r.get("status") == "error" for r in results)
         final_status = "error" if has_error else "complete"
+        try:
+            invalidate_manifest_caches()
+        except Exception:
+            pass
         send_progress(
             1.0,
             "Complete" if final_status == "complete" else "Completed with errors",
@@ -2424,12 +2230,15 @@ def _execute_preprocessor(
         send_progress(1.0, "Cache found and returning")
         # Construct preview URL for frontend access
         preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
-        try:
-            relative_path = Path(result_path).relative_to(preprocessor_results_base)
-            preview_url = f"/files/preprocessor_results/{relative_path}"
-        except (ValueError, AttributeError):
-            # Fallback if path conversion fails
-            preview_url = None
+        preview_url = (
+            make_preview_url(
+                result_path=str(result_path),
+                results_base=preprocessor_results_base,
+                route_prefix="/files/preprocessor_results",
+            )
+            if isinstance(result_path, str)
+            else None
+        )
 
         results_dict = {
             "Complete": "Complete",
@@ -2541,7 +2350,7 @@ def _execute_preprocessor(
                     fps_hint,
                     preproc_gop,
                 )
-                _optimize_mp4_for_editor_in_place(
+                optimize_mp4_for_editor_in_place(
                     result_path, fps=fps_hint, gop_frames=preproc_gop
                 )
                 logger.info(
@@ -2552,12 +2361,15 @@ def _execute_preprocessor(
 
         # Construct preview URL for frontend access
         preprocessor_results_base = Path(get_cache_path()) / "preprocessor_results"
-        try:
-            relative_path = Path(result_path).relative_to(preprocessor_results_base)
-            preview_url = f"/files/preprocessor_results/{relative_path}"
-        except (ValueError, AttributeError):
-            # Fallback if path conversion fails
-            preview_url = None
+        preview_url = (
+            make_preview_url(
+                result_path=str(result_path),
+                results_base=preprocessor_results_base,
+                route_prefix="/files/preprocessor_results",
+            )
+            if isinstance(result_path, str)
+            else None
+        )
 
         results_dict = {
             "Complete": "Complete",
@@ -2784,6 +2596,120 @@ def _run_engine_from_manifest_impl(
         if attention_type:
             input_kwargs["attention_type"] = attention_type
 
+        # Forward model-weight download progress (during engine construction) to frontend.
+        _weights_dl_state: Dict[str, Any] = {
+            "last_emit_ts": 0.0,
+            "last_percent_step": -1,
+            "last_downloaded_emitted": 0,
+            "last_label": "",
+        }
+
+        def _format_bytes(value: int) -> str:
+            try:
+                n = float(max(0, int(value)))
+            except Exception:
+                n = 0.0
+            units = ["B", "KB", "MB", "GB", "TB"]
+            idx = 0
+            while n >= 1024.0 and idx < len(units) - 1:
+                n /= 1024.0
+                idx += 1
+            if idx == 0:
+                return f"{int(n)} {units[idx]}"
+            return f"{n:.1f} {units[idx]}"
+
+        def _engine_weights_download_progress(
+            downloaded: int, total: Optional[int], label: Optional[str] = None
+        ) -> None:
+            try:
+                now_ts = time.time()
+                total_i = int(total) if isinstance(total, (int, float)) else None
+                downloaded_i = (
+                    int(downloaded) if isinstance(downloaded, (int, float)) else 0
+                )
+                if total_i is not None and total_i > 0:
+                    if downloaded_i < 0:
+                        downloaded_i = 0
+                    if downloaded_i > total_i:
+                        downloaded_i = total_i
+                    fraction = float(downloaded_i) / float(total_i)
+                else:
+                    fraction = None
+
+                # Throttle noisy downloader callbacks while preserving useful milestones.
+                label_str = str(label).strip() if isinstance(label, str) else ""
+                # Emit at coarse milestones only:
+                # - every 5% when total is known
+                # - every 250MB when total is unknown
+                # - heartbeat every 10s
+                percent_step = (
+                    int((fraction or 0.0) * 100.0) // 5 if fraction is not None else -1
+                )
+                label_changed = label_str != str(_weights_dl_state.get("last_label") or "")
+                if label_changed:
+                    _weights_dl_state["last_percent_step"] = -1
+                    _weights_dl_state["last_downloaded_emitted"] = 0
+
+                should_emit = False
+                last_ts = float(_weights_dl_state.get("last_emit_ts") or 0.0)
+                if fraction in {0.0, 1.0}:
+                    should_emit = True
+                elif label_changed:
+                    should_emit = True
+                elif fraction is not None and percent_step != int(
+                    _weights_dl_state.get("last_percent_step", -1)
+                ):
+                    should_emit = True
+                elif fraction is None and (
+                    downloaded_i
+                    - int(_weights_dl_state.get("last_downloaded_emitted") or 0)
+                ) >= (250 * 1024 * 1024):
+                    should_emit = True
+                elif (now_ts - last_ts) >= 10.0:
+                    should_emit = True
+                if not should_emit:
+                    return
+                _weights_dl_state["last_emit_ts"] = now_ts
+                _weights_dl_state["last_percent_step"] = percent_step
+                _weights_dl_state["last_downloaded_emitted"] = downloaded_i
+                _weights_dl_state["last_label"] = label_str
+
+                progress_bits: List[str] = []
+                if fraction is not None:
+                    progress_bits.append(f"{fraction * 100.0:.1f}%")
+                if total_i is not None and total_i > 0:
+                    progress_bits.append(
+                        f"{_format_bytes(downloaded_i)} / {_format_bytes(total_i)}"
+                    )
+                elif downloaded_i > 0:
+                    progress_bits.append(_format_bytes(downloaded_i))
+
+                progress_text = (
+                    f" ({' | '.join(progress_bits)})" if progress_bits else ""
+                )
+                if label_str:
+                    msg = f"Downloading model weights: {label_str}{progress_text}"
+                else:
+                    msg = f"Downloading model weights{progress_text}"
+
+                meta: Dict[str, Any] = {
+                    "status": "processing",
+                    "stage": "weights_download",
+                }
+                if total_i is not None:
+                    meta["total"] = total_i
+                meta["downloaded"] = downloaded_i
+                if fraction is not None:
+                    meta["fraction"] = max(0.0, min(1.0, float(fraction)))
+                if label_str:
+                    meta["filename"] = label_str
+                # Use engine progress bar during weight download when a total is known.
+                send_progress(fraction if fraction is not None else None, msg, meta)
+            except Exception:
+                return
+
+        input_kwargs["download_progress_callback"] = _engine_weights_download_progress
+
         engine_pool_key = _engine_pool_key(
             manifest_path=manifest_path,
             engine_type=engine_type,
@@ -2804,12 +2730,27 @@ def _run_engine_from_manifest_impl(
         # This allows a previous warmup (or a previous run) to reuse the already-loaded engine.
         allow_pool = not _warm_weights_disabled()
         try:
+            send_progress(
+                None,
+                "Preparing model weights",
+                {"status": "processing", "stage": "weights_download"},
+            )
             engine, engine_pooled = _get_engine_warm_pool().acquire(
                 engine_pool_key, _factory, allow_pool=allow_pool
+            )
+            send_progress(
+                None,
+                "Model weights ready",
+                {"status": "processing", "stage": "weights_download"},
             )
         except Exception:
             engine = _factory()
             engine_pooled = False
+            send_progress(
+                None,
+                "Model weights ready",
+                {"status": "processing", "stage": "weights_download"},
+            )
 
         # Compute FPS once so we don't capture the full engine/config inside callbacks.
         fps_for_video: int = 16
@@ -2897,6 +2838,12 @@ def _run_engine_from_manifest_impl(
         model_type_lc = (
             str(model_type).strip().lower() if model_type is not None else ""
         )
+        is_ovi_model = model_type_lc == "ovi"
+        is_foley_model = model_type_lc == "foley"
+        is_ltx_audio_video_engine = engine_name_lc in {"ltx2", "ltx22"}
+        is_mmaudio_engine = (
+            engine_name_lc == "mmaudio" or model_type_lc in {"mmaudio", "tv2a"}
+        )
         is_upscaler_engine = (
             engine_name_lc in {"seedvr", "flashvsr"} or model_type_lc == "upscale"
         )
@@ -2944,274 +2891,23 @@ def _run_engine_from_manifest_impl(
         job_dir.mkdir(parents=True, exist_ok=True)
 
         # Unified saver usable for previews and final outputs
-        def _mux_audio_into_video(
-            video_path: str, audio_paths: List[str]
-        ) -> Optional[str]:
-            """
-            Best-effort helper to mux one or more audio files into a video using ffmpeg.
-            Returns the new video path on success, or None on failure.
-            """
-            import os
-            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
-
-            try:
-                valid_audio_paths = [
-                    p for p in audio_paths if isinstance(p, str) and os.path.isfile(p)
-                ]
-                if not valid_audio_paths:
-                    return None
-
-                base = Path(video_path)
-                # We first mux into a temporary file, then overwrite the original
-                # video so that the final saved filename remains unchanged.
-                temp_out_path = base.with_name(f"{base.stem}_with_audio{base.suffix}")
-                log_path = job_dir / f"{base.stem}_mux_audio.log"
-
-                cmd: List[str] = [get_ffmpeg_path(), "-y", "-i", video_path]
-                for ap in valid_audio_paths:
-                    cmd.extend(["-i", ap])
-
-                if len(valid_audio_paths) == 1:
-                    # Single audio track: simple stream copy, similar to test_humo.py
-                    cmd.extend(
-                        [
-                            "-map",
-                            "0:v:0",
-                            "-map",
-                            "1:a:0?",
-                            "-c:v",
-                            "copy",
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            "192k",
-                            "-ar",
-                            "48000",
-                            "-ac",
-                            "2",
-                            "-shortest",
-                            "-movflags",
-                            "+faststart",
-                            str(temp_out_path),
-                        ]
-                    )
-                else:
-                    # Multiple audio inputs: mix them down into a single track with amix.
-                    # Audio inputs start from index 1 (0 is the video).
-                    inputs_count = len(valid_audio_paths)
-                    filter_inputs = "".join(f"[{i+1}:a]" for i in range(inputs_count))
-                    filter_spec = f"{filter_inputs}amix=inputs={inputs_count}:dropout_transition=0[aout]"
-                    cmd.extend(
-                        [
-                            "-filter_complex",
-                            filter_spec,
-                            "-map",
-                            "0:v:0",
-                            "-map",
-                            "[aout]",
-                            "-c:v",
-                            "copy",
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            "192k",
-                            "-ar",
-                            "48000",
-                            "-ac",
-                            "2",
-                            "-shortest",
-                            "-movflags",
-                            "+faststart",
-                            str(temp_out_path),
-                        ]
-                    )
-
-                rc, lp, _ = run_ffmpeg(cmd, log_path=log_path)
-                if rc != 0 or not temp_out_path.is_file():
-                    logger.warning(
-                        f"ffmpeg audio mux failed (code={rc}) (log={lp})"
-                    )
-                    return None
-                try:
-                    # Overwrite the original file so callers keep the same filename.
-                    temp_out_path.replace(base)
-                except Exception as move_err:
-                    logger.warning(
-                        f"ffmpeg audio mux succeeded but failed to move into place: {move_err}"
-                    )
-                    return None
-                return str(base)
-            except Exception as e:
-                logger.warning(f"Failed to mux audio into video: {e}")
-                return None
-
-        def _mux_audio_from_source_video(
-            video_path: str, source_video_path: str
-        ) -> Optional[str]:
-            """
-            Best-effort helper to mux the first audio track from `source_video_path`
-            into `video_path` using ffmpeg.
-            """
-            import os
-            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
-
-            try:
-                if not (
-                    isinstance(video_path, str)
-                    and isinstance(source_video_path, str)
-                    and os.path.isfile(video_path)
-                    and os.path.isfile(source_video_path)
-                ):
-                    return None
-
-                base = Path(video_path)
-                # Mux into a temporary file, then overwrite the original.
-                temp_out_path = base.with_name(f"{base.stem}_with_audio{base.suffix}")
-                log_path = job_dir / f"{base.stem}_mux_audio_from_source.log"
-
-                # Video from generated output (0), audio from source input (1).
-                # Encode audio to AAC for MP4 compatibility; copy video stream.
-                cmd: List[str] = [
-                    get_ffmpeg_path(),
-                    "-y",
-                    "-i",
-                    video_path,
-                    "-i",
-                    source_video_path,
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "1:a:0?",
-                    "-c:v",
-                    "copy",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "192k",
-                    "-ar",
-                    "48000",
-                    "-ac",
-                    "2",
-                    "-shortest",
-                    "-movflags",
-                    "+faststart",
-                    str(temp_out_path),
-                ]
-                rc, lp, _ = run_ffmpeg(cmd, log_path=log_path)
-                if rc != 0 or not temp_out_path.is_file():
-                    return None
-                try:
-                    temp_out_path.replace(base)
-                except Exception as move_err:
-                    logger.warning(
-                        f"ffmpeg audio mux succeeded but failed to move into place: {move_err}"
-                    )
-                    return None
-                return str(base)
-            except Exception as e:
-                logger.warning(f"Failed to mux audio from source video: {e}")
-                return None
-
         def save_output(
             output_obj,
             filename_prefix: str = "result",
             final: bool = False,
             audio_inputs: Optional[List[str]] = None,
         ):
-            result_path: Optional[str] = None
-            media_type: Optional[str] = None
-            try:
-                # String path passthrough
-                if isinstance(output_obj, str):
-                    result_path = output_obj
-                    media_type = "path"
-                # Single image
-                elif isinstance(output_obj, Image.Image):
-                    ext = f"png" if final else "jpg"
-                    result_path = str(job_dir / f"{filename_prefix}.{ext}")
-                    output_obj.save(result_path)
-                    media_type = "image"
-                # Sequence of frames
-                elif isinstance(output_obj, list) and len(output_obj) > 0:
-                    fps = fps_for_video or 16
-                    result_path = str(job_dir / f"{filename_prefix}.mp4")
-
-                    from diffusers.utils import export_to_video
-
-                    export_to_video(
-                        output_obj,
-                        result_path,
-                        fps=int(fps),
-                        quality=8.0 if final else 3.0,
-                    )
-                    media_type = "video"
-
-                    # Post-pass: generate a seek/editor-friendly MP4 before we mux audio.
-                    # Best-effort only (keeps original file if ffmpeg fails).
-                    if final and result_path:
-                        try:
-                            try:
-                                engine_gop = int(
-                                    os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1")
-                                    or "1"
-                                )
-                            except Exception:
-                                engine_gop = 1
-                            _optimize_mp4_for_editor_in_place(
-                                result_path, fps=int(fps), gop_frames=engine_gop
-                            )
-                        except Exception:
-                            pass
-
-                    # If this is the final video and we have audio inputs to save, try to mux them in.
-                    if final and media_type == "video" and result_path and audio_inputs:
-                        try:
-                            muxed = _mux_audio_into_video(result_path, audio_inputs)
-                            if muxed:
-                                result_path = muxed
-                        except Exception as mux_err:
-                            logger.warning(
-                                "Audio muxing failed; returning video-only output. "
-                                f"Error: {mux_err}"
-                            )
-
-                    # Upscalers (SeedVR/FlashVSR): preserve input video audio if present.
-                    if (
-                        final
-                        and media_type == "video"
-                        and result_path
-                        and is_upscaler_engine
-                        and input_video_for_audio_mux
-                    ):
-                        try:
-                            muxed = _mux_audio_from_source_video(
-                                result_path, input_video_for_audio_mux
-                            )
-                            if muxed:
-                                result_path = muxed
-                        except Exception as mux_err:
-                            logger.warning(
-                                "Upscaler input audio muxing failed; returning video-only output. "
-                                f"Error: {mux_err}"
-                            )
-                else:
-                    # Fallback best-effort serialization
-                    try:
-                        arr = np.asarray(output_obj)  # type: ignore[arg-type]
-                        result_path = str(job_dir / f"{filename_prefix}.png")
-                        Image.fromarray(arr).save(result_path)
-                        media_type = "image"
-                    except Exception as e:
-                        logger.error(f"Failed to save output: {e}")
-                        result_path = str(job_dir / f"{filename_prefix}.txt")
-                        with open(result_path, "w") as f:
-                            f.write(str(type(output_obj)))
-                        media_type = "unknown"
-            except Exception as save_err:
-                traceback.print_exc()
-                logger.error(f"Failed to save output: {save_err}")
-                raise
-            return result_path, media_type
+            return save_engine_output(
+                output_obj=output_obj,
+                job_dir=job_dir,
+                filename_prefix=filename_prefix,
+                final=final,
+                fps=int(fps_for_video or 16),
+                audio_inputs=audio_inputs,
+                is_upscaler_engine=is_upscaler_engine,
+                input_video_for_audio_mux=input_video_for_audio_mux,
+                logger=logger,
+            )
 
         total_steps = max(1, len(preprocessor_jobs) + 1)
 
@@ -3278,9 +2974,6 @@ def _run_engine_from_manifest_impl(
                         f"Failed to resolve audio input '{audio_key}' for saving: {e}"
                     )
 
-        engine_stage_start = len(preprocessor_jobs) / total_steps
-        engine_stage_span = 1.0 / total_steps
-
         # Render-on-step callback that writes previews
         step_counter = {"i": 0}
         # Optional: limit how many *preview* saves we do per run (final result always saves).
@@ -3320,14 +3013,15 @@ def _run_engine_from_manifest_impl(
                 try:
                     # Construct preview URL for frontend access
                     engine_results_base = Path(DEFAULT_CACHE_PATH) / "engine_results"
-                    try:
-                        relative_path = Path(result_path).relative_to(
-                            engine_results_base
+                    preview_url = (
+                        make_preview_url(
+                            result_path=str(result_path),
+                            results_base=engine_results_base,
+                            route_prefix="/files/engine_results",
                         )
-                        preview_url = f"/files/engine_results/{relative_path}"
-                    except (ValueError, AttributeError):
-                        # Fallback if path conversion fails
-                        preview_url = None
+                        if isinstance(result_path, str)
+                        else None
+                    )
 
                     # Send an update that does not overwrite progress (progress=None)
                     logger.info(
@@ -3356,15 +3050,22 @@ def _run_engine_from_manifest_impl(
             output_obj: Tuple[np.ndarray, np.ndarray],
             is_result: bool = False,
         ):
+            if not (isinstance(output_obj, (tuple, list)) and len(output_obj) >= 2):
+                raise ValueError(
+                    "Expected audio+video output tuple shaped like (video, audio)."
+                )
             idx = step_counter["i"]
             step_counter["i"] = idx + 1
             # Enforce preview-save limit (do not block final outputs).
             if not is_result and _max_preview_saves > 0 and idx >= _max_preview_saves:
                 return None, None
+            video_shape = getattr(output_obj[0], "shape", None)
+            audio_shape = getattr(output_obj[1], "shape", None)
             logger.info(
-                f"Saving audio video output at step {idx} with output object {output_obj[0].shape} and {output_obj[1].shape}"
+                f"Saving audio video output at step {idx} with "
+                f"video_shape={video_shape} audio_shape={audio_shape}"
             )
-            if model_type.lower() == "ovi":
+            if is_ovi_model:
                 save_func = save_video_ovi
             else:
                 save_func = save_video_ltx2
@@ -3378,12 +3079,15 @@ def _run_engine_from_manifest_impl(
             try:
                 # Construct preview URL for frontend access
                 engine_results_base = Path(DEFAULT_CACHE_PATH) / "engine_results"
-                try:
-                    relative_path = Path(result_path).relative_to(engine_results_base)
-                    preview_url = f"/files/engine_results/{relative_path}"
-                except (ValueError, AttributeError):
-                    # Fallback if path conversion fails
-                    preview_url = None
+                preview_url = (
+                    make_preview_url(
+                        result_path=str(result_path),
+                        results_base=engine_results_base,
+                        route_prefix="/files/engine_results",
+                    )
+                    if isinstance(result_path, str)
+                    else None
+                )
 
                 logger.info(
                     f"Sending preview websocket update at step {idx} with result path {result_path} and media type {media_type}"
@@ -3404,27 +3108,73 @@ def _run_engine_from_manifest_impl(
                     f"Failed sending preview websocket update at step {idx}: {se}"
                 )
             return result_path, media_type
+        
+        def render_on_step_callback_audio(
+            output_obj: np.ndarray,
+            is_result: bool = True,
+        ):
+            # HunyuanVideo-Foley returns an audio waveform; return the *original input video*
+        # with the generated audio muxed in (best-effort) using ffmpeg.
+            result_path = None
+            media_type = None
+            if is_foley_model:
+                video_val = (prepared_inputs or {}).get("video")
+                input_video_path, _ = _coerce_media_input(video_val)
+                if not input_video_path:
+                    raise RuntimeError(
+                        "Foley model requires an input `video` path to mux audio into."
+                    )
+
+                output_video_path = str(job_dir / "result.mp4")
+                result_path = mux_foley_audio_onto_input_video(
+                    input_video_path=input_video_path,
+                    audio_output=output_obj,
+                    job_dir=job_dir,
+                    output_video_path=output_video_path,
+                    logger=logger,
+                )
+                media_type = "video"
+            elif is_mmaudio_engine:
+                video_val = (prepared_inputs or {}).get("video")
+                input_video_path, _ = _coerce_media_input(video_val)
+                result_path, media_type = save_mmaudio_output(
+                    audio_output=output,
+                    job_dir=job_dir,
+                    filename_prefix="result",
+                    input_video_path=input_video_path,
+                    logger=logger,
+                )
+            
+            send_progress(
+                1.0,
+                f"Preview result",
+                {
+                    "status": "complete",
+                    "preview_path": result_path,
+                    "type": media_type,
+                },
+            )
+            return result_path, media_type
+            # save
 
         # Progress callback forwarded into the engine
         def progress_callback(
             progress: float, message: str, metadata: Optional[Dict] = None
         ):
             logger.info(f"Progress callback: {progress}, {message}, {metadata}")
+            merged_meta = dict(metadata or {})
+            merged_meta.setdefault("stage", "engine")
+            if merged_meta.get("status") == "complete":
+                merged_meta["status"] = "processing"
             if progress is None:
-                send_progress(None, message, metadata)
+                send_progress(None, message, merged_meta)
                 return
             bounded = max(0.0, min(1.0, progress))
-            send_progress(
-                engine_stage_start + bounded * engine_stage_span, message, metadata
-            )
+            send_progress(bounded, message, merged_meta)
 
         # Persist a snapshot of the invocation into the structured `runs` directory
 
-        render_func = (
-            render_on_step_callback_audio_video
-            if model_type.lower() == "ovi" or engine_type.lower() == "ltx2"
-            else render_on_step_callback
-        )
+        render_func = render_on_step_callback_audio_video if is_ovi_model or is_ltx_audio_video_engine else render_on_step_callback_audio if is_foley_model or is_mmaudio_engine else render_on_step_callback
 
         if _bool_env("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
             _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
@@ -3438,6 +3188,11 @@ def _run_engine_from_manifest_impl(
             render_on_step = (
                 _bool_env("ENABLE_IMAGE_RENDER_STEP", "false") == "true"
             )
+
+        # Reset progress timeline when the actual engine run begins.
+        send_progress(0.0, "Starting engine run", {"status": "processing", "stage": "engine"})
+        
+        logger.info(f"Prepared inputs: {prepared_inputs}")
 
         output = engine.run(
             **(prepared_inputs or {}),
@@ -3460,18 +3215,20 @@ def _run_engine_from_manifest_impl(
 
         # OVI models return a tuple of (video_tensor, audio_numpy). Use a dedicated
         # saver so we correctly embed the generated audio into the MP4 output.
-        if (
-            isinstance(model_type, str)
-            and model_type.lower() == "ovi"
-            or model_type.lower() == "ti2v"
-        ):
+        if is_ovi_model or is_ltx_audio_video_engine:
             result_path, media_type = render_func(
                 output,
                 is_result=True,
             )
-        else:
+        elif is_foley_model or is_mmaudio_engine:
             result_path, media_type = render_func(
-                output[0],
+                output,
+            )
+        
+        else:
+            save_obj = output[0] if isinstance(output, (list, tuple)) else output
+            result_path, media_type = render_func(
+                save_obj,
                 is_result=True,
                 audio_inputs=audio_input_paths or None,
             )
@@ -3554,6 +3311,12 @@ def _run_engine_from_manifest_impl(
             output = None
         except Exception as cleanup_err:
             logger.warning(f"run_engine_from_manifest cleanup failed: {cleanup_err}")
+        try:
+            # Engine initialization may have downloaded model/config assets; always
+            # bump manifest cache buster so UI readiness reflects current disk state.
+            invalidate_manifest_caches()
+        except Exception:
+            pass
         _aggressive_ram_cleanup(
             clear_torch_cache=(not bool(engine_pooled))
             or _warm_weights_disabled()
@@ -3643,90 +3406,27 @@ def run_frame_interpolation(
             progress_callback=frame_progress,
         )
 
-        # Save output video (video-only first), then mux original audio if present
-        import subprocess
-        import shutil
-
         job_dir = (
             Path(DEFAULT_CACHE_PATH)
             / "postprocessor_results"
             / _safe_fs_component(job_id, fallback="job")
         )
-        job_dir.mkdir(parents=True, exist_ok=True)
-
-        video_only_path = str(job_dir / "result_video.mp4")
-        final_out_path = str(job_dir / "result.mp4")
-
         fps_to_write = int(max(1, round(target_fps)))
-        from diffusers.utils import export_to_video
-
-        export_to_video(frames, video_only_path, fps=fps_to_write, quality=8.0)
-
-        # Post-pass: generate a seek/editor-friendly MP4 before we mux original audio.
-        try:
-            try:
-                engine_gop = int(
-                    os.environ.get("APEX_VIDEO_EDITOR_ENGINE_GOP", "1") or "1"
-                )
-            except Exception:
-                engine_gop = 1
-            _optimize_mp4_for_editor_in_place(
-                video_only_path, fps=fps_to_write, gop_frames=engine_gop
-            )
-        except Exception:
-            pass
-
-        # Try to mux audio from input_path into the final output without changing rate/tempo
-        # If no audio is present, fall back to the video-only file
-        try:
-            from src.utils.ffmpeg import get_ffmpeg_path, run_ffmpeg
-
-            # Use ffmpeg with stream copy to preserve original audio rate/tempo
-            # -map 0:v:0 takes video from the first input (our generated video)
-            # -map 1:a:0? takes the first audio track from the second input if it exists
-            ffmpeg_cmd = [
-                get_ffmpeg_path(),
-                "-y",
-                "-i",
-                video_only_path,
-                "-i",
-                input_path,
-                "-map",
-                "0:v:0",
-                "-map",
-                "1:a:0?",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "copy",
-                "-shortest",
-                "-movflags",
-                "+faststart",
-                final_out_path,
-            ]
-            log_path = job_dir / "ffmpeg_mux_audio.log"
-            rc, lp, _ = run_ffmpeg(ffmpeg_cmd, log_path=log_path)
-            if rc != 0:
-                # If muxing failed (e.g., no audio stream), just use the video-only output
-                logger.warning(f"ffmpeg mux audio failed (code={rc}) (log={lp})")
-                shutil.move(video_only_path, final_out_path)
-        except Exception as e:
-            logger.error(f"Failed to mux audio: {e}")
-            # On any unexpected error, fall back to video-only output
-            try:
-                shutil.move(video_only_path, final_out_path)
-            except Exception:
-                # If move also fails, keep path consistent
-                final_out_path = video_only_path
+        final_out_path, _video_only_path = save_frames_with_source_audio(
+            frames=frames,
+            input_video_path=input_path,
+            output_dir=job_dir,
+            fps=fps_to_write,
+            logger=logger,
+        )
 
         # Construct preview URL for frontend access
         postprocessor_results_base = Path(DEFAULT_CACHE_PATH) / "postprocessor_results"
-        try:
-            relative_path = Path(final_out_path).relative_to(postprocessor_results_base)
-            preview_url = f"/files/postprocessor_results/{relative_path}"
-        except (ValueError, AttributeError):
-            # Fallback if path conversion fails
-            preview_url = None
+        preview_url = make_preview_url(
+            result_path=str(final_out_path),
+            results_base=postprocessor_results_base,
+            route_prefix="/files/postprocessor_results",
+        )
 
         send_update(
             1.0,

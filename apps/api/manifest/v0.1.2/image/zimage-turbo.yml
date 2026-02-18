@@ -1,0 +1,271 @@
+api_version: apex/v1
+kind: Model
+type: image
+metadata:
+  id: zimage-turbo
+  model: zimage
+  name: ZImage Turbo
+  version: 0.1.2
+  description: ZImage Turbo is a 6B parameter model for text-to-image for efficient
+    image generation.
+  tags:
+  - zimage
+  - turbo
+  - zimage-turbo
+  - t2i
+  author: Tongy-MAI
+  license: Apache-2.0
+  demo_path: models/zimage-turbo.png
+  categories:
+  - text-to-image
+spec:
+  engine: zimage
+  model_type: t2i
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.0
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  - xformers
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 3.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: vae
+    label: ZImage Turbo VAE
+    base: auto
+    config_id: Z-Image/vae
+    model_path:
+    - path: totoku/apex-models/Z-Image/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 167666902
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    label: ZImage Text Encoder
+    base: Qwen3ForCausalLM
+    name: text_encoder
+    gguf_kwargs:
+      key_map: qwen3
+    config_id: FLUX.2-klein-4B/text_encoder
+    model_path:
+    - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 8044982048
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8_e4m3fn
+      type: safetensors
+      file_size: 4411692616
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    - path: totoku/apex-models/FLUX.2-klein-4B/text_encoder/text_encoder-q8_0.gguf
+      variant: Q8
+      precision: q8_0
+      type: gguf
+      file_size: 4280400512
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    tokenizer_class: Qwen2Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: FLUX.2-klein-4B/tokenizer
+  - type: transformer
+    label: ZImage Turbo Transformer
+    base: zimage.base
+    config_id: Z-Image-Turbo/transformer
+    model_path:
+    - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 12309866400
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
+    - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8_e4m3fn
+      type: safetensors
+      file_size: 6293432116
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-q8_0.gguf
+      variant: Q8
+      precision: q8_0
+      type: gguf
+      file_size: 6671501408
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
+    - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-q6_k.gguf
+      variant: Q6
+      precision: q6_k
+      type: gguf
+      file_size: 5212606432
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+    - path: totoku/apex-models/Z-Image-Turbo/transformer/transformer-q4_k_m.gguf
+      variant: Q4
+      precision: q4_k_m
+      type: gguf
+      file_size: 3661553632
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+  defaults:
+    run:
+      num_inference_steps: 9
+      guidance_scale: 0.0
+      return_latents: false
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - seed
+        - - num_inference_steps
+    inputs:
+    - id: prompt
+      label: Prompt
+      description: The prompt for text-to-image generation.
+      placeholder: A serene lake surrounded by pine trees at sunrise, ultra realistic.
+      type: text
+      panel: prompting
+      required: true
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 1024
+      options:
+      - name: 2K Ultra HD
+        value: 2048
+        height: 2048
+      - name: Ultra HD
+        value: 1024
+      - name: HD
+        value: 720
+      - name: SD
+        value: 480
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '1:1'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 2048
+      min: 256
+      max: 8192
+      step: 32
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 2048
+      min: 256
+      max: 8192
+      step: 32
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: num_inference_steps
+      label: Number of Inference Steps
+      description: The number of inference steps to use for the generation.
+      type: number
+      value_type: integer
+      panel: sampling
+      required: false
+      default: 9
+      min: 1
+      max: 100
+      step: 1
+  loras: []

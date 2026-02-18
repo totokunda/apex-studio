@@ -18,7 +18,14 @@ apex-engine = "src.__main__:app"
 files = ["requirements.txt"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src", "hunyuanvideo_foley"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "requirements.txt", "pyproject.toml", "README.md", "LICENSE"]
+include = [
+  "src",
+  "hunyuanvideo_foley",
+  "requirements.txt",
+  "pyproject.toml",
+  "README.md",
+  "LICENSE",
+]

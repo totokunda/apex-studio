@@ -212,8 +212,9 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
     if (!clip || !mask) return;
 
     const masks = (clip as any).masks || [];
+    const now = Date.now();
     const updatedMasks = masks.map((m: MaskClipProps) =>
-      m.id === mask.id ? { ...m, ...updates } : m,
+      m.id === mask.id ? { ...m, ...updates, lastModified: now } : m,
     );
 
     updateClip(clipId, { masks: updatedMasks });
@@ -1112,7 +1113,7 @@ const MaskTrackingProperties: React.FC<MaskTrackingPropertiesProps> = ({
                   <LuChevronDown className="w-3 h-3 text-brand-light" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] dark font-poppins bg-brand-background">
+              <DropdownMenuContent className="w-(--radix-dropdown-menu-trigger-width) dark font-poppins bg-brand-background">
                 <DropdownMenuRadioGroup
                   value={mask.trackingDirection ?? "both"}
                   onValueChange={(value: string) =>

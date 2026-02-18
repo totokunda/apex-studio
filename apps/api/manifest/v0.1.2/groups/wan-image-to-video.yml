@@ -1,0 +1,44 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-wan-image-to-video
+  name: Wan Image to Video
+  description: Wan image-to-video generation models including first frame last frame support.
+  tags:
+    - wan
+    - i2v
+    - fflf
+  author: Wan-AI
+  license: Apache-2.0
+  demo_path: models/wan-2.2-i2v-14b.mp4
+  categories:
+    - image-to-video
+
+variants:
+  - id: wan-2-2-a14b-image-to-video
+    label: "Wan 2.2 14B Image to Video"
+    description: "Latest generation 14B activation model that brings a single reference image to life with natural motion, strong subject preservation, and high temporal coherence."
+    manifest_ref: video/wan2.2-a14b-image-to-video
+    default: true
+
+  - id: wan-2-2-a14b-first-frame-last-frame
+    label: "Wan 2.2 14B First Frame Last Frame"
+    description: "Generates a video transition between two reference images — a starting frame and an ending frame. Ideal for morphing, scene transitions, and controlled visual storytelling between two keyframes."
+    manifest_ref: video/wan2.2-a14b-first-frame-last-frame
+
+  - id: wan-2-1-14b-image-to-video-480p
+    label: "Wan 2.1 480P Image to Video"
+    description: "Previous generation 14B dense model optimized for 480p output. Lower resolution reduces memory usage and generation time, making it well suited for quick previews or resource-constrained environments."
+    manifest_ref: video/wan-2.1-14b-image-to-video-480p
+
+  - id: wan-2-2-a5b-image-to-video
+    label: "Wan 2.2 5B Image to Video"
+    description: "Compact 5B parameter model that supports image-to-video generation. Significantly lower VRAM requirements, suitable for consumer GPUs or fast drafting."
+    manifest_ref: video/wan-2.2-5b-image-to-video
+
+  - id: wan-2-2-a14b-smooth-mix-image-to-video
+    label: "Wan 2.2 A14B Smooth Mix Image to Video"
+    description: "Fine-tuned 14B variant that prioritizes fluid, natural motion and seamless transitions between scenes. Best for cinematic shots requiring smooth camera movement or organic subject motion."
+    manifest_ref: video/wan2.2-a14b-smooth-mix-image-to-video

@@ -1,0 +1,41 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-wan-vace
+  name: Wan VACE
+  description: Wan 2.1 14B VACE model for video editing tasks including control, inpainting, outpainting, and reference-based generation.
+  tags:
+    - wan
+    - vace
+    - 14b
+  author: Wan AI
+  license: Apache-2.0
+  demo_path: models/vace-control.mp4
+  categories:
+    - control
+    - inpaint
+    - reference-image-to-video
+
+variants:
+  - id: wan-2.1-14b-vace-control
+    label: "Control"
+    description: "Condition video generation on structural guides such as depth maps, edge maps, or pose skeletons. Provides fine-grained spatial control over the output while letting the model fill in appearance and motion."
+    manifest_ref: video/wan-2.1-14b-vace-control
+    default: true
+
+  - id: wan-2.1-14b-vace-expand-swap
+    label: "Expand & Swap"
+    description: "Extend a video clip beyond its original duration or seamlessly swap regions of a clip with new AI-generated content. Useful for lengthening scenes or replacing specific elements while maintaining visual continuity."
+    manifest_ref: video/wan-2.1-14b-vace-expand-swap
+
+  - id: wan-2.1-14b-vace-painting
+    label: "Painting"
+    description: "Video inpainting and outpainting — fill in masked regions within frames or expand the canvas beyond the original boundaries. Supports first-frame and last-frame extension for creating natural lead-ins or outros."
+    manifest_ref: video/wan-2.1-14b-vace-painting
+
+  - id: wan-2.1-14b-vace-reference-to-video
+    label: "Reference to Video"
+    description: "Generate a video that preserves the visual identity and style of a reference image or clip. Ideal for character consistency, product shots, or maintaining a specific aesthetic across generated video content."
+    manifest_ref: video/wan-2.1-14b-vace-reference-to-video

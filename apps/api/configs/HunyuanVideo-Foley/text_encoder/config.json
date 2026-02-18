@@ -1,0 +1,29 @@
+{
+  "_name_or_path": "/home/yoach/tmp/clap/larger_clap_music_speech_general",
+  "architectures": [
+    "ClapModel"
+  ],
+  "audio_config": {
+    "depths": [
+      2,
+      2,
+      12,
+      2
+    ],
+    "hidden_size": 1024,
+    "model_type": "clap_audio_model",
+    "patch_embeds_hidden_size": 128
+  },
+  "hidden_size": 768,
+  "initializer_factor": 1.0,
+  "logit_scale_init_value": 14.285714285714285,
+  "model_type": "clap",
+  "num_hidden_layers": 12,
+  "projection_dim": 512,
+  "projection_hidden_act": "relu",
+  "text_config": {
+    "model_type": "clap_text_model"
+  },
+  "torch_dtype": "float32",
+  "transformers_version": "4.35.0.dev0"
+}

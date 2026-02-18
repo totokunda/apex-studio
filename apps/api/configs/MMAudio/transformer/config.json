@@ -1,0 +1,15 @@
+{
+    "_class_name": "MMAudioTransformer",
+    "latent_dim": 40,  
+    "clip_dim": 1024,
+    "sync_dim": 768,
+    "text_dim": 1024,
+    "hidden_dim": 896,
+    "depth": 21,
+    "fused_depth": 14,
+    "num_heads": 14,
+    "latent_seq_len": 345,
+    "clip_seq_len": 64,
+    "sync_seq_len": 192,
+    "v2": true
+}

@@ -29,6 +29,7 @@ from src.utils.defaults import (
     get_preprocessor_results_path,
     get_postprocessor_results_path,
 )
+from src.manifest.startup_migration import run_startup_manifest_migration_safe
 import errno
 
 _ray_ready: bool = False
@@ -103,12 +104,15 @@ def _start_parent_watchdog() -> None:
 
 async def _start_background_services() -> None:
     """
-    Start Ray + dependent background services without blocking API startup.
-    Keeps `/health` responsive quickly while Ray spins up.
+    Start Ray + dependent background services.
+
+    Note: Ray init is intentionally executed on the main thread (no asyncio.to_thread)
+    because initializing from worker threads can lead to duplicate local Ray instances
+    and raylet registration races in some environments.
     """
     global _ray_ready, _ray_start_error
     try:
-        await asyncio.to_thread(get_ray_app)
+        get_ray_app()
 
         # Initialize the Ray websocket bridge
         from .ws_manager import get_ray_ws_bridge
@@ -129,8 +133,12 @@ async def _start_background_services() -> None:
 async def lifespan(app: FastAPI):
 
     _start_parent_watchdog()
-    # Startup: initialize Ray and related services in the background (non-blocking)
-    startup_task = asyncio.create_task(_start_background_services())
+    # Startup-only migration: preserve compatibility for users with legacy
+    # downloaded weights by mapping v0.1.0 paths into v0.1.2 local manifests.
+    run_startup_manifest_migration_safe()
+    # Startup: initialize Ray and related services before accepting requests.
+    # This avoids thread-based Ray init races during early request handling.
+    await _start_background_services()
 
     # Start background task for polling Ray updates
     from .preprocessor import poll_ray_updates
@@ -140,13 +148,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown: Cancel polling task and close Ray
-    startup_task.cancel()
     poll_task.cancel()
 
-    try:
-        await startup_task
-    except asyncio.CancelledError:
-        pass
     try:
         await poll_task
     except asyncio.CancelledError:

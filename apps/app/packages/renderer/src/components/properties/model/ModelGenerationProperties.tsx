@@ -12,6 +12,98 @@ import { generatePosterCanvas } from "@/lib/media/timeline";
 import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import { pathToFileURLString } from "@app/preload";
 import { useControlsStore } from "@/lib/control";
+import {
+  getVariantScopedValue,
+  getVariantStorageKey,
+  getVariantStorageLookupKeys,
+} from "@/lib/manifest/variantStorageKey";
+
+const extractManifestInputValues = (manifest: any): Record<string, any> => {
+  const ui = manifest?.spec?.ui || manifest?.ui;
+  const inputs = Array.isArray(ui?.inputs) ? ui.inputs : [];
+  const out: Record<string, any> = {};
+  const seen = new Set<string>();
+  for (const inp of inputs) {
+    if (!inp || typeof inp.id !== "string") continue;
+    if (seen.has(inp.id)) continue;
+    seen.add(inp.id);
+    if (inp.value !== undefined) out[inp.id] = inp.value;
+  }
+  return out;
+};
+
+const cloneManifestWithInputValues = (
+  manifest: any,
+  values?: Record<string, any>,
+): any => {
+  let cloned = manifest;
+  try {
+    cloned = JSON.parse(JSON.stringify(manifest));
+  } catch {
+    cloned = { ...manifest };
+  }
+  const ui = cloned?.spec?.ui || cloned?.ui;
+  if (!ui || !Array.isArray(ui.inputs)) return cloned;
+  ui.inputs = ui.inputs.map((inp: any) => {
+    if (!inp || typeof inp.id !== "string") return inp;
+    const { value: _existingValue, ...rest } = inp;
+    if (!values || !Object.prototype.hasOwnProperty.call(values, inp.id)) {
+      return rest;
+    }
+    return { ...rest, value: values[inp.id] };
+  });
+  return cloned;
+};
+
+const resolveVariantForGeneration = (
+  clip: ModelClipProps,
+  gen: any,
+): any | null => {
+  const variants = clip?.group?.variants ?? [];
+  if (!variants.length) return null;
+
+  const variantId = String(gen?.variantId || "").trim();
+  if (variantId) {
+    const match = variants.find((v: any) => String(v?.id || "") === variantId);
+    if (match) return match;
+  }
+
+  const manifestId = String(gen?.manifestId || "").trim();
+  if (manifestId) {
+    const match = variants.find((v: any) => {
+      const byVariantId = String(v?.id || "") === manifestId;
+      const byMetaId = String(v?.manifest?.metadata?.id || "") === manifestId;
+      const byManifestId = String(v?.manifest?.id || "") === manifestId;
+      return byVariantId || byMetaId || byManifestId;
+    });
+    if (match) return match;
+  }
+
+  const valueKeys = Object.keys((gen?.values || {}) as Record<string, any>);
+  if (valueKeys.length === 0) return null;
+
+  let best: any | null = null;
+  let bestScore = -1;
+  for (const variant of variants as any[]) {
+    const ui = variant?.manifest?.spec?.ui || variant?.manifest?.ui;
+    const inputs = Array.isArray(ui?.inputs) ? ui.inputs : [];
+    if (inputs.length === 0) continue;
+    const ids = new Set(
+      inputs
+        .map((inp: any) => (typeof inp?.id === "string" ? inp.id : ""))
+        .filter(Boolean),
+    );
+    let overlap = 0;
+    for (const key of valueKeys) {
+      if (ids.has(key)) overlap += 1;
+    }
+    if (overlap > bestScore) {
+      best = variant;
+      bestScore = overlap;
+    }
+  }
+  return bestScore > 0 ? best : null;
+};
 
 interface ModelGenerationPropertiesProps {
   clipId: string;
@@ -23,7 +115,6 @@ export const ModelGenerationProperties: React.FC<
   const clip = useClipStore((s) => s.getClipById(clipId)) as ModelClipProps;
   const updateClip = useClipStore((s) => s.updateClip);
   const updateModelInput = useClipStore((s) => s.updateModelInput);
-  const setClipTransform = useClipStore((s) => s.setClipTransform);
   const getAssetById = useClipStore((s) => s.getAssetById);
 
   const fps = useControlsStore((s) => s.fps);
@@ -78,18 +169,86 @@ export const ModelGenerationProperties: React.FC<
 
 
       try {
+        const store = useClipStore.getState();
+        const currentClip = store.getClipById(clipId) as
+          | ModelClipProps
+          | undefined;
+        if (!currentClip) return;
+
+        const currentManifest = currentClip.manifest;
+        const currentKey = getVariantStorageKey({
+          group: currentClip.group,
+          manifest: currentManifest,
+          preferredVariantId: currentClip.variantId,
+        });
+        const currentValues = extractManifestInputValues(currentManifest);
+        const nextInputValuesByVariant = {
+          ...(currentClip.modelInputValuesByVariant || {}),
+          [currentKey]: currentValues,
+        };
+        const nextSelectedComponentsByVariant = {
+          ...(currentClip.selectedComponentsByVariant || {}),
+          [currentKey]: (currentClip.selectedComponents || {}) as Record<
+            string,
+            any
+          >,
+        };
+
+        const targetVariant = resolveVariantForGeneration(currentClip, gen);
+        let targetManifest = currentManifest;
+        let targetKey = currentKey;
+        let targetValues = getVariantScopedValue(nextInputValuesByVariant, [
+          currentKey,
+        ]);
+        let targetVariantId = currentClip.variantId;
+        if (targetVariant?.manifest) {
+          targetVariantId = String((targetVariant as any)?.id || "").trim() || undefined;
+          targetKey = getVariantStorageKey({
+            group: currentClip.group,
+            manifest: targetVariant.manifest,
+            preferredVariantId: targetVariantId,
+          });
+          targetValues = getVariantScopedValue(
+            nextInputValuesByVariant,
+            getVariantStorageLookupKeys({
+              group: currentClip.group,
+              manifest: targetVariant.manifest,
+              preferredVariantId: targetVariantId,
+              includeLegacy: false,
+            }),
+          );
+          targetManifest = cloneManifestWithInputValues(
+            targetVariant.manifest,
+            targetValues,
+          );
+        }
+
         // Persist current clip transform into the previously selected generation entry (if any)
-        let updates: Partial<ModelClipProps> = { assetId: gen.assetId };
+        let updates: Partial<ModelClipProps> = {
+          assetId: gen.assetId,
+          variantId: targetVariantId,
+          manifest: targetManifest,
+          modelInputValuesByVariant: nextInputValuesByVariant,
+          selectedComponentsByVariant: nextSelectedComponentsByVariant,
+          modelInputValues: targetValues,
+        };
         try {
-          const prevIdx = selectedIndex;
-          const currentTransform = clip?.transform;
+          const prevVisibleGen = selectedIndex >= 0 ? visibleGenerations[selectedIndex] : null;
+          const prevIdx = prevVisibleGen
+            ? (currentClip.generations || []).findIndex(
+                (g) =>
+                  String(g?.jobId || "") === String(prevVisibleGen?.jobId || "") &&
+                  Number(g?.createdAt || 0) === Number(prevVisibleGen?.createdAt || 0),
+              )
+            : -1;
+          const currentTransform = currentClip?.transform;
           if (
             typeof prevIdx === "number" &&
             prevIdx >= 0 &&
             currentTransform &&
-            Array.isArray(clip?.generations)
+            Array.isArray(currentClip?.generations)
           ) {
-            const gens = (clip?.generations || []).map((g: any, i: number) =>
+            const gens = (currentClip?.generations || []).map((g: any, i: number) =>
               i === prevIdx ? { ...g, transform: currentTransform } : g,
             );
             updates.generations = gens;
@@ -107,7 +266,7 @@ export const ModelGenerationProperties: React.FC<
           const mediaInfo = getMediaInfoCached(gen.assetId);
         if (mediaInfo && mediaInfo.duration) {
           let newDuration = Math.floor(mediaInfo.duration * fps);
-          updates.endFrame = clip.startFrame + newDuration;
+          updates.endFrame = currentClip.startFrame + newDuration;
         }
         }
         
@@ -116,7 +275,12 @@ export const ModelGenerationProperties: React.FC<
           updates.transform = {...gen.transform};
         } 
         // update the gen.transform to the current clip.transform
-        const generations = [...(clip?.generations || [])]; 
+        const generations = [...(currentClip?.generations || [])]; 
+        const selectedGenerationIndex = generations.findIndex(
+          (g) =>
+            String(g?.jobId || "") === String(gen?.jobId || "") &&
+            Number(g?.createdAt || 0) === Number(gen?.createdAt || 0),
+        );
         
         // check if gen has attribute trimStart or trimEnd, if so, update the transform to the current clip.transform
         if (gen.trimStart) {
@@ -126,15 +290,32 @@ export const ModelGenerationProperties: React.FC<
           updates.trimEnd = gen.trimEnd;
         }
 
-        generations[index].transform = clip?.transform;
-        generations[index].trimStart = clip?.trimStart;
-        generations[index].trimEnd = clip?.trimEnd;
-        generations[index].startFrame = clip?.startFrame;
+        if (selectedGenerationIndex >= 0) {
+          generations[selectedGenerationIndex].transform = currentClip?.transform;
+          generations[selectedGenerationIndex].trimStart = currentClip?.trimStart;
+          generations[selectedGenerationIndex].trimEnd = currentClip?.trimEnd;
+          generations[selectedGenerationIndex].startFrame = currentClip?.startFrame;
 
-        generations[index].endFrame = clip?.endFrame;
+          generations[selectedGenerationIndex].endFrame = currentClip?.endFrame;
+        }
         updates.generations = generations;
         if (gen.selectedComponents) {
           updates.selectedComponents = gen.selectedComponents;
+          nextSelectedComponentsByVariant[targetKey] = gen.selectedComponents;
+          updates.selectedComponentsByVariant = nextSelectedComponentsByVariant;
+        } else {
+          const selectedForVariant = getVariantScopedValue(
+            nextSelectedComponentsByVariant,
+            getVariantStorageLookupKeys({
+              group: currentClip.group,
+              manifest: targetManifest,
+              preferredVariantId: targetVariantId,
+              includeLegacy: !targetVariantId,
+            }),
+          );
+          if (selectedForVariant) {
+            updates.selectedComponents = selectedForVariant;
+          }
         }
         updateClip(clipId, updates);
       } catch {}
@@ -148,13 +329,10 @@ export const ModelGenerationProperties: React.FC<
     [
       clipId,
       visibleGenerations,
-      normalizeToFileUrl,
       updateClip,
       updateModelInput,
       selectedIndex,
-      clip,
-      setClipTransform,
-      clip.transform,
+      fps,
     ],
   );
 

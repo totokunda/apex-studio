@@ -1,22 +1,16 @@
-import torch
 import math
-from typing import List
-from typing import Optional
-from typing import Tuple
-from typing import Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from diffusers.configuration_utils import ConfigMixin
 from diffusers.configuration_utils import register_to_config
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from diffusers.schedulers.scheduling_utils import SchedulerOutput
 from diffusers.utils import deprecate
-import math
+from src.scheduler.scheduler import SchedulerInterface
 
-
-class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
+class UniPCMultistepScheduler(SchedulerInterface):
     """
     `UniPCMultistepScheduler` is a training-free framework designed for the fast sampling of diffusion models.
 
@@ -126,7 +120,9 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
         self._step_index = None
         self._begin_index = None
 
-        self.sigmas = self.sigmas.to("cpu")  # to avoid too much CPU/GPU communication
+        # NOTE: We intentionally do NOT force tensors to CPU.
+        # Engines will call `set_timesteps(..., device=...)` and run denoising
+        # on that same device. For safety we also re-align in `step(...)`.
         self.sigma_min = self.sigmas[-1].item()
         self.sigma_max = self.sigmas[0].item()
 
@@ -174,9 +170,7 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
         """
 
         if self.config.use_dynamic_shifting and mu is None:
-            raise ValueError(
-                " you have to pass a value for `mu` when `use_dynamic_shifting` is set to be `True`"
-            )
+            self.config.use_dynamic_shifting = False
 
         if sigmas is None:
             sigmas = np.linspace(
@@ -192,24 +186,44 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
                 shift = self.config.shift
             sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)  # pyright: ignore
 
+        # UniPC uses log(sigma); ensure strictly-positive sigmas.
+        try:
+            sigmas = np.asarray(sigmas, dtype=np.float64)
+            sigmas = np.clip(sigmas, 1e-12, None)
+        except Exception:
+            pass
+
         if self.config.final_sigmas_type == "sigma_min":
-            sigma_last = ((1 - self.alphas_cumprod[0]) / self.alphas_cumprod[0]) ** 0.5
+            # For flow-matching style schedules we treat the final sigma as the
+            # configured minimum sigma.
+            sigma_last = float(self.sigma_min)
         elif self.config.final_sigmas_type == "zero":
-            sigma_last = 0
+            # UniPC uses log(sigma) internally; a true 0 can cause -inf/NaNs on the
+            # final predictor step. Match ComfyUI's behavior by using a small epsilon.
+            sigma_last = 1e-3
         else:
             raise ValueError(
                 f"`final_sigmas_type` must be one of 'zero', or 'sigma_min', but got {self.config.final_sigmas_type}"
             )
 
         timesteps = sigmas * self.config.num_train_timesteps
+
+        # Keep the terminal sigma <= min(sigmas) to preserve a monotone schedule.
+        if self.config.final_sigmas_type == "zero":
+            try:
+                sigma_floor = float(np.min(sigmas)) if len(sigmas) else float(sigma_last)
+            except Exception:
+                sigma_floor = float(sigma_last)
+            sigma_last = max(1e-12, min(float(sigma_last), sigma_floor))
+
         sigmas = np.concatenate([sigmas, [sigma_last]]).astype(
             np.float32
         )  # pyright: ignore
 
         self.sigmas = torch.from_numpy(sigmas)
-        self.timesteps = torch.from_numpy(timesteps).to(
-            device=device, dtype=torch.int64
-        )
+        if device is not None:
+            self.sigmas = self.sigmas.to(device=device)
+        self.timesteps = torch.from_numpy(timesteps).to(device=device, dtype=torch.int64)
 
         self.num_inference_steps = len(timesteps)
 
@@ -224,7 +238,7 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
         # add an index counter for schedulers that allow duplicated timesteps
         self._step_index = None
         self._begin_index = None
-        self.sigmas = self.sigmas.to("cpu")  # to avoid too much CPU/GPU communication
+        # Keep sigmas on the same device as `timesteps` / the denoising loop.
 
     # Copied from diffusers.schedulers.scheduling_ddpm.DDPMScheduler._threshold_sample
     def _threshold_sample(self, sample: torch.Tensor) -> torch.Tensor:
@@ -435,6 +449,12 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
 
         if self.config.solver_type == "bh1":
             B_h = hh
+            # For flow-matching schedules the first logSNR step can be very
+            # large (|hh| >> 1), making the linear B(h)=h diverge from the
+            # exponential expm1(h) and produce excessive corrections.  Fall
+            # back to the numerically stable expm1 when |hh| > 1.
+            if hh.abs() > 1.0:
+                B_h = torch.expm1(hh)
         elif self.config.solver_type == "bh2":
             B_h = torch.expm1(hh)
         else:
@@ -462,23 +482,32 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
         if self.predict_x0:
             x_t_ = sigma_t / sigma_s0 * x - alpha_t * h_phi_1 * m0
             if D1s is not None:
-                pred_res = torch.einsum(
-                    "k,bkc...->bc...", rhos_p, D1s
-                )  # pyright: ignore
+                # `torch.einsum` requires all operands to share the same dtype.
+                # In our pipeline, latents (`x`) are often `float32` while
+                # stored model outputs (`D1s`) can be `bfloat16`, which raises:
+                #   RuntimeError: expected scalar type Float but found BFloat16
+                common_dtype = torch.promote_types(rhos_p.dtype, D1s.dtype)
+                pred_res = torch.einsum(  # pyright: ignore
+                    "k,bkc...->bc...",
+                    rhos_p.to(dtype=common_dtype),
+                    D1s.to(dtype=common_dtype),
+                )
             else:
                 pred_res = 0
             x_t = x_t_ - alpha_t * B_h * pred_res
         else:
             x_t_ = alpha_t / alpha_s0 * x - sigma_t * h_phi_1 * m0
             if D1s is not None:
-                pred_res = torch.einsum(
-                    "k,bkc...->bc...", rhos_p, D1s
-                )  # pyright: ignore
+                common_dtype = torch.promote_types(rhos_p.dtype, D1s.dtype)
+                pred_res = torch.einsum(  # pyright: ignore
+                    "k,bkc...->bc...",
+                    rhos_p.to(dtype=common_dtype),
+                    D1s.to(dtype=common_dtype),
+                )
             else:
                 pred_res = 0
             x_t = x_t_ - sigma_t * B_h * pred_res
 
-        x_t = x_t.to(x.dtype)
         return x_t
 
     def multistep_uni_c_bh_update(
@@ -577,6 +606,8 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
 
         if self.config.solver_type == "bh1":
             B_h = hh
+            if hh.abs() > 1.0:
+                B_h = torch.expm1(hh)
         elif self.config.solver_type == "bh2":
             B_h = torch.expm1(hh)
         else:
@@ -604,8 +635,9 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
 
         if self.predict_x0:
             x_t_ = sigma_t / sigma_s0 * x - alpha_t * h_phi_1 * m0
+            common_dtype = torch.promote_types(rhos_c.dtype, D1s.dtype) if D1s is not None else rhos_c.dtype
             if D1s is not None:
-                corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1], D1s)
+                corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1].to(dtype=common_dtype), D1s.to(dtype=common_dtype))
             else:
                 corr_res = 0
             D1_t = model_t - m0
@@ -613,12 +645,11 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
         else:
             x_t_ = alpha_t / alpha_s0 * x - sigma_t * h_phi_1 * m0
             if D1s is not None:
-                corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1], D1s)
+                corr_res = torch.einsum("k,bkc...->bc...", rhos_c[:-1].to(dtype=common_dtype), D1s.to(dtype=common_dtype))
             else:
                 corr_res = 0
             D1_t = model_t - m0
             x_t = x_t_ - sigma_t * B_h * (corr_res + rhos_c[-1] * D1_t)
-        x_t = x_t.to(x.dtype)
         return x_t
 
     def index_for_timestep(self, timestep, schedule_timesteps=None):
@@ -680,6 +711,18 @@ class UniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
             raise ValueError(
                 "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
             )
+
+        # Safety: align schedule tensors to the actual denoising device.
+        # (Some engines move latents between devices; we don't want CPU sigmas.)
+        try:
+            if isinstance(sample, torch.Tensor):
+                dev = sample.device
+                if hasattr(self, "sigmas") and isinstance(self.sigmas, torch.Tensor):
+                    self.sigmas = self.sigmas.to(dev)
+                if hasattr(self, "timesteps") and isinstance(self.timesteps, torch.Tensor):
+                    self.timesteps = self.timesteps.to(dev)
+        except Exception:
+            pass
 
         if self.step_index is None:
             self._init_step_index(timestep)

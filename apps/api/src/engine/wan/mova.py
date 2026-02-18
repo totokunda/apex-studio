@@ -69,11 +69,23 @@ class WanMOVAEngine(WanShared):
 
         if isinstance(generator, list):
             latent_condition = [
-                self.vae_encode(video_condition, sample_mode="sample", sample_generator=g, offload=offload) for g in generator
+                self.vae_encode(
+                    video_condition,
+                    sample_mode="sample",
+                    sample_generator=g,
+                    offload=offload,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+                )
+                for g in generator
             ]
             latent_condition = torch.cat(latent_condition)
         else:
-            latent_condition = self.vae_encode(video_condition, sample_mode="mode", offload=offload)
+            latent_condition = self.vae_encode(
+                video_condition,
+                sample_mode="mode",
+                offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+            )
             latent_condition = latent_condition.repeat(batch_size, 1, 1, 1, 1)
 
         latent_condition = latent_condition.to(vae_dtype)
@@ -442,9 +454,13 @@ class WanMOVAEngine(WanShared):
         # EasyCache parameters
         use_easycache: bool = False,
         easycache_thresh: float = 0.05,
-        easycache_ret_steps: int = 7,
+        easycache_ret_steps: int = 11,
         chunking_profile: str = "none",
         rope_on_cpu: bool = True,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         safe_emit_progress(
@@ -452,9 +468,17 @@ class WanMOVAEngine(WanShared):
             0.0,
             "Starting MOVA image-to-video + audio generation pipeline",
         )
+        
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         use_cfg_guidance = negative_prompt is not None and guidance_scale > 1.0
         num_frames = self._parse_num_frames(duration, fps)
+        
         if high_noise_guidance_scale is not None and low_noise_guidance_scale is not None:
             guidance_scale = [high_noise_guidance_scale, low_noise_guidance_scale]
             safe_emit_progress(
@@ -469,6 +493,7 @@ class WanMOVAEngine(WanShared):
             0.04,
             f"Preprocessing input image (target: ~{height}x{width}, frames: {num_frames}, fps: {fps:g})",
         )
+        
         image, height, width = self._aspect_ratio_resize(image, max_area=height * width, mod_value=16)
         image = self.video_processor.preprocess(image, height=height, width=width).to(self.device, dtype=torch.float32)
         audio_num_samples = int(self.audio_sample_rate * num_frames / fps)
@@ -736,7 +761,7 @@ class WanMOVAEngine(WanShared):
             
         # decode video
         safe_emit_progress(progress_callback, 0.94, "Decoding video latents")
-        video = self.vae_decode(latents, offload=offload)
+        video = self.vae_decode(latents, offload=offload, vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None))
         video = self._tensor_to_frames(video)
         safe_emit_progress(progress_callback, 0.96, "Decoded video frames")
 

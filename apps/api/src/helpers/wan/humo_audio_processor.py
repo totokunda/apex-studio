@@ -12,7 +12,7 @@ import numpy as np
 import torch
 
 # from audio_separator.separator import Separator
-from transformers import WhisperModel, AutoFeatureExtractor
+from transformers import  AutoFeatureExtractor, WhisperModel
 import torch.nn.functional as F
 from src.helpers.base import BaseHelper
 from src.utils.defaults import get_components_path
@@ -81,18 +81,24 @@ class HuMoAudioProcessor(BaseHelper):
         self.fps = fps
         self.model_path = model_path
         model_path = self._download(model_path, get_components_path())
-        # check if is file or directory
-        if os.path.isfile(model_path) and config_path is not None:
-            self.whisper = self._load_model(
-                {
-                    "base": "WhisperModel",
-                    "model_path": model_path,
-                    "config_path": config_path,
-                },
+        if config_path is None:
+            config_path = os.path.join(model_path, "config.json")
+            if not os.path.isfile(config_path):
+                config_path = None
+        
+        component = {
+            "base": "WhisperModel",
+            "type": "helper",
+            "model_path": model_path,
+            "config_id": "HuMo/audio_encoder",
+        }
+        if config_path:
+            component["config_path"] = config_path
+        self.whisper = self._load_model(
+                component,
                 module_name="transformers",
+                load_dtype=torch.float32,
             )
-        else:
-            self.whisper = WhisperModel.from_pretrained(model_path).eval()
         self.to_device(self.whisper)
         self.whisper.requires_grad_(False)
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(model_path)

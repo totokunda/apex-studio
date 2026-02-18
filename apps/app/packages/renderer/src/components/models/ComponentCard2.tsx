@@ -292,6 +292,8 @@ const ComponentCard: React.FC<{
       return jobId && (getJobUpdates(jobId)?.length ?? 0) > 0;
     });
 
+  if (isScheduler) return null;
+
   return (
     <>
       <Collapsible open={expanded} onOpenChange={setExpanded}
@@ -730,7 +732,6 @@ const ModelPathItem: React.FC<{
       addJobIdToManifestId(data.job_id, manifestId);
     },
   });
-
   
   const jobId = getSourceToJobId(path.path);
   const jobUpdates = getJobUpdates(jobId);
@@ -739,7 +740,6 @@ const ModelPathItem: React.FC<{
   const width = ref.current?.clientWidth ?? 0;
   const [startDownloading, setStartDownloading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-
 
   const onClearJobId = useCallback(async (e: Event) => {
     const event = e as CustomEvent<{ jobId: string }>;
@@ -759,6 +759,7 @@ const ModelPathItem: React.FC<{
       ]);
     } catch {}
   }, [clearDownloadTracking, componentIndex, jobId, manifestId, path.path, queryClient]);
+
 
   useEffect(() => {
     window.addEventListener("clear-job-id", onClearJobId as EventListener);
@@ -780,9 +781,8 @@ const ModelPathItem: React.FC<{
     }
   }, []);
 
-
   return (
-    <div className="w-full bg-brand-background rounded-md p-3" ref={ref}>
+    <div className="w-full bg-brand-background rounded-md p-3 mb-2" ref={ref}>
      {(path.variant || path.custom) && (
               <div className="flex flex-row justify-between items-center mb-2.5">
                 <div className="flex items-center gap-x-1.5">
@@ -975,6 +975,7 @@ const DownloadProgressSection: React.FC<{
   );
   if (!files.length) return null;
 
+
   return (
     <div className="w-full mt-3">
       <div className="flex flex-col gap-y-2">
@@ -983,15 +984,16 @@ const DownloadProgressSection: React.FC<{
             <div className="flex items-center justify-between gap-x-2 w-full">
               <div className="flex-1 min-w-0">
                 <div
-                  style={{
-                    maxWidth: `${width}px`,
-                  }}
+                  // `width` can be 0 on first render (ref not mounted yet). If we set
+                  // `maxWidth: 0px`, the filename becomes ultra-compressed until a rerender.
+                  // Only apply maxWidth once we have a real measurement.
+                  style={width > 0 ? { maxWidth: width } : undefined}
                   className="text-[10px] text-brand-light/80 font-mono break-all"
                 >
                   {f.filename}
                 </div>
               </div>
-                            <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
+              <div className="text-[10px] text-brand-light/80 font-mono shrink-0">
                 {(() => {
                   const pct = f.totalBytes
                     ? ((f.downloadedBytes || 0) / f.totalBytes) * 100
@@ -1059,6 +1061,10 @@ export const LoraCard: React.FC<{
 }> = ({ lora, loraIndex, manifestId }) => {
   const [expanded, setExpanded] = useState(false);
   const isDownloaded = lora.is_downloaded;
+  const knownFileSize =
+    typeof lora.file_size === "number" && Number.isFinite(lora.file_size) && lora.file_size > 0
+      ? lora.file_size
+      : null;
   const loraCarRef = useRef<HTMLDivElement>(null);
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}
@@ -1074,6 +1080,11 @@ export const LoraCard: React.FC<{
           <h3 className="text-brand-light text-[12px] font-medium">{lora.label}</h3>
         </div>
         <div className="flex items-center gap-x-2 animate-in fade-in-0 duration-300">
+          {knownFileSize != null && (
+            <span className="text-[10px] text-brand-light/70 font-mono">
+              {formatBytes(knownFileSize, 1)}
+            </span>
+          )}
           {
              <>
             {expanded ? <LuChevronDown className="text-brand-light w-3 h-3" /> : <LuChevronRight className="text-brand-light w-3 h-3" />}
@@ -1123,6 +1134,10 @@ const LoraSection: React.FC<{
   const isDownloading = (jobUpdates?.length ?? 0) > 0;
   const ref = useRef<HTMLDivElement>(null);
   const width = ref.current?.clientWidth ?? 0;
+  const knownFileSize =
+    typeof lora.file_size === "number" && Number.isFinite(lora.file_size) && lora.file_size > 0
+      ? lora.file_size
+      : null;
 
 
   useEffect(() => {
@@ -1176,6 +1191,16 @@ const LoraSection: React.FC<{
                   {scale}
                 </span>
               </div>
+              {knownFileSize != null && (
+                <div className="flex gap-x-1.5 text-[10px]">
+                  <span className="text-brand-light/70 font-medium block">
+                    File Size
+                  </span>
+                  <span className="text-brand-light font-mono block">
+                    {formatBytes(knownFileSize, 1)}
+                  </span>
+                </div>
+              )}
             </div>
           )}
       {isDownloaded && path && (

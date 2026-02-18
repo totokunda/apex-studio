@@ -155,7 +155,18 @@ def _ensure_ray_ready() -> None:
     global _ray_init_state, _ray_init_error
     while True:
         with _ray_init_cond:
-            # If Ray is already up (maybe started elsewhere), treat as ready.
+            if _ray_init_state == "ready":
+                return
+            if _ray_init_state == "failed":
+                raise RuntimeError("Ray failed to initialize") from _ray_init_error
+            if _ray_init_state == "starting":
+                # Another thread is currently initializing Ray. Do not trust
+                # `ray.is_initialized()` yet: it can flip True before core worker
+                # init is fully complete, which can trigger a re-init crash.
+                _ray_init_cond.wait(timeout=0.5)
+                continue
+
+            # State is not_started. If Ray was initialized externally, adopt it.
             try:
                 if ray.is_initialized():
                     _ray_init_state = "ready"
@@ -164,14 +175,6 @@ def _ensure_ray_ready() -> None:
                     return
             except Exception:
                 pass
-
-            if _ray_init_state == "ready":
-                return
-            if _ray_init_state == "failed":
-                raise RuntimeError("Ray failed to initialize") from _ray_init_error
-            if _ray_init_state == "starting":
-                _ray_init_cond.wait(timeout=0.5)
-                continue
 
             # not_started -> we become the initializer
             _ray_init_state = "starting"

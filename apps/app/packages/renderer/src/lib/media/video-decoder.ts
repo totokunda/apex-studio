@@ -244,6 +244,7 @@ export class VideoFrameDecoder {
             else if (fmt === ADTS) formatStr = "aac";
         }
 
+
         this.worker.postMessage({
             type: "configure",
             config: {
@@ -570,7 +571,7 @@ export class VideoDecoderManager {
     /**
      * Register a new asset with the shared worker-backed decoder.
      */
-    public addAsset(
+    public async addAsset(
         asset: Asset,
         options: {
             mediaInfo: MediaInfo;
@@ -591,7 +592,13 @@ export class VideoDecoderManager {
              */
             logicalId?: string;
         },
-    ): void {
+    ): Promise<void> {
+        // Ensure the Electron userData path is resolved before we configure the
+        // worker. On first call this awaits the preload IPC round-trip (fast);
+        // on subsequent calls it returns immediately from the cached value.
+        // Without this, workers on Windows may receive no userDataPath and fall
+        // back to URL heuristics that pick the wrong app:// host.
+        await ensureUserDataPathLoaded();
         const decoderId = options.logicalId ?? asset.id;
 
         // Normalize target dimensions (same logic as VideoFrameDecoder)
@@ -655,6 +662,7 @@ export class VideoDecoderManager {
             onReady: options.onReady,
         });
 
+ 
         this.assets.set(decoderId, assetClient);
 
         // Send configure to the shared worker
@@ -680,6 +688,8 @@ export class VideoDecoderManager {
         if (cachedUserDataPath) {
             config.userDataPath = cachedUserDataPath;
         }
+
+        console.log("config", config);
 
         this.worker.postMessage({
             type: "configure",
@@ -750,11 +760,22 @@ export class VideoDecoderManager {
     /**
      * Perform a seek for a specific asset.
      */
+    // Diagnostic counters — readable from DevTools console:
+    //   window.__apexSeekStats?.()
+    private _seekTotal = 0;
+    private _seekAccurate = 0;
+    private _seekFast = 0;
+
     public async seek(assetId: string, timestamp: number, forceAccurate: boolean = false): Promise<void> {
         const client = this.assets.get(assetId);
         if (!client) {
             return;
         }
+
+        // Track seek stats for benchmark verification
+        this._seekTotal++;
+        if (forceAccurate) this._seekAccurate++;
+        else this._seekFast++;
 
         const reqId = ++client.currentRequestId;
 
@@ -769,6 +790,15 @@ export class VideoDecoderManager {
                 requestId: reqId,
             });
         });
+    }
+
+    /** Returns seek diagnostic counters — call window.__apexSeekStats?.() in DevTools. */
+    public getSeekStats() {
+        return {
+            total: this._seekTotal,
+            accurate: this._seekAccurate,
+            fast: this._seekFast,
+        };
     }
 
     /**

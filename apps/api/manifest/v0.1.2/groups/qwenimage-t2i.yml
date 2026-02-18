@@ -1,0 +1,28 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-qwenimage-t2i
+  name: QwenImage
+  description: QwenImage 2512 is a 20B parameter model for text-to-image generation.
+  tags:
+    - qwenimage
+    - t2i
+  author: Qwen
+  license: Apache-2.0
+  demo_path: models/qwenimage-2512.jpg
+  categories:
+    - text-to-image
+
+variants:
+  - id: qwenimage-t2i
+    label: "QwenImage"
+    description: "20B parameter text-to-image model from the Qwen family (July 2025 release). Generates highly detailed, photorealistic images from natural language descriptions with strong compositional understanding and text rendering capabilities."
+    manifest_ref: image/qwenimage
+    default: true
+  - id: qwenimage-t2i-2512
+    label: "QwenImage 2512"
+    description: "20B parameter text-to-image model from the Qwen family (December 2025 release). Generates highly detailed, photorealistic images from natural language descriptions with strong compositional understanding and text rendering capabilities."
+    manifest_ref: image/qwenimage-2512
+    default: true

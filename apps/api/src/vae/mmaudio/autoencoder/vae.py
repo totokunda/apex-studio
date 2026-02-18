@@ -507,6 +507,7 @@ class VAE(nn.Module):
         return posterior
 
     def decode(self, z: torch.Tensor, unnormalize: bool = True) -> torch.Tensor:
+        
         dec = self.decoder(z)
         if unnormalize:
             dec = self.unnormalize(dec)
@@ -757,10 +758,3 @@ def get_my_vae(name: str, **kwargs) -> VAE:
         return VAE_44k(**kwargs)
     raise ValueError(f"Unknown model: {name}")
 
-
-if __name__ == "__main__":
-    network = get_my_vae("standard")
-
-    # print the number of parameters in terms of millions
-    num_params = sum(p.numel() for p in network.parameters()) / 1e6
-    print(f"Number of parameters: {num_params:.2f}M")

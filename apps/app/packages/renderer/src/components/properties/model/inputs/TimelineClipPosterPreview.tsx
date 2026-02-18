@@ -10,7 +10,7 @@ import { useClipStore } from "@/lib/clip";
 import { useViewportStore } from "@/lib/viewport";
 import { BASE_LONG_SIDE } from "@/lib/settings";
 import { AnyClipProps, ImageClipProps, VideoClipProps } from "@/lib/types";
-import VideoPreview from "@/components/preview/clips/VideoPreview";
+import VideoPreview from "@/components/preview/clips/VideoPreview2";
 import ImagePreview from "@/components/preview/clips/ImagePreview";
 import ShapePreview from "@/components/preview/clips/ShapePreview";
 import TextPreview from "@/components/preview/clips/TextPreview";

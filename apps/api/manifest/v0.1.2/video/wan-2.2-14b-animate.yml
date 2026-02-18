@@ -1,0 +1,464 @@
+api_version: apex/v1
+kind: Model
+type: video
+metadata:
+  id: wan-2-2-14b-animate
+  model: wan
+  name: Wan 2.2 14B Animate
+  version: 0.1.2
+  description: Wan 2.2 14B is a 14B parameter model for animate generation.
+  tags:
+  - wan
+  - animate
+  - 14b
+  - '2.2'
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/wan-animate.mp4
+  categories:
+  - control
+spec:
+  engine: wan
+  model_type: animate
+  engine_type: torch
+  denoise_type: base
+  default_duration_secs: 5.0
+  fps: 16
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  loras:
+  - source: Wan-AI/Wan2.2-Animate-14B/relighting_lora/adapter_model.safetensors
+    scale: 1.0
+    name: relighting_lora
+    label: Relighting LoRA
+    component: transformer
+    verified: true
+    file_size: 2873221376
+  - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
+    scale: 1.0
+    name: lightx2v_lora
+    label: Lightx2v LoRA
+    component: transformer
+    verified: true
+    file_size: 739472104
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: UniPCMultistepSchedulerBH2
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 5.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: vae
+    label: WAN VAE
+    name: vae
+    base: wan
+    config_id: Wan2.2-I2V/vae
+    model_path:
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 253806934
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    config_id: Wan2.1-T2V/text_encoder
+    model_path:
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 11361851224
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8_e4m3fn
+      type: safetensors
+      file_size: 6731313000
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
+      variant: Q8
+      precision: q8_0
+      type: gguf
+      file_size: 7027437536
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    base: wan.animate
+    label: Wan Transformer
+    config_id: Wan2.2-Animate/transformer
+    model_path:
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 34549786152
+      resource_requirements:
+        min_vram_gb: 30
+        recommended_vram_gb: 40
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8_e4m3fn
+      type: safetensors
+      file_size: 18401756608
+      resource_requirements:
+        min_vram_gb: 22
+        recommended_vram_gb: 30
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-q8_0.gguf
+      variant: Q8
+      precision: q8_0
+      type: gguf
+      file_size: 19410910304
+      resource_requirements:
+        min_vram_gb: 20
+        recommended_vram_gb: 27
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-q6_k.gguf
+      variant: Q6
+      precision: q6_k
+      type: gguf
+      file_size: 15500049504
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
+    - path: totoku/apex-models/Wan2.2-Animate/transformer/transformer-q4_k_m.gguf
+      variant: Q4
+      precision: q4_k_m
+      type: gguf
+      file_size: 11336875104
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+  - type: helper
+    name: image_processor
+    label: Image Processor
+    base: CLIPImageProcessor
+    module: transformers
+    config_id: Wan2.1-I2V-480P/image_processor
+    model_path:
+    - path: totoku/apex-models/Wan2.1-I2V-480P/image_processor
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 5030848
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+  - type: helper
+    name: image_encoder
+    label: Image Encoder
+    base: CLIPVisionModel
+    module: transformers
+    config_id: Wan2.1-I2V-480P/image_encoder
+    model_path:
+    - path: totoku/apex-models/Wan2.1-I2V-480P/image_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1264218342
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+  defaults:
+    run:
+      num_inference_steps: 4
+      guidance_scale: 1.0
+      return_latents: false
+      text_encoder_kwargs:
+        use_attention_mask: true
+      attention_kwargs: {}
+      vae_tile_sample_min_height: 256
+      vae_tile_sample_min_width: 256
+      vae_tile_sample_stride_height: 192
+      vae_tile_sample_stride_width: 192
+      mode: animate
+  ui:
+    panels:
+    - name: image
+      label: Image
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: videos
+      label: Videos
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - pose_video
+        - - face_video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+        - - rope_on_cpu
+    - name: vae
+      label: VAE / Memory
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - vae_tile_sample_min_height
+        - - vae_tile_sample_min_width
+        - - vae_tile_sample_stride_height
+        - - vae_tile_sample_stride_width
+    inputs:
+    - id: image
+      label: Image
+      description: The image to condition on.
+      type: image
+      panel: image
+      required: true
+      map_h: height
+      map_w: width
+    - id: pose_video
+      label: Pose Video
+      description: The pose video to condition on.
+      preprocessor_ref: pose2d
+      type: video+preprocessor
+      panel: videos
+      required: true
+    - id: face_video
+      label: Face Video
+      description: The face video to condition on.
+      preprocessor_ref: face2d
+      type: video+preprocessor
+      panel: videos
+      required: true
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 480
+      options:
+      - name: SD
+        value: 480
+      - name: HD
+        value: 720
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 4
+      min: 1
+      max: 100
+      step: 1
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '9:16'
+      options:
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Custom
+        value: custom
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 480
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 832
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 1.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false
+    - id: vae_tile_sample_min_height
+      label: VAE Tile Min Height
+      description: Minimum pixel height before spatial tiling is used.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 256
+      min: 256
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_min_width
+      label: VAE Tile Min Width
+      description: Minimum pixel width before spatial tiling is used.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 256
+      min: 256
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_stride_height
+      label: VAE Tile Stride Height
+      description: Stride height for spatial tiling.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 192
+      min: 64
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_stride_width
+      label: VAE Tile Stride Width
+      description: Stride width for spatial tiling.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 192
+      min: 64
+      max: 2048
+      step: 64

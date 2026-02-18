@@ -1,9 +1,7 @@
 import { AnyClipProps, MaskClipProps } from "@/lib/types";
 import { useCallback, useEffect, useRef } from "react";
-import { ShapeMask } from "./shape";
-import { LassoMask } from "./lasso";
-import { TouchMask } from "./touch";
 import { getLocalFrame } from "@/lib/clip";
+import { getSharedMaskEngines } from "./sharedMaskEngines";
 
 interface WebGLMaskProps {
   focusFrame: number;
@@ -22,50 +20,27 @@ export function useWebGLMask({
   clip,
   useOriginalTransform = true,
 }: WebGLMaskProps) {
-  // Create an instance-specific WebGL context key so multiple previews don't share the same GL canvas
-  const maskContextKeyRef = useRef<string>(
-    `preview-webgl-mask:${clip?.clipId || "mask"}:${Math.random().toString(36).slice(2)}`,
-  );
-  // create a ref of our shape mask
-  const shapeMaskRef = useRef<ShapeMask | null>(null);
-  const lassoMaskRef = useRef<LassoMask | null>(null);
-  const touchMaskRef = useRef<TouchMask | null>(null);
+  // NOTE: Do NOT create a unique WebGL context per clip/preview.
+  // Large timelines will exceed Chromium's WebGL context limit and cause context loss.
+  const sharedContextKeyRef = useRef<string>("preview-webgl-mask-shared");
+
   const maskWorkingCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Lazy initialization of mask to reduce WebGL context count
-  if (!shapeMaskRef.current) {
-    shapeMaskRef.current = new ShapeMask(maskContextKeyRef.current);
-  }
-  if (!lassoMaskRef.current) {
-    lassoMaskRef.current = new LassoMask(maskContextKeyRef.current);
-  }
-  if (!touchMaskRef.current) {
-    touchMaskRef.current = new TouchMask(maskContextKeyRef.current);
-  }
-  // Cleanup on unmount
+
+  // Cleanup on unmount (intentionally does NOT dispose shared WebGL engines)
   useEffect(() => {
     return () => {
-      if (shapeMaskRef.current) {
-        shapeMaskRef.current.dispose();
-        shapeMaskRef.current = null;
-      }
-      if (lassoMaskRef.current) {
-        lassoMaskRef.current.dispose();
-        lassoMaskRef.current = null;
-      }
-      if (touchMaskRef.current) {
-        touchMaskRef.current.dispose();
-        touchMaskRef.current = null;
-      }
       maskWorkingCanvasRef.current = null;
     };
   }, []);
 
   const applyMask = useCallback(
     (sourceCanvas: HTMLCanvasElement, frame?: number) => {
-      if (!shapeMaskRef.current) return sourceCanvas;
       if (disabled || masks.length === 0) {
         return sourceCanvas;
       }
+
+      const { shape: shapeMask, lasso: lassoMask, touch: touchMask } =
+        getSharedMaskEngines(sharedContextKeyRef.current);
 
       if (frame === undefined) {
         if (clip) {
@@ -99,11 +74,11 @@ export function useWebGLMask({
           index === 0 ? mask : { ...mask, backgroundColorEnabled: false };
         const baseTransform =
           mask.transform ?? clip?.originalTransform ?? clip?.transform;
-        if (mask.tool === "shape" && shapeMaskRef.current) {
+        if (mask.tool === "shape") {
           // For subsequent masks, disable background so we compose masks instead of overwriting
 
           // Apply clipTransform to shapeBounds
-          const maskedCanvas = shapeMaskRef.current.apply(
+          const maskedCanvas = shapeMask.apply(
             acc,
             effectiveMask,
             frame,
@@ -124,8 +99,8 @@ export function useWebGLMask({
           ctx.drawImage(maskedCanvas, 0, 0);
 
           return acc;
-        } else if (mask.tool === "lasso" && lassoMaskRef.current) {
-          const maskedCanvas = lassoMaskRef.current.apply(
+        } else if (mask.tool === "lasso") {
+          const maskedCanvas = lassoMask.apply(
             acc,
             effectiveMask,
             frame,
@@ -144,8 +119,8 @@ export function useWebGLMask({
           ctx.drawImage(maskedCanvas, 0, 0);
 
           return acc;
-        } else if (mask.tool === "touch" && touchMaskRef.current) {
-          const maskedCanvas = touchMaskRef.current.apply(
+        } else if (mask.tool === "touch") {
+          const maskedCanvas = touchMask.apply(
             acc,
             effectiveMask,
             frame,
@@ -166,7 +141,7 @@ export function useWebGLMask({
         return acc;
       }, workingCanvas);
     },
-    [focusFrame, masks, disabled, debug, clip],
+    [focusFrame, masks, disabled, debug, clip, useOriginalTransform],
   );
 
   return { applyMask };

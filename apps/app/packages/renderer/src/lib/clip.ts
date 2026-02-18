@@ -28,6 +28,10 @@ import {
   INPUT_CONTROLS_FALLBACK_CLIP_ID,
 } from "./inputControl";
 import { remapMaskWithClipTransformProportional } from "./mask/clipTransformUtils";
+import {
+  getVariantStorageKey,
+  resolveManifestVariantId,
+} from "./manifest/variantStorageKey";
 
 import _ from "lodash";
 export const PREPROCESSOR_BAR_HEIGHT = 24;
@@ -183,6 +187,18 @@ interface ClipStore {
 const calculateTotalClipDuration = (clips: AnyClipProps[]): number => {
   const maxEndFrame = Math.max(...clips.map((clip) => clip.endFrame || 0));
   return maxEndFrame;
+};
+
+const getModelInputValuesFromInputs = (inputs: UIInput[]): Record<string, any> => {
+  const values: Record<string, any> = {};
+  const seen = new Set<string>();
+  for (const inp of inputs) {
+    if (!inp || typeof inp.id !== "string") continue;
+    if (seen.has(inp.id)) continue;
+    seen.add(inp.id);
+    values[inp.id] = inp.value;
+  }
+  return values;
 };
 
 const rescaleFrame = (frame: any, oldFps: number, newFps: number): number | undefined => {
@@ -1722,9 +1738,29 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         return { clips: state.clips };
       }
 
+      const variantId =
+        clip.variantId ||
+        resolveManifestVariantId({
+          group: clip.group,
+          manifest: updatedManifest as any,
+        });
+      const variantKey = getVariantStorageKey({
+        group: clip.group,
+        manifest: updatedManifest as any,
+        preferredVariantId: variantId,
+      });
+      const activeVariantValues = getModelInputValuesFromInputs(inputs);
+      const nextByVariant = {
+        ...(clip.modelInputValuesByVariant || {}),
+        [variantKey]: activeVariantValues,
+      };
+
       newClips[clipIndex] = {
         ...clip,
+        ...(variantId ? { variantId } : {}),
         manifest: updatedManifest,
+        modelInputValues: activeVariantValues,
+        modelInputValuesByVariant: nextByVariant,
       } as AnyClipProps;
 
       const resolvedClips = resolveOverlaps(newClips);
@@ -1742,7 +1778,11 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     const ui = manifest.spec?.ui || manifest.ui;
     if (!ui || !Array.isArray(ui.inputs)) return null;
     const output: Record<string, any> = {};
+    const seen = new Set<string>();
     ui.inputs.forEach((inp) => {
+      if (!inp || typeof inp.id !== "string") return;
+      if (seen.has(inp.id)) return;
+      seen.add(inp.id);
       output[inp.id] = inp.value;
     });
     return output;
@@ -1757,6 +1797,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     const ui = manifest.spec?.ui || manifest.ui;
     if (!ui || !Array.isArray(ui.inputs)) return null;
     const output: Record<string, any> = {};
+    const seen = new Set<string>();
     const inputStore = globalInputControlsStore.getState();
     const hasOwn = Object.prototype.hasOwnProperty;
 
@@ -1783,6 +1824,9 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
     };
 
     ui.inputs.forEach((inp) => {
+      if (!inp || typeof inp.id !== "string") return;
+      if (seen.has(inp.id)) return;
+      seen.add(inp.id);
       const typeStr = String((inp as any)?.type || "");
       const typeLower = typeStr.toLowerCase();
       // Only JSON-parse values for input types that intentionally store JSON in `inp.value`.

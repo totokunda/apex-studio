@@ -119,6 +119,7 @@ QWEN_VL_SD_MAP = {
     ".ffn_up": ".mlp.up_proj",
     ".ffn_gate": ".mlp.gate_proj",
     ".output": ".lm_head",
+    "output.weight": "lm_head.weight",
     "output_norm.": "model.norm.",
 }
 
@@ -176,12 +177,28 @@ GEMMA3_VISION_SD_MAP = {
     "ffn_up": "mlp.fc1",
 }
 
+QWEN3_SD_MAP = {
+    "blk.": "model.layers.",
+    "token_embd.": "model.embed_tokens.",
+    ".attn_norm.": ".input_layernorm.",
+    ".attn_k.": ".self_attn.k_proj.",
+    ".attn_q.": ".self_attn.q_proj.",
+    ".attn_v.": ".self_attn.v_proj.",
+    ".attn_output": ".self_attn.o_proj",
+    ".ffn_down": ".mlp.down_proj",
+    ".ffn_up": ".mlp.up_proj",
+    ".ffn_gate": ".mlp.gate_proj",
+    ".ffn_norm.": ".post_attention_layernorm.",
+    "output_norm.": "model.norm.",
+    ".attn_k_norm": ".self_attn.k_norm",
+    ".attn_q_norm": ".self_attn.q_norm",
+}
+
 
 def remap_key(
     key: str,
-    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3"] = "t5",
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3", "qwen3"] = "t5",
 ):
-
     if key_map == "t5":
         key_map = T5_SD_MAP
     elif key_map == "llama":
@@ -204,6 +221,9 @@ def remap_key(
             if (key.startswith("v.") or key.startswith("mm."))
             else GEMMA3_SD_MAP
         )
+        
+    elif key_map == "qwen3":
+        key_map = QWEN3_SD_MAP
     else:
         raise ValueError(f"Invalid key map: {key_map}")
 
@@ -214,7 +234,7 @@ def remap_key(
 
 def load_text_encoder_gguf(
     path: str,
-    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl"] = "t5",
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3", "qwen3"] = "t5",
     dequant_dtype: torch.dtype | str = torch.float16,
     device: str = "cpu",
     **kwargs,
@@ -240,6 +260,9 @@ def load_text_encoder_gguf(
             )
             # Map quantized GGUF buffers to int8 to avoid downstream frameworks casting activations to uint8
             torch_tensor = torch.from_numpy(tensor.data)
+            if tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
+                # GGUFReader exposes BF16 tensors as raw bytes (uint8). Convert to real torch BF16.
+                torch_tensor = torch_tensor.view(torch.bfloat16).view(*shape)
             if dev.type != "cpu" and torch_tensor.device.type == "cpu":
                 if dev.type == "cuda":
                     try:
@@ -307,7 +330,9 @@ def load_transformer_gguf(
         dequant_dtype = convert_str_dtype(dequant_dtype)
 
     dev = torch.device(device)
+
     reader = gguf.GGUFReader(path)
+    
     state_dict: Dict[str, GGMLTensor] = {}
     qtype_dict: Dict[str, int] = {}
 
@@ -317,19 +342,23 @@ def load_transformer_gguf(
         if shape is None:
             # GGUF stores dims reversed
             shape = torch.Size(tuple(int(v) for v in reversed(tensor.shape)))
-
+            
+ 
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore", message="The given NumPy array is not writable"
             )
             base = torch.from_numpy(tensor.data)
 
-            # For F16/F32, present the logical shape now; quantized shapes are handled by dequant
+            # For F16/F32/BF16, present the logical shape now; packed/quantized shapes are handled by dequant
             if tensor.tensor_type in {
                 gguf.GGMLQuantizationType.F32,
                 gguf.GGMLQuantizationType.F16,
             }:
                 base = base.view(*shape)
+            
+            elif tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
+                base = base.view(torch.bfloat16).view(*shape)
 
             # Move the *raw storage* tensor before wrapping as GGMLTensor.
             # Calling `.to(device)` on GGMLTensor is unsafe for quantized tensors because
@@ -344,6 +373,8 @@ def load_transformer_gguf(
                         base = base.to(dev)
                 else:
                     base = base.to(dev)
+                    
+            
 
             ggml_tensor = GGMLTensor(
                 base,
@@ -357,14 +388,13 @@ def load_transformer_gguf(
         state_dict[name] = ggml_tensor
         tensor_type_str = getattr(tensor.tensor_type, "name", repr(tensor.tensor_type))
         qtype_dict[tensor_type_str] = qtype_dict.get(tensor_type_str, 0) + 1
-
     return state_dict, qtype_dict
 
 
 def load_gguf(
     path: str,
     type: Literal["text_encoder", "transformer"],
-    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl"] | None = None,
+    key_map: Literal["t5", "llama", "step", "mistral", "qwen_vl", "gemma3", "qwen3"] | None = None,
     device: str = "cpu",
     **kwargs,
 ):

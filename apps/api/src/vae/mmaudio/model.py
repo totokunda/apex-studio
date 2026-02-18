@@ -1,4 +1,4 @@
-from typing import Literal, Optional, List
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -15,22 +15,6 @@ from diffusers import ModelMixin, ConfigMixin
 from diffusers.configuration_utils import register_to_config
 
 
-def patch_clip(clip_model):
-    # a hack to make it output last hidden states
-    # https://github.com/mlfoundations/open_clip/blob/fc5a37b72d705f760ebbc7915b84729816ed471f/src/open_clip/model.py#L269
-    def new_encode_text(self, text, normalize: bool = False):
-        cast_dtype = self.transformer.get_cast_dtype()
-
-        x = self.token_embedding(text).to(cast_dtype)  # [batch_size, n_ctx, d_model]
-
-        x = x + self.positional_embedding.to(cast_dtype)
-        x = self.transformer(x, attn_mask=self.attn_mask)
-        x = self.ln_final(x)  # [batch_size, n_ctx, transformer.width]
-        return F.normalize(x, dim=-1) if normalize else x
-
-    clip_model.encode_text = new_encode_text.__get__(clip_model)
-    return clip_model
-
 
 class AutoencoderMMAudio(ModelMixin, ConfigMixin):
     config_name = "config.json"
@@ -40,7 +24,10 @@ class AutoencoderMMAudio(ModelMixin, ConfigMixin):
     def __init__(
         self,
         *,
-        mode: Literal["16k"] = "16k",
+        mode: Literal["16k", "44k"] = "16k",
+        vocoder_config_path: str = None,
+        vocoder_config_id: str = None,
+        vocoder_config: dict = None,
         need_vae_encoder: bool = True,
         **kwargs,
     ):
@@ -54,8 +41,16 @@ class AutoencoderMMAudio(ModelMixin, ConfigMixin):
         """
         super().__init__()
 
+        # Resolve vocoder_config_id to local path if provided
+        if vocoder_config_id and not vocoder_config_path:
+            from src.config_registry import resolve_config_path as _resolve
+            try:
+                vocoder_config_path = _resolve(vocoder_config_id)
+            except FileNotFoundError:
+                pass
+
         self.mel_converter = get_mel_converter(mode)
-        self.tod = AutoEncoderModule(mode=mode, need_vae_encoder=need_vae_encoder)
+        self.tod = AutoEncoderModule(mode=mode, vocoder_config_path=vocoder_config_path, vocoder_config=vocoder_config, need_vae_encoder=need_vae_encoder)
 
     def compile(self):
         self.decode = torch.compile(self.decode)

@@ -1619,7 +1619,7 @@ def efficient_dot_product_attention(
     query,
     key,
     value,
-    mask=None,
+    attn_mask=None,
     bias=None,
     query_chunk_size=1024,
     key_chunk_size=4096,
@@ -1627,6 +1627,7 @@ def efficient_dot_product_attention(
     mask_calc_fn=None,
     weights_calc_fn=None,
     calc_fn_data=None,
+    **kwargs,
 ):
     """Computes efficient dot-product attention given query, key, and value.
     This is efficient version of attention presented in

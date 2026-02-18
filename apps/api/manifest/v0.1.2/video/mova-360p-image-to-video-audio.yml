@@ -1,0 +1,544 @@
+api_version: apex/v1
+kind: Model
+type: video
+metadata:
+  id: mova-image-to-video-audio-360p
+  model: wan
+  name: MOVA Image to Video Audio 360p
+  version: 0.1.2
+  description: MOVA is a 14B parameter model for image-to-video-audio generation at
+    360p resolution.
+  tags:
+  - mova
+  - i2v
+  - audio
+  - 14b
+  author: MOSI
+  license: Apache-2.0
+  demo_path: models/mova-image-to-video-audio.mp4
+  categories:
+  - image-to-video
+spec:
+  engine: wan
+  model_type: mova
+  engine_type: torch
+  default_duration_secs: 8.0
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - efficient_dot_product_attention
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  fps: 24
+  components:
+  - type: scheduler
+    label: Scheduler
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 1.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: vae
+    label: WAN VAE
+    name: vae
+    base: wan
+    config_id: Wan2.2-I2V/vae
+    model_path:
+    - path: totoku/apex-models/Wan2.2-I2V/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 253806934
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: text_encoder
+    label: WAN Text Encoder
+    base: UMT5EncoderModel
+    offloading_module: encoder
+    config_id: Wan2.1-T2V/text_encoder
+    model_path:
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 11361851224
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8_e4m3fn
+      type: safetensors
+      file_size: 6731313000
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
+    - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
+      variant: Q8
+      precision: q8_0
+      type: gguf
+      file_size: 7027437536
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    tokenizer_class: T5Tokenizer
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: Wan2.1-T2V/tokenizer
+  - type: transformer
+    label: MOVA Audio Transformer
+    base: wan.mova_audio
+    name: audio_transformer
+    config_id: MOVA-360p/audio_transformer
+    model_path:
+    - path: totoku/apex-models/MOVA-360p/audio_transformer/diffusion_pytorch_model.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 2838470672
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+  - type: vae
+    label: MOVA Audio VAE
+    base: movaaudiovae
+    name: audio_vae
+    config_id: MOVA-360p/audio_vae
+    model_path:
+    - path: totoku/apex-models/MOVA-360p/audio_vae/diffusion_pytorch_model.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 743102794
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: helper
+    label: Dual Tower Bridge
+    base: wan.mova
+    name: dual_tower_bridge
+    config_id: MOVA-360p/dual_tower_bridge
+    model_path:
+    - path: totoku/apex-models/MOVA-360p/dual_tower_bridge/diffusion_pytorch_model.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 5319561560
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: transformer
+    label: High Noise Transformer
+    base: wan.mova
+    name: high_noise_transformer
+    config_id: MOVA-360p/high_noise_transformer
+    model_path:
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-bf16.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28577915880
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8_e4m3fn
+      type: safetensors
+      file_size: 14479517404
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q8_0.gguf
+      variant: Q8
+      precision: q8_0
+      type: gguf
+      file_size: 15360590368
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q6_k.gguf
+      variant: Q6
+      precision: q6_k
+      type: gguf
+      file_size: 11946126368
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: totoku/apex-models/MOVA-360p/high_noise_transformer/transformer-q4_k_m.gguf
+      variant: Q4
+      precision: q4_k_m
+      type: gguf
+      file_size: 8311374368
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: transformer
+    label: Low Noise Transformer
+    base: wan.mova
+    name: low_noise_transformer
+    config_id: MOVA-360p/low_noise_transformer
+    model_path:
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-bf16.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 28577915880
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8_e4m3fn
+      type: safetensors
+      file_size: 14479517404
+      resource_requirements:
+        min_vram_gb: 18
+        recommended_vram_gb: 24
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q8_0.gguf
+      variant: Q8
+      precision: q8_0
+      type: gguf
+      file_size: 15360590368
+      resource_requirements:
+        min_vram_gb: 17
+        recommended_vram_gb: 23
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q6_k.gguf
+      variant: Q6
+      precision: q6_k
+      type: gguf
+      file_size: 11946126368
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: totoku/apex-models/MOVA-360p/low_noise_transformer/transformer-q4_k_m.gguf
+      variant: Q4
+      precision: q4_k_m
+      type: gguf
+      file_size: 8311374368
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  defaults:
+    run:
+      num_inference_steps: 50
+      guidance_scale: 5.0
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+      vae_tile_sample_min_height: 256
+      vae_tile_sample_min_width: 256
+      vae_tile_sample_stride_height: 192
+      vae_tile_sample_stride_width: 192
+  ui:
+    panels:
+    - name: media
+      label: Media
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - image
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: size
+      label: Size
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - resolution
+        - - aspect_ratio
+        - - height
+          - width
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - high_noise_guidance_scale
+        - - low_noise_guidance_scale
+        - - seed
+    - name: chunking_profile
+      label: Chunking Profile
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - chunking_profile
+        - - rope_on_cpu
+    - name: easy_cache
+      label: Easy Cache
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - use_easy_cache
+        - - easy_cache_thresh
+        - - easy_cache_ret_steps
+    - name: vae
+      label: VAE / Memory
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - vae_tile_sample_min_height
+        - - vae_tile_sample_min_width
+        - - vae_tile_sample_stride_height
+        - - vae_tile_sample_stride_width
+    inputs:
+    - id: image
+      label: Image
+      description: The image to condition on.
+      type: image
+      panel: media
+      required: true
+      map_h: height
+      map_w: width
+      scale_by: resolution
+    - id: prompt
+      label: Prompt
+      description: Describe the image you want to generate.
+      placeholder: A beautiful landscape at golden hour.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: blurry, low quality, distorted, artifacts
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: "\u8272\u8C03\u8273\u4E3D\uFF0C\u8FC7\u66DD\uFF0C\u9759\u6001\uFF0C\
+        \u7EC6\u8282\u6A21\u7CCA\u4E0D\u6E05\uFF0C\u5B57\u5E55\uFF0C\u98CE\u683C\uFF0C\
+        \u4F5C\u54C1\uFF0C\u753B\u4F5C\uFF0C\u753B\u9762\uFF0C\u9759\u6B62\uFF0C\u6574\
+        \u4F53\u53D1\u7070\uFF0C\u6700\u5DEE\u8D28\u91CF\uFF0C\u4F4E\u8D28\u91CF\uFF0C\
+        JPEG\u538B\u7F29\u6B8B\u7559\uFF0C\u4E11\u964B\u7684\uFF0C\u6B8B\u7F3A\u7684\
+        \uFF0C\u591A\u4F59\u7684\u624B\u6307"
+    - id: resolution
+      label: Resolution
+      description: Select the resolution of the output image
+      panel: size
+      type: select
+      default: 360
+      options:
+      - name: HD
+        value: 720
+      - name: SD
+        value: 360
+      - name: Custom
+        value: custom
+    - id: aspect_ratio
+      label: Aspect Ratio
+      description: Select the aspect ratio of the output image
+      panel: size
+      type: select
+      default: '16:9'
+      options:
+      - name: Square
+        value: '1:1'
+        ratio_w: 1
+        ratio_h: 1
+      - name: Wide
+        value: '16:9'
+        ratio_w: 16
+        ratio_h: 9
+      - name: Vertical
+        value: '9:16'
+        ratio_w: 9
+        ratio_h: 16
+      - name: Classic
+        value: '4:3'
+        ratio_w: 4
+        ratio_h: 3
+      - name: Custom
+        value: custom
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+    - id: height
+      label: Height
+      description: Explicit height override
+      type: number
+      value_type: integer
+      panel: size
+      default: 360
+      min: 256
+      max: 8192
+      step: 16
+    - id: width
+      label: Width
+      description: Explicit width override
+      type: number
+      value_type: integer
+      panel: size
+      default: 640
+      min: 256
+      max: 8192
+      step: 16
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: high_noise_guidance_scale
+      label: High Noise Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: low_noise_guidance_scale
+      label: Low Noise Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 5.0
+      min: 1.0
+      max: 15.0
+      step: 0.5
+    - id: chunking_profile
+      label: Chunking Profile
+      description: Spliting tensors into smaller chunks to reduce memory usage.
+      type: select
+      panel: chunking_profile
+      default: light
+      options:
+      - name: None
+        value: none
+      - name: Light
+        value: light
+      - name: Balanced
+        value: balanced
+      - name: Aggressive
+        value: aggressive
+    - id: rope_on_cpu
+      label: Rope Frequency on CPU
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
+      type: boolean
+      panel: chunking_profile
+      default: false
+      required: false
+    - id: use_easy_cache
+      label: Use Easy Cache
+      description: Use the Easy Cache to speed up the generation, at the cost of some
+        quality.
+      type: boolean
+      panel: easy_cache
+      required: false
+      default: true
+    - id: easy_cache_thresh
+      label: Easy Cache Threshold
+      description: Threshold for the easy cache
+      type: number+slider
+      value_type: float
+      panel: easy_cache
+      required: false
+      default: 0.05
+      min: 0.0
+      max: 1.0
+      step: 0.001
+    - id: easy_cache_ret_steps
+      label: Easy Cache Return Steps
+      description: Number of steps to return for the easy cache
+      type: number+slider
+      value_type: integer
+      panel: easy_cache
+      required: false
+      default: 10
+      min: 1
+      max: 100
+      step: 1
+    - id: vae_tile_sample_min_height
+      label: VAE Tile Sample Min Height
+      description: The minimum height of the tile sample.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 256
+      min: 256
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_min_width
+      label: VAE Tile Sample Min Width
+      description: The minimum width of the tile sample.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 256
+      min: 256
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_stride_height
+      label: VAE Tile Sample Stride Height
+      description: The stride height of the tile sample.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 192
+      min: 64
+      max: 2048
+      step: 64
+    - id: vae_tile_sample_stride_width
+      label: VAE Tile Sample Stride Width
+      description: The stride width of the tile sample.
+      type: number+slider
+      value_type: integer
+      panel: vae
+      default: 192
+      min: 64
+      max: 2048
+      step: 64
+

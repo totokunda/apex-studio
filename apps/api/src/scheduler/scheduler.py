@@ -1,12 +1,95 @@
-import torch
-from src.utils.dtype import supports_double
+import functools
+import inspect
+import math
 from typing import Optional
 
 import numpy as np
 import torch
 from diffusers.configuration_utils import ConfigMixin
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
-import math
+from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
+
+from src.utils.dtype import supports_double
+
+
+def _ensure_step_output_consistency(step_fn):
+    """
+    Decorator that guarantees a scheduler ``step`` (or ``step_from_to``)
+    function's output tensors have the **same dtype and shape** as the
+    input ``model_output`` tensor.
+
+    Supports every return convention used across our schedulers:
+      - raw ``torch.Tensor``
+      - tuple of tensors, e.g. ``(prev_sample,)``
+      - dataclass / named-tuple with a ``.prev_sample`` attribute
+    """
+    # Determine the positional index of 'model_output' in the wrapped
+    # function's signature so we can locate it whether it is passed
+    # positionally or as a keyword argument.
+    sig = inspect.signature(step_fn)
+    param_names = list(sig.parameters.keys())
+    try:
+        _mo_pos = param_names.index("model_output")
+    except ValueError:
+        _mo_pos = 1  # default: first parameter after 'self'
+    # In the wrapper *args, index 0 corresponds to param_names[1]
+    # (because 'self' is consumed by the method binding).
+    _mo_args_idx = _mo_pos - 1
+
+    @functools.wraps(step_fn)
+    def wrapper(self, *args, **kwargs):
+        # --- resolve model_output ------------------------------------------------
+        model_output = kwargs.get("model_output")
+        if model_output is None and len(args) > _mo_args_idx >= 0:
+            model_output = args[_mo_args_idx]
+
+        if not isinstance(model_output, torch.Tensor):
+            return step_fn(self, *args, **kwargs)
+
+        ref_dtype = model_output.dtype
+        ref_shape = model_output.shape
+
+        # --- run the real step ----------------------------------------------------
+        result = step_fn(self, *args, **kwargs)
+
+        # --- enforce dtype + shape on every returned tensor ----------------------
+        ref_numel = ref_shape.numel()
+
+        def _fix(t):
+            if not isinstance(t, torch.Tensor):
+                return t
+            if t.shape != ref_shape:
+                # Sigma broadcasting (e.g. reshape(-1,1,1,1) on 3-D inputs)
+                # can introduce extra singleton dims.  If the element count
+                # matches we can cheaply reshape back; otherwise it is a
+                # genuine bug.
+                if t.numel() == ref_numel:
+                    t = t.view(ref_shape)
+                else:
+                    raise ValueError(
+                        f"{type(self).__name__}.step output shape {t.shape} "
+                        f"(numel={t.numel()}) does not match model_output "
+                        f"shape {ref_shape} (numel={ref_numel})"
+                    )
+            return t.to(dtype=ref_dtype) if t.dtype != ref_dtype else t
+
+        if isinstance(result, torch.Tensor):
+            return _fix(result)
+        if isinstance(result, tuple):
+            return tuple(_fix(x) for x in result)
+        # dataclass / NamedTuple with .prev_sample
+        if hasattr(result, "prev_sample") and isinstance(
+            getattr(result, "prev_sample", None), torch.Tensor
+        ):
+            result.prev_sample = _fix(result.prev_sample)
+            if hasattr(result, "pred_original_sample") and isinstance(
+                getattr(result, "pred_original_sample", None), torch.Tensor
+            ):
+                result.pred_original_sample = _fix(result.pred_original_sample)
+            return result
+        return result
+
+    return wrapper
 
 
 class SchedulerInterface(SchedulerMixin, ConfigMixin):
@@ -15,6 +98,18 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
     """
 
     alphas_cumprod: torch.Tensor  # [T], alphas for defining the noise schedule
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        for method_name in ("step", "step_from_to"):
+            if method_name in cls.__dict__:
+                original = cls.__dict__[method_name]
+                if callable(original):
+                    setattr(
+                        cls,
+                        method_name,
+                        _ensure_step_output_consistency(original),
+                    )
 
     def add_noise(self, original_samples, noise, timestep):
         """
@@ -25,6 +120,7 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
             - timestep: the timestep with shape [B*T]
         Output: the corrupted latent with shape [B*T, C, H, W]
         """
+        
         if timestep.ndim == 2:
             timestep = timestep.flatten(0, 1)
         self.sigmas = self.sigmas.to(noise.device)
@@ -32,6 +128,7 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
         timestep_id = torch.argmin(
             (self.timesteps.unsqueeze(0) - timestep.unsqueeze(1)).abs(), dim=1
         )
+        
         sigma = self.sigmas[timestep_id].reshape(-1, 1, 1, 1)
         sample = (1 - sigma) * original_samples + sigma * noise
         return sample.type_as(noise)
@@ -40,6 +137,7 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
         self, x0: torch.Tensor, xt: torch.Tensor, timestep: torch.Tensor
     ) -> torch.Tensor:
         """
+        
         Convert the diffusion network's x0 prediction to noise predidction.
         x0: the predicted clean data with shape [B, C, H, W]
         xt: the input noisy data with shape [B, C, H, W]
@@ -78,6 +176,7 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
         tensor_to_double = lambda x: (
             x.double() if supports_double(x.device) else x.to(torch.float32)
         )
+        
         noise, xt, alphas_cumprod = map(
             lambda x: tensor_to_double(x.to(noise.device)),
             [noise, xt, self.alphas_cumprod],
@@ -181,3 +280,86 @@ class SchedulerInterface(SchedulerMixin, ConfigMixin):
         self, sample: torch.Tensor, timestep: Optional[int] = None
     ) -> torch.Tensor:
         return sample
+    
+    def set_begin_index(self, begin_index: int):
+        self._begin_index = begin_index
+
+    def set_shift(self, shift: float):
+        self._shift = shift
+    
+    def scale_noise(self, sample: torch.Tensor, timestep: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+        """
+        Forward corruption process for flow-matching style schedules.
+
+        This matches the behavior of diffusers' flow-matching schedulers:
+
+            x_t = (1 - sigma_t) * x_0 + sigma_t * eps
+
+        where ``sample`` is the clean sample ``x_0`` and ``noise`` is ``eps``.
+        """
+
+        if not isinstance(sample, torch.Tensor) or not isinstance(noise, torch.Tensor):
+            raise TypeError("`sample` and `noise` must be torch.Tensors")
+
+        # Align devices/dtypes.
+        if noise.device != sample.device:
+            noise = noise.to(sample.device)
+        if noise.dtype != sample.dtype:
+            noise = noise.to(sample.dtype)
+
+        # Ensure `timestep` is a tensor on the correct device.
+        if not isinstance(timestep, torch.Tensor):
+            timestep = torch.tensor(timestep, device=sample.device)
+
+        if timestep.ndim == 2:
+            timestep = timestep.flatten(0, 1)
+
+        batch = sample.shape[0] if sample.ndim > 0 else 1
+        if timestep.ndim == 0:
+            timestep = timestep.expand(batch)
+        elif timestep.numel() == 1 and batch != 1:
+            timestep = timestep.expand(batch)
+
+        if not hasattr(self, "sigmas") or not hasattr(self, "timesteps"):
+            raise AttributeError(
+                f"{type(self).__name__} must define `sigmas` and `timesteps` to use scale_noise()."
+            )
+
+        sigmas = self.sigmas.to(device=sample.device, dtype=sample.dtype)
+
+        # mps does not support float64; also keep comparison dtype consistent.
+        if sample.device.type == "mps" and torch.is_floating_point(timestep):
+            schedule_timesteps = self.timesteps.to(sample.device, dtype=torch.float32)
+            timestep = timestep.to(sample.device, dtype=torch.float32)
+        else:
+            schedule_timesteps = self.timesteps.to(sample.device)
+            timestep = timestep.to(sample.device)
+
+        begin_index = getattr(self, "begin_index", getattr(self, "_begin_index", None))
+        step_index = getattr(self, "step_index", getattr(self, "_step_index", None))
+
+        step_indices = None
+        if begin_index is None:
+            # Prefer a scheduler-defined mapping when available (handles duplicate / non-monotonic timesteps).
+            if hasattr(self, "index_for_timestep") and callable(getattr(self, "index_for_timestep")):
+                step_indices = [
+                    int(self.index_for_timestep(t, schedule_timesteps)) for t in timestep
+                ]
+            else:
+                # Fallback: nearest-match on the current schedule.
+                step_indices = torch.argmin(
+                    (schedule_timesteps.unsqueeze(0) - timestep.unsqueeze(1)).abs(),
+                    dim=1,
+                ).tolist()
+        elif step_index is not None:
+            # scale_noise is called after the first denoising step (e.g. inpainting).
+            step_indices = [int(step_index)] * int(timestep.shape[0])
+        else:
+            # scale_noise is called before the first denoising step (e.g. img2img init).
+            step_indices = [int(begin_index)] * int(timestep.shape[0])
+
+        sigma = sigmas[step_indices].flatten()
+        while sigma.ndim < sample.ndim:
+            sigma = sigma.unsqueeze(-1)
+
+        return sigma * noise + (1.0 - sigma) * sample

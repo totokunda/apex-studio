@@ -5,11 +5,36 @@ import numpy as np
 from .shared import WanShared
 from src.utils.progress import safe_emit_progress, make_mapped_progress
 from src.types import InputImage
+from src.engine.flashvsr.shared.color_corrector import TorchColorCorrectorWavelet
 from tqdm import tqdm
 
 
 class WanSVIEngine(WanShared):
     """WAN Image-to-Video Engine Implementation"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.color_corrector = TorchColorCorrectorWavelet()
+
+    def _build_color_reference(
+        self,
+        reference_image: Image.Image,
+        num_frames: int,
+        height: int,
+        width: int,
+    ) -> torch.Tensor:
+        """
+        Build a 5-D colour-reference tensor ``(1, 3, f, H, W)`` from a single
+        PIL image.  The image is preprocessed into ``[-1, 1]`` pixel space
+        and repeated along the temporal axis so it can be directly fed to
+        ``TorchColorCorrectorWavelet`` as the style (``lq_image``) argument.
+        """
+        ref = self.video_processor.preprocess(
+            reference_image, height=height, width=width
+        ).to(self.device, dtype=torch.float32)          # (C, H, W)
+        # -> (1, C, 1, H, W) -> (1, C, f, H, W)
+        ref = ref.unsqueeze(0).unsqueeze(2).expand(-1, -1, num_frames, -1, -1)
+        return ref.contiguous()
 
     def _prepare_image_latents_pro(
         self,
@@ -35,9 +60,6 @@ class WanSVIEngine(WanShared):
             anchor = input_image[0]
         if end_image is not None:
             end_image = self._load_image(end_image)
-            end_image = self.video_processor.preprocess(
-                end_image, height=height, width=width
-            ).to(self.device, dtype=torch.float32)
 
         input_image = [
             self.video_processor.preprocess(img, height=height, width=width).to(
@@ -65,6 +87,7 @@ class WanSVIEngine(WanShared):
                 offload=offload,
                 dtype=torch.float32,
                 normalize_latents_dtype=torch.float32,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
             )[0]
         else:
             end_image_latent = None
@@ -75,13 +98,15 @@ class WanSVIEngine(WanShared):
             offload=offload,
             dtype=torch.float32,
             normalize_latents_dtype=torch.float32,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
         )[0]
         total_latents = (num_frames - 1) // 4 + 1
 
         if end_image_latent is not None:
             end_latent = end_image_latent.clone()
-            end_frames = end_latent.shape[2]
-            num_anchor = anchor_latent.shape[2]
+            # dim 1 is the temporal (latent frames) dimension: (C, T, H/8, W/8)
+            end_frames = end_latent.shape[1]
+            num_anchor = anchor_latent.shape[1]
 
             # Calculate where to start blending (last N frames of anchor)
             blend_start_idx = max(0, num_anchor - end_frames)
@@ -92,12 +117,12 @@ class WanSVIEngine(WanShared):
                 if anchor_frame_idx < num_anchor:
                     # Blend factor increases from 0 to 1 as we go through end frames
                     blend_factor = (frame_idx + 1) / end_frames
-                    anchor_latent[:, :, anchor_frame_idx] = (
+                    anchor_latent[:, anchor_frame_idx] = (
                         1 - blend_factor
                     ) * anchor_latent[
-                        :, :, anchor_frame_idx
+                        :, anchor_frame_idx
                     ] + blend_factor * end_latent[
-                        :, :, frame_idx
+                        :, frame_idx
                     ]
 
         if is_first_clip:
@@ -125,7 +150,8 @@ class WanSVIEngine(WanShared):
 
         if end_image_latent is not None and padding_size > 0:
             end_latent = end_image_latent.clone()
-            end_frames = end_latent.shape[2]
+            # dim 1 is the temporal (latent frames) dimension: (C, T, H/8, W/8)
+            end_frames = end_latent.shape[1]
 
             # Calculate how many padding frames to blend based on end_frame_fill
             blend_frames = max(1, int(padding_size * end_frame_fill))
@@ -137,8 +163,8 @@ class WanSVIEngine(WanShared):
                 # Blend factor increases from 0 to strength across the blended padding frames
                 blend_factor = ((frame_idx + 1) / blend_frames) * end_frame_max_strength
                 padding[:, padding_frame_idx] = (1 - blend_factor) * padding[
-                    :, :, padding_frame_idx
-                ] + blend_factor * end_latent[:, :, frame_idx]
+                    :, padding_frame_idx
+                ] + blend_factor * end_latent[:, frame_idx]
 
         # Create frame mask (1 for first frame, 0 for rest)
         msk = torch.ones(1, num_frames, height // 8, width // 8, device=self.device)
@@ -208,7 +234,10 @@ class WanSVIEngine(WanShared):
         )
         msk = msk.view(1, msk.shape[1] // 4, 4, height // 8, width // 8)
         msk = msk.transpose(1, 2)[0]
-        y = self.vae_encode(vae_input.unsqueeze(0))[0]
+        y = self.vae_encode(
+            vae_input.unsqueeze(0),
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+        )[0]
         y = torch.concat([msk, y])
         y = y.unsqueeze(0)
         return y
@@ -253,6 +282,10 @@ class WanSVIEngine(WanShared):
         easy_cache_cutoff_steps: int | None = None,
         chunking_profile: str = "none",
         rope_on_cpu: bool = False,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         """
@@ -263,6 +296,12 @@ class WanSVIEngine(WanShared):
         - [0.20, 0.95]: per-clip generation (mapped per clip; includes denoise + decode/stitch)
         - [0.95, 1.00]: finalization / return
         """
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
         if (
             high_noise_guidance_scale is not None
             and low_noise_guidance_scale is not None
@@ -366,6 +405,7 @@ class WanSVIEngine(WanShared):
         num_clips = max(
             total_num_frames // num_frames_per_segment, len(prompt_embeds_list)
         )
+        
         safe_emit_progress(
             progress_callback,
             0.18,
@@ -570,7 +610,39 @@ class WanSVIEngine(WanShared):
                     0.90,
                     f"Clip {clip_idx_1}/{num_clips}: decoding latents to frames",
                 )
-                video = self.vae_decode(latents, offload=offload)
+                video = self.vae_decode(
+                    latents,
+                    offload=offload,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+                )
+
+                # ── Wavelet colour correction ──────────────────────────────
+                # Match each clip's colour palette to the original input image
+                # so that all clips look consistent and clean.
+                try:
+                    num_decoded_frames = video.shape[2]
+                    color_ref = self._build_color_reference(
+                        image, num_decoded_frames, height, width,
+                    )
+                    video = self.color_corrector(
+                        video.to(device=self.device, dtype=torch.float32),
+                        color_ref,
+                        clip_range=(-1.0, 1.0),
+                        method="adain",
+                    )
+                    safe_emit_progress(
+                        clip_progress_callback,
+                        0.93,
+                        f"Clip {clip_idx_1}/{num_clips}: colour correction applied",
+                    )
+                except Exception as e:
+                    safe_emit_progress(
+                        clip_progress_callback,
+                        0.93,
+                        f"Clip {clip_idx_1}/{num_clips}: colour correction skipped ({e})",
+                    )
+                # ───────────────────────────────────────────────────────────
+
                 postprocessed_video = self._tensor_to_frames(video)[0]
                 # Seamlessly stitch this clip onto the running output using the overlap window.
                 if idx == 0:

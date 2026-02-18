@@ -516,7 +516,9 @@ class SeedVRUpscaleEngine(BaseEngine):
             ## enable tiling
             if self.vae_tiling:
                 self.vae.enable_tiling(**self.vae_tiling_kwargs)
-
+            
+            # convert to torch.Tensor and not GGMLTensor
+            latent = torch.tensor(latent)
             sample = self.vae.decode(latent).sample
             if hasattr(self.vae, "postprocess"):
                 sample = self.vae.postprocess(sample)

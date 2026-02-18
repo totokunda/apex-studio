@@ -700,7 +700,7 @@ class LoraManager(DownloadMixin):
         ) -> str:
             url = f"https://civitai.com/api/download/models/{file_id}"
             url_params = {}
-            fmt = _normalize_preferred_format(fmt)
+            fmt = _normalize_preferred_format(fmt) or "safetensors"
             if fmt in ("safetensors", "pt"):
                 url_params["type"] = "Model"
                 url_params["format"] = (

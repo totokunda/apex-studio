@@ -10,6 +10,7 @@ import torch
 from torch.autograd import Variable
 
 from src.preprocess.mesh_graphormer.custom_manopth import argutils
+from src.utils.dtype import supports_double
 
 
 def quat2mat(quat):
@@ -77,7 +78,10 @@ if __name__ == "__main__":
     n_components = 6
     rot = 3
     inputs = torch.rand(args.batch_size, rot)
-    inputs_var = Variable(inputs.double(), requires_grad=True)
+    inputs_var = Variable(
+        inputs.double() if supports_double(inputs.device) else inputs.to(torch.float32),
+        requires_grad=True,
+    )
     if args.cuda:
         inputs = inputs.cuda()
     # outputs = batch_rodrigues(inputs)
@@ -85,11 +89,17 @@ if __name__ == "__main__":
     print("batch test passed !")
 
     inputs = torch.rand(rot)
-    inputs_var = Variable(inputs.double(), requires_grad=True)
+    inputs_var = Variable(
+        inputs.double() if supports_double(inputs.device) else inputs.to(torch.float32),
+        requires_grad=True,
+    )
     test_function = gradcheck(th_cv2_rod_sub_id.apply, (inputs_var,))
     print("th_cv2_rod test passed")
 
     inputs = torch.rand(rot)
-    inputs_var = Variable(inputs.double(), requires_grad=True)
+    inputs_var = Variable(
+        inputs.double() if supports_double(inputs.device) else inputs.to(torch.float32),
+        requires_grad=True,
+    )
     test_th = gradcheck(th_cv2_rod.apply, (inputs_var,))
     print("th_cv2_rod_id test passed !")

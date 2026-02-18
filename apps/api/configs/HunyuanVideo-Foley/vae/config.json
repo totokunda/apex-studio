@@ -1,0 +1,1 @@
+{"encoder_dim": 128, "encoder_rates": [2, 3, 4, 5, 8], "latent_dim": 128, "decoder_dim": 2048, "decoder_rates": [8, 5, 4, 3, 2], "n_codebooks": 9, "codebook_size": 1024, "codebook_dim": 8, "quantizer_dropout": false, "sample_rate": 48000, "continuous": true}

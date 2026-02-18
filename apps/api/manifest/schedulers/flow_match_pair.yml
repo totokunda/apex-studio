@@ -1,0 +1,98 @@
+api_version: apex/v1
+kind: SchedulerCatalog
+metadata:
+  id: flow-match-pair-schedulers
+  name: FlowMatch Pair Scheduler
+  version: 0.1.2
+  description: >
+    Shared scheduler catalog for paired (video/audio) timestep schedules.
+    This is used by pipelines like MOVA that require paired timesteps via `get_pairs()`.
+spec:
+  # Frontend/universal-engine hints: typed config fields that are safe to expose.
+  fields:
+    num_train_timesteps:
+      label: Num Train Timesteps
+      description: Number of training diffusion timesteps used by the scheduler.
+      type: number
+      value_type: integer
+      min: 1
+      max: 10000
+      step: 1
+    shift:
+      label: Shift
+      description: Flow-matching time/sigma shifting parameter.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 10.0
+      step: 0.01
+    sigma_max:
+      label: Sigma Max
+      description: Maximum sigma for the noise schedule.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 100.0
+      step: 0.001
+    sigma_min:
+      label: Sigma Min
+      description: Minimum sigma for the noise schedule.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 10.0
+      step: 0.000001
+    inverse_timesteps:
+      label: Inverse Timesteps
+      description: Flip the sigma/timestep schedule order.
+      type: boolean
+      default: false
+    extra_one_step:
+      label: Extra One Step
+      description: Use an extra step in the sigma linspace (ComfyUI-style).
+      type: boolean
+      default: false
+    reverse_sigmas:
+      label: Reverse Sigmas
+      description: Reverse the sigma schedule after shifting.
+      type: boolean
+      default: false
+    exponential_shift:
+      label: Exponential Shift
+      description: Use exponential mu-shifting instead of the standard shift mapping.
+      type: boolean
+      default: false
+    exponential_shift_mu:
+      label: Exponential Shift Mu
+      description: Mu parameter for exponential shift (required when exponential_shift=true).
+      type: number
+      value_type: float
+      min: -20.0
+      max: 20.0
+      step: 0.01
+    shift_terminal:
+      label: Shift Terminal
+      description: Optional terminal shift to re-scale the schedule end.
+      type: number
+      value_type: float
+      min: 0.0
+      max: 1.0
+      step: 0.0001
+
+  schedulers:
+    - name: FlowMatchPairScheduler
+      label: FlowMatch Pair Scheduler
+      description: Paired timesteps/sigmas scheduler for video+audio pipelines (supports `get_pairs()`).
+      base: src.scheduler.flow_match_pair.FlowMatchPairScheduler
+      config:
+        num_train_timesteps: 1000
+        shift: 3.0
+        sigma_max: 1.0
+        sigma_min: 0.002994011976047904
+        inverse_timesteps: false
+        extra_one_step: false
+        reverse_sigmas: false
+        exponential_shift: false
+        exponential_shift_mu: null
+        shift_terminal: null
+

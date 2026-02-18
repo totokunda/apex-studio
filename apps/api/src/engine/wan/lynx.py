@@ -75,9 +75,20 @@ class LynxEngine(WanShared):
         output_type: str = "pil",
         rope_on_cpu: bool = False,
         chunking_profile: str = "none",
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
         safe_emit_progress(progress_callback, 0.0, "Starting Lynx pipeline")
+        
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
         num_frames = self._parse_num_frames(duration, fps)
 
         use_cfg_guidance = guidance_scale > 1.0 and negative_prompt is not None
@@ -281,7 +292,6 @@ class LynxEngine(WanShared):
                     )
                 else:
                     print("Applying group offloading")
-                    exit()
                     self._apply_group_offloading(
                         model_to_offload, mm_config, module_label=label
                     )
@@ -464,7 +474,7 @@ class LynxEngine(WanShared):
             return latents
 
         safe_emit_progress(progress_callback, 0.95, "Decoding latents")
-        video = self.vae_decode(latents, offload=offload)
+        video = self.vae_decode(latents, offload=offload, vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None))
         safe_emit_progress(progress_callback, 0.98, "Formatting output frames")
         frames = self._tensor_to_frames(video, output_type=output_type)
         safe_emit_progress(progress_callback, 1.0, "Lynx generation complete")

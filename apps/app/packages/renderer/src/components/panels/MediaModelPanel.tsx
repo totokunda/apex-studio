@@ -174,7 +174,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
       
       {section === "media" && <MediaMenu />}
       {section === "filters" && <FilterMenu />}
-      {section === "models" && <ModelMenu />}
+      {section === "models" && <ModelMenu panelSize={panelSize} />}
       {section === "generations" && <GenerationsMenu />}
     </ResizablePanel>
   );

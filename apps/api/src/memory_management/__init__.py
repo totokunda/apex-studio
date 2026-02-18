@@ -16,8 +16,10 @@ wraps `engine.to_device` / `_offload` to coordinate RAM/VRAM usage across runs.
 
 from __future__ import annotations
 
-import logging
+
 import os
+import glob
+import sys
 import threading
 import time
 import types
@@ -88,6 +90,28 @@ class ManagedComponent:
     load_pin_count: int = 0
     device: Optional[torch.device] = None
 
+    # -----------------------------
+    # Debug-only: per-component VRAM profiling (CUDA)
+    #
+    # When enabled, we measure the *peak* allocator usage during each top-level
+    # component forward() and attribute it to that component. This includes
+    # all nested ops/submodules executed inside that forward.
+    # -----------------------------
+    profile_start_allocated_bytes: int | None = None
+    profile_start_reserved_bytes: int | None = None
+    profile_device_index: int | None = None
+    forward_calls: int = 0
+    forward_peak_alloc_delta_bytes_max: int = 0
+    forward_peak_reserved_delta_bytes_max: int = 0
+    forward_peak_alloc_delta_bytes_total: int = 0
+    forward_peak_reserved_delta_bytes_total: int = 0
+    forward_last_peak_alloc_delta_bytes: int = 0
+    forward_last_peak_reserved_delta_bytes: int = 0
+    # Best-effort RAM tracking (process RSS delta) during forward.
+    forward_rss_delta_bytes_last: int = 0
+    forward_rss_delta_bytes_max: int = 0
+    forward_rss_delta_bytes_total: int = 0
+
     def module(self) -> Optional[torch.nn.Module]:
         return None if self.module_ref is None else self.module_ref()
 
@@ -116,6 +140,7 @@ class ComponentMemoryManager:
         self._evicting_flag = (
             threading.local()
         )  # Track if we are currently forcing eviction
+        self._run_counter = 0
 
     # --------- pin/lease helpers ----------
     def _is_effectively_pinned(self, comp: ManagedComponent) -> bool:
@@ -239,6 +264,440 @@ class ComponentMemoryManager:
         else:
             logger.debug(msg)
 
+    def _is_mps_device(self, device: torch.device | None) -> bool:
+        try:
+            if not isinstance(device, torch.device):
+                return False
+            if device.type != "mps":
+                return False
+            if sys.platform != "darwin":
+                return False
+            return bool(
+                hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            )
+        except Exception:
+            return False
+
+    def _mps_cpu_offload_mode(self) -> str:
+        """
+        Policy for handling `offload_type="cpu"` on Apple Silicon / MPS.
+
+        CPU and MPS share unified memory on macOS, so moving tensors to CPU does
+        not usually reduce total memory pressure. We therefore default to
+        `"discard"` to genuinely free memory. Set `APEX_MPS_CPU_OFFLOAD_MODE=cpu`
+        to force legacy CPU-offload behavior.
+        """
+        raw = os.environ.get("APEX_MPS_CPU_OFFLOAD_MODE", "discard")
+        val = str(raw or "").strip().lower()
+        if val not in {"cpu", "discard"}:
+            return "discard"
+        return val
+
+    def _effective_offload_type(
+        self, offload_type: str, *, source_device: torch.device | None
+    ) -> str:
+        normalized = str(offload_type or "discard").strip().lower()
+        if normalized not in {"cpu", "discard"}:
+            normalized = "discard"
+        if normalized == "cpu" and self._is_mps_device(source_device):
+            mode = self._mps_cpu_offload_mode()
+            if mode != "cpu":
+                self._log_debug(
+                    "[mem] mps unified memory: remapping cpu offload -> discard"
+                )
+                return "discard"
+        return normalized
+
+    # --------- profiling helpers ----------
+    def _profile_component_vram_enabled(self, engine: Any | None) -> bool:
+        """
+        Enable forward VRAM profiling when either:
+        - Env var `APEX_PROFILE_COMPONENT_VRAM` is truthy, OR
+        - Engine has `debug_component_vram=True` (or `profile_component_vram=True`).
+        """
+        try:
+            if self._env_bool("APEX_PROFILE_COMPONENT_VRAM", False):
+                return True
+        except Exception:
+            pass
+        if engine is None:
+            return False
+        try:
+            return bool(getattr(engine, "debug_component_vram", False)) or bool(
+                getattr(engine, "profile_component_vram", False)
+            )
+        except Exception:
+            return False
+
+    def _profile_component_vram_isolate_enabled(self, engine: Any | None) -> bool:
+        """
+        When true, forcibly offload all *other* tracked components for the engine
+        before each component forward. This helps attribute allocator peaks to the
+        active component (instead of shared residency).
+        """
+        try:
+            # Default to true when profiling is enabled (user asked for isolation).
+            return self._env_bool("APEX_PROFILE_COMPONENT_VRAM_ISOLATE", True)
+        except Exception:
+            return True
+
+    def _profile_component_vram_isolate_offload_type(self) -> str:
+        """
+        Offload strategy used for isolation.
+        - "cpu": keep weights in RAM, free VRAM (default; preserves run correctness)
+        - "discard": free both VRAM and (eventually) RAM, but may break the run if
+          components are needed again later.
+        """
+        # Default to discard to isolate both VRAM and RAM attribution.
+        raw = os.environ.get(
+            "APEX_PROFILE_COMPONENT_VRAM_ISOLATE_OFFLOAD_TYPE", "discard"
+        )
+        val = str(raw or "").strip().lower()
+        if val not in {"cpu", "discard"}:
+            return "discard"
+        return val
+
+    def _get_process_rss_bytes(self) -> int | None:
+        try:
+            if psutil is None:
+                return None
+            return int(psutil.Process(os.getpid()).memory_info().rss)
+        except Exception:
+            return None
+
+    def _force_offload_other_components_for_isolation(
+        self,
+        *,
+        engine: Any,
+        keep_label: str,
+        target_device: torch.device,
+    ) -> None:
+        """
+        Best-effort: move all other engine components off `target_device`.
+        IMPORTANT: respects component lease pins. Components remain resident until
+        explicit engine `_offload(...)` releases their lease.
+        """
+        if target_device.type == "cpu":
+            return
+        offload_type = self._profile_component_vram_isolate_offload_type()
+
+        try:
+            with self._lock:
+                comps = list(self._components.values())
+        except Exception:
+            comps = list(self._components.values())
+
+        for comp in comps:
+            try:
+                if comp is None:
+                    continue
+                if comp.label == keep_label:
+                    continue
+                if comp.in_forward:
+                    continue
+                if comp.engine() is not engine:
+                    continue
+                if comp.device is None or comp.device.type != target_device.type:
+                    continue
+                # If the component isn't a module anymore (discarded), nothing to do.
+                if offload_type != "discard" and comp.module() is None:
+                    continue
+                self._offload_component(comp, offload_type=offload_type)
+            except Exception:
+                continue
+
+    def _wrap_component_method_for_profiling(
+        self, module: torch.nn.Module, label: str, method_name: str
+    ) -> None:
+        """
+        Wrap a common "entrypoint" method (e.g. `encode`, `decode`) so profiling
+        works even when pipelines call methods that do not trigger `forward()`.
+        """
+        try:
+            if module is None or not label or not method_name:
+                return
+            flag = f"_apex_mem_profile_method_wrapped_{method_name}"
+            if bool(getattr(module, flag, False)):
+                return
+            if not hasattr(module, method_name):
+                return
+            original = getattr(module, method_name)
+            if not callable(original):
+                return
+
+            # Stash original for debugging/escape hatch.
+            try:
+                setattr(module, f"_apex_mem_profile_method_original_{method_name}", original)
+            except Exception:
+                pass
+
+            # `original` may be a bound method (normal) or a plain callable assigned
+            # on the instance (unbound w.r.t module). Bind explicitly only when needed.
+            def _call_original(_self_mod, *args: Any, **kwargs: Any):
+                if getattr(original, "__self__", None) is not None:
+                    return original(*args, **kwargs)
+                return original(_self_mod, *args, **kwargs)
+
+            def _wrapped(_self_mod, *args: Any, **kwargs: Any):
+                comp = self._components.get(label)
+                engine = None if comp is None else comp.engine()
+                if comp is None or not self._profile_component_vram_enabled(engine):
+                    # Fast path: profiling disabled.
+                    return _call_original(_self_mod, *args, **kwargs)
+
+                # Mark active so debug isolation doesn't accidentally offload us.
+                comp.in_forward = True
+                comp.last_used = time.time()
+                try:
+                    module_device = self._module_device(module)
+                    target_device = module_device
+                    try:
+                        eng_dev = getattr(engine, "device", None)
+                        if isinstance(eng_dev, str):
+                            eng_dev = torch.device(eng_dev)
+                        if isinstance(eng_dev, torch.device):
+                            target_device = eng_dev
+                    except Exception:
+                        target_device = module_device
+                    comp.device = module_device
+
+                    if self._profile_component_vram_isolate_enabled(engine):
+                        self._force_offload_other_components_for_isolation(
+                            engine=engine, keep_label=label, target_device=target_device
+                        )
+
+                    rss_before = self._get_process_rss_bytes()
+                    self._start_forward_vram_profile(comp, module, device=target_device)
+                    try:
+                        return _call_original(_self_mod, *args, **kwargs)
+                    finally:
+                        self._end_forward_vram_profile(comp, module)
+                        rss_after = self._get_process_rss_bytes()
+                        if rss_before is not None and rss_after is not None:
+                            delta = max(0, int(rss_after) - int(rss_before))
+                            comp.forward_rss_delta_bytes_last = int(delta)
+                            comp.forward_rss_delta_bytes_total = int(
+                                getattr(comp, "forward_rss_delta_bytes_total", 0)
+                            ) + int(delta)
+                            comp.forward_rss_delta_bytes_max = max(
+                                int(getattr(comp, "forward_rss_delta_bytes_max", 0)),
+                                int(delta),
+                            )
+                finally:
+                    comp.in_forward = False
+                    try:
+                        comp.device = self._module_device(module)
+                    except Exception:
+                        pass
+                    comp.last_used = time.time()
+
+            setattr(module, method_name, types.MethodType(_wrapped, module))
+            setattr(module, flag, True)
+        except Exception:
+            return
+
+    def _install_entrypoint_method_wrappers(
+        self, module: torch.nn.Module, label: str
+    ) -> None:
+        # Text encoders often use `encode(...)` (not forward).
+        self._wrap_component_method_for_profiling(module, label, "encode")
+        # VAEs commonly use `decode(...)` / `encode(...)` helpers (not forward).
+        self._wrap_component_method_for_profiling(module, label, "decode")
+
+    @staticmethod
+    def _format_bytes(num_bytes: int) -> str:
+        try:
+            n = float(num_bytes)
+        except Exception:
+            return str(num_bytes)
+        for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
+            if abs(n) < 1024.0:
+                return f"{n:.2f}{unit}"
+            n /= 1024.0
+        return f"{n:.2f}PiB"
+
+    def _start_forward_vram_profile(
+        self,
+        comp: ManagedComponent,
+        module: torch.nn.Module,
+        *,
+        device: torch.device | None = None,
+    ) -> None:
+        try:
+            dev = device or self._module_device(module)
+            if dev.type != "cuda" or not torch.cuda.is_available():
+                return
+            idx = dev.index if dev.index is not None else torch.cuda.current_device()
+            with torch.cuda.device(idx):
+                # Sync to attribute any in-flight allocations to the previous op.
+                torch.cuda.synchronize()
+                comp.profile_start_allocated_bytes = int(torch.cuda.memory_allocated())
+                comp.profile_start_reserved_bytes = int(torch.cuda.memory_reserved())
+                try:
+                    torch.cuda.reset_peak_memory_stats()
+                except Exception:
+                    # Older torch builds may not support this on some backends.
+                    pass
+                comp.profile_device_index = int(idx)
+        except Exception:
+            # Best-effort only; profiling must never break inference.
+            return
+
+    def _end_forward_vram_profile(
+        self, comp: ManagedComponent, module: torch.nn.Module
+    ) -> None:
+        idx = comp.profile_device_index
+        start_alloc = comp.profile_start_allocated_bytes
+        start_res = comp.profile_start_reserved_bytes
+        if idx is None or start_alloc is None or start_res is None:
+            return
+        try:
+            with torch.cuda.device(int(idx)):
+                torch.cuda.synchronize()
+                peak_alloc = int(torch.cuda.max_memory_allocated())
+                peak_res = int(torch.cuda.max_memory_reserved())
+                delta_alloc = max(0, peak_alloc - int(start_alloc))
+                delta_res = max(0, peak_res - int(start_res))
+
+                comp.forward_calls = int(getattr(comp, "forward_calls", 0)) + 1
+                comp.forward_last_peak_alloc_delta_bytes = int(delta_alloc)
+                comp.forward_last_peak_reserved_delta_bytes = int(delta_res)
+                comp.forward_peak_alloc_delta_bytes_total = int(
+                    getattr(comp, "forward_peak_alloc_delta_bytes_total", 0)
+                ) + int(delta_alloc)
+                comp.forward_peak_reserved_delta_bytes_total = int(
+                    getattr(comp, "forward_peak_reserved_delta_bytes_total", 0)
+                ) + int(delta_res)
+                comp.forward_peak_alloc_delta_bytes_max = max(
+                    int(getattr(comp, "forward_peak_alloc_delta_bytes_max", 0)),
+                    int(delta_alloc),
+                )
+                comp.forward_peak_reserved_delta_bytes_max = max(
+                    int(getattr(comp, "forward_peak_reserved_delta_bytes_max", 0)),
+                    int(delta_res),
+                )
+        except Exception:
+            return
+        finally:
+            # Always clear the per-forward scratch space.
+            comp.profile_device_index = None
+            comp.profile_start_allocated_bytes = None
+            comp.profile_start_reserved_bytes = None
+
+    def begin_run(self, engine: Any) -> None:
+        """
+        Called at the start of `engine.run(...)` (when wrapped).
+        Clears previous per-forward stats for this engine's components.
+        """
+        try:
+            self._run_counter += 1
+        except Exception:
+            pass
+        try:
+            setattr(engine, "_apex_component_vram_profile", None)
+        except Exception:
+            pass
+        # Clear any previous stats for components owned by this engine.
+        try:
+            with self._lock:
+                comps = list(self._components.values())
+        except Exception:
+            comps = list(self._components.values())
+        for comp in comps:
+            try:
+                if comp.engine() is not engine:
+                    continue
+                comp.forward_calls = 0
+                comp.forward_peak_alloc_delta_bytes_max = 0
+                comp.forward_peak_reserved_delta_bytes_max = 0
+                comp.forward_peak_alloc_delta_bytes_total = 0
+                comp.forward_peak_reserved_delta_bytes_total = 0
+                comp.forward_last_peak_alloc_delta_bytes = 0
+                comp.forward_last_peak_reserved_delta_bytes = 0
+                comp.forward_rss_delta_bytes_last = 0
+                comp.forward_rss_delta_bytes_max = 0
+                comp.forward_rss_delta_bytes_total = 0
+                comp.profile_device_index = None
+                comp.profile_start_allocated_bytes = None
+                comp.profile_start_reserved_bytes = None
+            except Exception:
+                continue
+
+    def end_run(self, engine: Any) -> None:
+        """
+        Called at the end of `engine.run(...)` (when wrapped).
+        If profiling is enabled, summarize per-component peak VRAM deltas.
+        """
+        if not self._profile_component_vram_enabled(engine):
+            return
+        try:
+            with self._lock:
+                comps = list(self._components.values())
+        except Exception:
+            comps = list(self._components.values())
+
+        profile: Dict[str, Dict[str, Any]] = {}
+        for comp in comps:
+            try:
+                if comp.engine() is not engine:
+                    continue
+                if int(getattr(comp, "forward_calls", 0)) <= 0:
+                    continue
+                profile[str(comp.label)] = {
+                    "calls": int(comp.forward_calls),
+                    "weight_bytes": int(getattr(comp, "estimated_bytes", 0)),
+                    "device": str(getattr(comp, "device", None)),
+                    "peak_alloc_delta_bytes_max": int(
+                        getattr(comp, "forward_peak_alloc_delta_bytes_max", 0)
+                    ),
+                    "peak_reserved_delta_bytes_max": int(
+                        getattr(comp, "forward_peak_reserved_delta_bytes_max", 0)
+                    ),
+                    "peak_alloc_delta_bytes_total": int(
+                        getattr(comp, "forward_peak_alloc_delta_bytes_total", 0)
+                    ),
+                    "peak_reserved_delta_bytes_total": int(
+                        getattr(comp, "forward_peak_reserved_delta_bytes_total", 0)
+                    ),
+                    "rss_delta_bytes_max": int(
+                        getattr(comp, "forward_rss_delta_bytes_max", 0)
+                    ),
+                    "rss_delta_bytes_total": int(
+                        getattr(comp, "forward_rss_delta_bytes_total", 0)
+                    ),
+                }
+            except Exception:
+                continue
+
+        try:
+            setattr(engine, "_apex_component_vram_profile", profile)
+        except Exception:
+            pass
+
+        # Log a concise summary (top components by peak alloc delta).
+        try:
+            items = list(profile.items())
+            items.sort(key=lambda kv: int(kv[1].get("peak_alloc_delta_bytes_max", 0)), reverse=True)
+            top_n = self._env_int("APEX_PROFILE_COMPONENT_VRAM_TOPN", 10)
+            lines: List[str] = []
+            for label, stats in items[: max(0, int(top_n))]:
+                lines.append(
+                    f"- {label}: "
+                    f"calls={stats.get('calls')} "
+                    f"weights={self._format_bytes(int(stats.get('weight_bytes', 0)))} "
+                    f"peak_alloc+={self._format_bytes(int(stats.get('peak_alloc_delta_bytes_max', 0)))} "
+                    f"peak_res+={self._format_bytes(int(stats.get('peak_reserved_delta_bytes_max', 0)))} "
+                    f"rss+={self._format_bytes(int(stats.get('rss_delta_bytes_max', 0)))} "
+                    f"device={stats.get('device')}"
+                )
+            if lines:
+                logger.info(
+                    "[mem] component forward VRAM profile (peak deltas per forward, top "
+                    f"{min(len(lines), int(top_n))}):\n" + "\n".join(lines)
+                )
+        except Exception:
+            pass
+
     # --------- sizing helpers ----------
     def _module_device(self, module: torch.nn.Module) -> torch.device:
         for param in module.parameters(recurse=True):
@@ -303,9 +762,40 @@ class ComponentMemoryManager:
                 and hasattr(torch.backends, "mps")
                 and torch.backends.mps.is_available()
             ):
+                mps_total = 0
+                mps_free = 0
+                try:
+                    if getattr(torch, "mps", None) is not None and hasattr(
+                        torch.mps, "recommended_max_memory"
+                    ):
+                        mps_total = int(torch.mps.recommended_max_memory())  # type: ignore[attr-defined]
+                except Exception:
+                    mps_total = 0
+                try:
+                    driver_alloc = 0
+                    if getattr(torch, "mps", None) is not None and hasattr(
+                        torch.mps, "driver_allocated_memory"
+                    ):
+                        driver_alloc = int(torch.mps.driver_allocated_memory())  # type: ignore[attr-defined]
+                    elif getattr(torch, "mps", None) is not None and hasattr(
+                        torch.mps, "current_allocated_memory"
+                    ):
+                        driver_alloc = int(torch.mps.current_allocated_memory())  # type: ignore[attr-defined]
+                    if mps_total > 0:
+                        mps_free = max(0, int(mps_total) - int(driver_alloc))
+                except Exception:
+                    mps_free = int(mps_total) if mps_total > 0 else 0
+
                 if psutil:
                     vm = psutil.virtual_memory()
-                    return int(vm.available), int(vm.total)
+                    sys_free = int(vm.available)
+                    sys_total = int(vm.total)
+                    if mps_total > 0:
+                        # Use the tighter bound: MPS runtime budget and system VM.
+                        return int(min(sys_free, max(0, mps_free))), int(mps_total)
+                    return sys_free, sys_total
+                if mps_total > 0:
+                    return int(max(0, mps_free)), int(mps_total)
                 return 0, 0
         except Exception:
             pass
@@ -402,6 +892,12 @@ class ComponentMemoryManager:
                 )
                 if install_hooks:
                     comp.hooks = self._attach_forward_hooks(module, label)
+                # Also wrap common non-forward entrypoints so profiling works for
+                # components invoked via methods like `.encode()` / `.decode()`.
+                try:
+                    self._install_entrypoint_method_wrappers(module, label)
+                except Exception:
+                    pass
                 self._components[label] = comp
                 self._module_to_label[id(module)] = label
                 self._log_debug(
@@ -523,11 +1019,36 @@ class ComponentMemoryManager:
 
         comp.device = module_device
 
+        # Debug-only isolation: offload all other components *before* ensuring room
+        # so we can attribute allocator peaks to this component.
+        try:
+            engine = comp.engine()
+            if (
+                self._profile_component_vram_enabled(engine)
+                and self._profile_component_vram_isolate_enabled(engine)
+            ):
+                self._force_offload_other_components_for_isolation(
+                    engine=engine, keep_label=label, target_device=module_device
+                )
+        except Exception:
+            pass
+
         reserve = max(comp.estimated_bytes, 0)
         reserve = int(reserve * self._env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20))
         reserve += self._env_int("APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2)
 
         self._ensure_room(module_device, reserve, exclude_label=label)
+
+        # Debug-only VRAM profiling: start peak tracking right before forward.
+        try:
+            engine = comp.engine()
+            if self._profile_component_vram_enabled(engine):
+                rss_before = self._get_process_rss_bytes()
+                if rss_before is not None:
+                    setattr(comp, "_apex_forward_rss_before", int(rss_before))
+                self._start_forward_vram_profile(comp, module, device=module_device)
+        except Exception:
+            pass
 
         # If we modified inputs, return them to the hook caller.
         return inputs
@@ -536,6 +1057,30 @@ class ComponentMemoryManager:
         comp = self._components.get(label)
         if comp is None:
             return
+        # Debug-only VRAM profiling: attribute peak usage to this component.
+        try:
+            engine = comp.engine()
+            if self._profile_component_vram_enabled(engine):
+                self._end_forward_vram_profile(comp, module)
+                rss_after = self._get_process_rss_bytes()
+                rss_before = getattr(comp, "_apex_forward_rss_before", None)
+                if rss_after is not None and rss_before is not None:
+                    # "RAM used" (best-effort): positive RSS increase during forward.
+                    delta = max(0, int(rss_after) - int(rss_before))
+                    comp.forward_rss_delta_bytes_last = int(delta)
+                    comp.forward_rss_delta_bytes_total = int(
+                        getattr(comp, "forward_rss_delta_bytes_total", 0)
+                    ) + int(delta)
+                    comp.forward_rss_delta_bytes_max = max(
+                        int(getattr(comp, "forward_rss_delta_bytes_max", 0)), int(delta)
+                    )
+                try:
+                    if hasattr(comp, "_apex_forward_rss_before"):
+                        delattr(comp, "_apex_forward_rss_before")
+                except Exception:
+                    pass
+        except Exception:
+            pass
         comp.in_forward = False
         comp.device = self._module_device(module)
         comp.last_used = time.time()
@@ -684,17 +1229,23 @@ class ComponentMemoryManager:
             if comp is None or comp.in_forward:
                 continue
 
-            # Tiered offloading: accelerator -> CPU -> Discard (for CPU pressure only).
+            # Tiered offloading: accelerator -> CPU (when meaningful) -> Discard.
             if device.type != "cpu":
-                try:
-                    # Be conservative: ensure we have CPU room before offloading more weights.
-                    self._ensure_room(
-                        torch.device("cpu"),
-                        comp.estimated_bytes,
-                        exclude_label=exclude_label,
-                    )
-                    self._offload_component(comp, offload_type="cpu")
-                except Exception:
+                preferred_offload = self._effective_offload_type(
+                    "cpu", source_device=device
+                )
+                if preferred_offload == "cpu":
+                    try:
+                        # Be conservative: ensure we have CPU room before offloading more weights.
+                        self._ensure_room(
+                            torch.device("cpu"),
+                            comp.estimated_bytes,
+                            exclude_label=exclude_label,
+                        )
+                        self._offload_component(comp, offload_type="cpu")
+                    except Exception:
+                        self._offload_component(comp, offload_type="discard")
+                else:
                     self._offload_component(comp, offload_type="discard")
             else:
                 self._offload_component(comp, offload_type="discard")
@@ -728,16 +1279,22 @@ class ComponentMemoryManager:
             if comp is None or comp.in_forward:
                 continue
 
-            # Tiered offloading: GPU -> CPU -> Discard
+            # Tiered offloading: GPU -> CPU (when meaningful) -> Discard.
             if device.type != "cpu":
-                try:
-                    self._ensure_room(
-                        torch.device("cpu"),
-                        comp.estimated_bytes,
-                        exclude_label=exclude_label,
-                    )
-                    self._offload_component(comp, offload_type="cpu")
-                except Exception:
+                preferred_offload = self._effective_offload_type(
+                    "cpu", source_device=device
+                )
+                if preferred_offload == "cpu":
+                    try:
+                        self._ensure_room(
+                            torch.device("cpu"),
+                            comp.estimated_bytes,
+                            exclude_label=exclude_label,
+                        )
+                        self._offload_component(comp, offload_type="cpu")
+                    except Exception:
+                        self._offload_component(comp, offload_type="discard")
+                else:
                     self._offload_component(comp, offload_type="discard")
             else:
                 self._offload_component(comp, offload_type="discard")
@@ -745,6 +1302,205 @@ class ComponentMemoryManager:
             free, _ = self._device_free_total(device)
             if free >= target_free:
                 break
+
+    def _eviction_candidates_allow_pinned(
+        self,
+        device: torch.device,
+        *,
+        exclude_label: str | None = None,
+        engine: Any | None = None,
+    ) -> List[str]:
+        """
+        Load-time eviction candidates for `device`, scoped by engine when provided.
+        Lease-pinned components are intentionally excluded: a component is only
+        eligible for manager eviction after explicit `_offload(...)` release.
+        """
+        comps: List[Tuple[float, str]] = []
+        for label, comp in self._components.items():
+            if exclude_label is not None and label == exclude_label:
+                continue
+            if comp is None or comp.in_forward:
+                continue
+            if self._is_effectively_pinned(comp):
+                continue
+            if engine is not None and comp.engine() is not engine:
+                continue
+            if comp.device is None or comp.device.type != device.type:
+                continue
+            comps.append((comp.last_used, label))
+        comps.sort(key=lambda x: x[0])
+        return [label for _, label in comps]
+
+    def _ensure_room_for_load(
+        self,
+        device: torch.device,
+        reserve_bytes: int,
+        *,
+        exclude_label: str | None = None,
+        engine: Any | None = None,
+    ) -> None:
+        """
+        Ensure sufficient free memory **before loading weights** onto `device`.
+
+        This path respects lease pins: components stay resident until explicit
+        engine `_offload(...)` calls release them.
+        """
+        free, total = self._device_free_total(device)
+        target_free = self._target_free_bytes(device, reserve_bytes)
+        if total == 0 or free >= target_free:
+            return
+
+        self._log_debug(
+            f"[mem] load pressure on {device}: free={free/1e9:.2f}GB "
+            f"target={target_free/1e9:.2f}GB"
+        )
+
+        # First: prefer evicting components belonging to the same engine.
+        for scope_engine in (engine, None):
+            candidates = self._eviction_candidates_allow_pinned(
+                device, exclude_label=exclude_label, engine=scope_engine
+            )
+            for label in candidates:
+                comp = self._components.get(label)
+                if comp is None or comp.in_forward:
+                    continue
+
+                if device.type != "cpu":
+                    preferred_offload = self._effective_offload_type(
+                        "cpu", source_device=device
+                    )
+                    if preferred_offload == "cpu":
+                        try:
+                            # Ensure we have CPU room before offloading more weights.
+                            self._ensure_room(
+                                torch.device("cpu"),
+                                comp.estimated_bytes,
+                                exclude_label=exclude_label,
+                            )
+                            self._offload_component(comp, offload_type="cpu")
+                        except Exception:
+                            self._offload_component(comp, offload_type="discard")
+                    else:
+                        self._offload_component(comp, offload_type="discard")
+                else:
+                    self._offload_component(comp, offload_type="discard")
+
+                # Flush allocator caches to maximize contiguous free segments for upcoming loads.
+                try:
+                    self._flush_device_caches(device)
+                except Exception:
+                    pass
+
+                free, _ = self._device_free_total(device)
+                if free >= target_free:
+                    return
+
+    def preflight_component_load(
+        self,
+        *,
+        engine: Any,
+        component: Any,
+        reserve_bytes: int | None = None,
+    ) -> None:
+        """
+        Public entrypoint used by the engine wrapper around `load_component()`.
+
+        This runs *before* the actual weight load begins, so we can proactively
+        offload other resident components and prevent CUDA OOM during load.
+        """
+        try:
+            dev = getattr(engine, "device", None) or torch.device("cpu")
+            if isinstance(dev, str):
+                dev = torch.device(dev)
+            if not isinstance(dev, torch.device):
+                dev = torch.device("cpu")
+        except Exception:
+            dev = torch.device("cpu")
+
+        if dev.type == "cpu":
+            return
+
+        # IMPORTANT:
+        # Do NOT exclude by component label during load preflight.
+        #
+        # Labels like "transformer"/"vae" are stable across engines, so excluding them
+        # would incorrectly protect an *old* model owned by a different engine and
+        # reintroduce the exact OOM we are trying to prevent.
+        exclude_label = None
+
+        # Estimate incoming weights (best-effort) so we reserve enough headroom
+        # for the *load itself* (not just the post-load forward).
+        try:
+            if reserve_bytes is not None:
+                reserve = max(0, int(reserve_bytes))
+            else:
+                extra = self._env_int(
+                    "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
+                )
+                mult = self._env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20)
+                weight_bytes = 0
+                if isinstance(component, dict):
+                    model_path = component.get("model_path")
+                    if model_path and os.path.exists(str(model_path)):
+                        mp = str(model_path)
+                        if os.path.isdir(mp):
+                            exts = component.get("extensions") or [
+                                "safetensors",
+                                "bin",
+                                "pt",
+                                "ckpt",
+                                "pth",
+                            ]
+                            try:
+                                exts = list(exts)
+                            except Exception:
+                                exts = ["safetensors", "bin", "pt", "ckpt", "pth"]
+                            # Sum weight file sizes as a rough upper bound.
+                            for ext in exts:
+                                for fp in glob.glob(os.path.join(mp, f"*.{ext}")):
+                                    try:
+                                        weight_bytes += int(os.path.getsize(fp))
+                                    except Exception:
+                                        continue
+                        else:
+                            try:
+                                weight_bytes = int(os.path.getsize(mp))
+                            except Exception:
+                                weight_bytes = 0
+                # If we can't estimate, fall back to a conservative small reserve.
+                if weight_bytes <= 0:
+                    reserve = int(extra)
+                else:
+                    reserve = int(weight_bytes * float(mult) + int(extra))
+        except Exception:
+            reserve = 0
+
+        # If we already have enough free memory, do nothing (do NOT offload eagerly).
+        try:
+            free, total = self._device_free_total(dev)
+            target_free = self._target_free_bytes(dev, int(reserve))
+            if total == 0 or free >= target_free:
+                return
+        except Exception:
+            # If we cannot compute pressure, fall through to best-effort eviction.
+            pass
+
+        # Preflight must not issue implicit engine `_offload(...)` calls. We only
+        # clear allocator caches and then attempt eviction of already-unpinned
+        # components via `_ensure_room_for_load(...)`.
+        try:
+            self._flush_device_caches(dev)
+        except Exception:
+            pass
+
+        try:
+            self._ensure_room_for_load(
+                dev, reserve, exclude_label=exclude_label, engine=engine
+            )
+        except Exception:
+            # Never break loading due to memory manager errors; worst case we fall
+            # back to the original OOM (but do not introduce new failures).
+            return
 
     def _eviction_candidates(
         self, device: torch.device, *, exclude_label: str | None = None
@@ -780,6 +1536,15 @@ class ComponentMemoryManager:
             return
 
         module = comp.module()
+        source_device = comp.device
+        if module is not None:
+            try:
+                source_device = self._module_device(module)
+            except Exception:
+                pass
+        offload_type = self._effective_offload_type(
+            offload_type, source_device=source_device
+        )
         if module is None and offload_type != "discard":
             return
 
@@ -918,6 +1683,7 @@ class ComponentMemoryManager:
             manager = getattr(self, "_component_memory_manager", None)
 
             final_offload_type = offload_type
+            current_device = None
 
             # 1. Resolve Module Object
             mod_obj = module
@@ -940,6 +1706,26 @@ class ComponentMemoryManager:
                                 or {}
                             )
                             mod_obj = helpers.get(module)
+                except Exception:
+                    pass
+
+                try:
+                    if mod_obj is not None and hasattr(manager, "_module_device"):
+                        current_device = manager._module_device(mod_obj)
+                except Exception:
+                    current_device = None
+                if current_device is None and isinstance(module, str):
+                    try:
+                        comp = manager._components.get(module)
+                        if comp is not None and isinstance(comp.device, torch.device):
+                            current_device = comp.device
+                    except Exception:
+                        current_device = None
+
+                try:
+                    final_offload_type = manager._effective_offload_type(
+                        final_offload_type, source_device=current_device
+                    )
                 except Exception:
                     pass
 
@@ -971,13 +1757,20 @@ class ComponentMemoryManager:
             # 2. Downgrade Discard -> CPU if RAM allows
             if final_offload_type == "discard" and manager and mod_obj is not None:
                 try:
-                    size = manager._module_size_bytes(mod_obj)
-                    cpu_dev = torch.device("cpu")
-                    free, _ = manager._device_free_total(cpu_dev)
-                    target_free = manager._target_free_bytes(cpu_dev, 0)
+                    can_use_cpu_offload = (
+                        manager._effective_offload_type(
+                            "cpu", source_device=current_device
+                        )
+                        == "cpu"
+                    )
+                    if can_use_cpu_offload:
+                        size = manager._module_size_bytes(mod_obj)
+                        cpu_dev = torch.device("cpu")
+                        free, _ = manager._device_free_total(cpu_dev)
+                        target_free = manager._target_free_bytes(cpu_dev, 0)
 
-                    if free > (target_free + size + 2 * 1024**3):
-                        final_offload_type = "cpu"
+                        if free > (target_free + size + 2 * 1024**3):
+                            final_offload_type = "cpu"
                 except Exception:
                     pass
 
@@ -1028,7 +1821,20 @@ class ComponentMemoryManager:
                     pass
 
             # 5. Execute actual offload (if forced, or if moving to discard, or if already on CPU)
-            result = original(module, offload_type=final_offload_type)
+            offload_target = module
+            if final_offload_type == "discard" and not isinstance(offload_target, str):
+                try:
+                    if manager is not None:
+                        resolved = manager._resolve_label(mod_obj)
+                        if resolved:
+                            offload_target = resolved
+                except Exception:
+                    pass
+                # OffloadMixin only supports discard for string targets.
+                if not isinstance(offload_target, str):
+                    final_offload_type = "cpu"
+
+            result = original(offload_target, offload_type=final_offload_type)
             try:
                 if manager:
                     manager.mark_offloaded(module, offload_type=final_offload_type)
@@ -1052,6 +1858,15 @@ class ComponentMemoryManager:
         original = engine.load_component
 
         def _wrapped_load_component(self, component, *args, **kwargs):
+            # Load-time preflight: best-effort eviction for already-unpinned
+            # components only; do not implicitly offload leased components.
+            manager = getattr(self, "_component_memory_manager", None)
+            if manager is not None and hasattr(manager, "preflight_component_load"):
+                try:
+                    manager.preflight_component_load(engine=self, component=component)
+                except Exception:
+                    pass
+
             module = original(component, *args, **kwargs)
             # If a component loader returned None, that's a hard error: callers
             # expect a usable module, and we must not allow silent "None".
@@ -1101,6 +1916,35 @@ class ComponentMemoryManager:
         engine.load_component = types.MethodType(_wrapped_load_component, engine)
         engine._apex_mem_load_component_wrapped = True
 
+    def _wrap_run(self, engine: Any) -> None:
+        """
+        Wrap engine.run(...) so we can begin/end a "run session" for profiling.
+        """
+        if getattr(engine, "_apex_mem_run_wrapped", False):
+            return
+        if not hasattr(engine, "run"):
+            return
+        original = engine.run
+
+        def _wrapped_run(self, *args: Any, **kwargs: Any):
+            manager = getattr(self, "_component_memory_manager", None)
+            if manager is not None and hasattr(manager, "begin_run"):
+                try:
+                    manager.begin_run(self)
+                except Exception:
+                    pass
+            try:
+                return original(*args, **kwargs)
+            finally:
+                if manager is not None and hasattr(manager, "end_run"):
+                    try:
+                        manager.end_run(self)
+                    except Exception:
+                        pass
+
+        engine.run = types.MethodType(_wrapped_run, engine)
+        engine._apex_mem_run_wrapped = True
+
     def _register_existing_components(self, engine: Any) -> None:
         for name in ("transformer", "vae", "text_encoder", "scheduler"):
             mod = getattr(engine, name, None)
@@ -1136,6 +1980,7 @@ class ComponentMemoryManager:
         self._wrap_to_device(engine)
         self._wrap_offload(engine)
         self._wrap_load_component(engine)
+        self._wrap_run(engine)
 
         # Expose helpers for BaseEngine.load_component path.
         def _register_tracked_module(self_obj, module, label, tags=None):
@@ -1223,13 +2068,15 @@ def _auto_memory_management_disabled() -> bool:
     try:
         return ComponentMemoryManager._env_bool(
             "APEX_DISABLE_AUTO_MEMORY_MANAGEMENT", False
+        ) or ComponentMemoryManager._env_bool(
+            "DISABLE_AUTO_MEMORY_MANAGEMENT", False
         )
     except Exception:
         raw = os.environ.get("APEX_DISABLE_AUTO_MEMORY_MANAGEMENT")
         return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def get_memory_manager() -> ComponentMemoryManager:
+def get_memory_manager() -> ComponentMemoryManager | NoopComponentMemoryManager:
     global _GLOBAL_MANAGER, _GLOBAL_NOOP_MANAGER
     if _auto_memory_management_disabled():
         if _GLOBAL_NOOP_MANAGER is None:
@@ -1240,7 +2087,7 @@ def get_memory_manager() -> ComponentMemoryManager:
     return _GLOBAL_MANAGER
 
 
-def install_memory_hooks(engine: Any) -> ComponentMemoryManager:
+def install_memory_hooks(engine: Any) -> ComponentMemoryManager | NoopComponentMemoryManager:
     """
     Attach the global memory manager to the given engine instance.
 

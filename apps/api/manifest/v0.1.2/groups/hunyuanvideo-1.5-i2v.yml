@@ -1,0 +1,40 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-hunyuanvideo-1.5-i2v
+  name: HunyuanVideo 1.5 Image to Video
+  description: HunyuanVideo 1.5 is a 8.3B parameter model for text/image-to-video generation.
+  tags:
+    - hunyuanvideo15
+    - i2v
+  author: Tencent
+  license: Apache-2.0
+  demo_path: models/hunyuan-video-15-i2v.mp4
+  categories:
+    - image-to-video
+
+variants:
+  - id: hunyuanvideo15-i2v-480p
+    label: "Image to Video 480p"
+    description: "8.3B parameter image-to-video model from Tencent that animates a reference image with natural motion while preserving subject identity, style, and spatial composition."
+    manifest_ref: video/hunyuanvideo-1.5-i2v-480p
+    default: true
+  - id: hunyuanvideo15-i2v-720p
+    label: "Image to Video 720p"
+    description: "8.3B parameter image-to-video model from Tencent that animates a reference image with natural motion while preserving subject identity, style, and spatial composition."
+    manifest_ref: video/hunyuanvideo-1.5-i2v-720p
+  - id: hunyuanvideo15-i2v-720p-distilled
+    label: "Image to Video 720p Distilled"
+    description: "8.3B parameter image-to-video model from Tencent that animates a reference image with natural motion while preserving subject identity, style, and spatial composition."
+    manifest_ref: video/hunyuanvideo-1.5-i2v-720p-distilled
+  - id: hunyuanvideo15-i2v-480p-distilled
+    label: "Image to Video 480p Distilled"
+    description: "8.3B parameter image-to-video model from Tencent that animates a reference image with natural motion while preserving subject identity, style, and spatial composition."
+    manifest_ref: video/hunyuanvideo-1.5-i2v-480p-distilled
+  - id: hunyuanvideo15-i2v-480p-step-distilled
+    label: "Image to Video 480p Step Distilled"
+    description: "8.3B parameter image-to-video model from Tencent that animates a reference image with natural motion while preserving subject identity, style, and spatial composition."
+    manifest_ref: video/hunyuanvideo-1.5-i2v-480p-step-distilled
+  

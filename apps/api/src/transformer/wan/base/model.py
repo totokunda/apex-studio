@@ -43,6 +43,7 @@ from diffusers.models.normalization import FP32LayerNorm
 from .attention import WanAttnProcessor2_0
 from src.transformer.efficiency.mod import InplaceRMSNorm
 from src.transformer.base import TRANSFORMERS_REGISTRY
+from src.utils.dtype import supports_double
 from src.transformer.efficiency.ops import (
     apply_gate_inplace,
     apply_scale_shift_inplace,
@@ -823,6 +824,8 @@ class WanTimeTextImageEmbedding(nn.Module):
         )
 
 
+
+
 def rope_1d(
     dim: int,
     length: int,
@@ -833,15 +836,67 @@ def rope_1d(
 ) -> torch.Tensor:
     """
     Return complex RoPE table of shape [length, dim//2] with positions = [start, ..., start+length-1].
+
+    Precision policy:
+    - If `dtype` is float64 AND the target `device` supports float64, compute fully on that device in float64.
+    - Otherwise, compute angles in float64 on CPU (highest precision available), then cast to `dtype`
+      and move to `device`. This avoids float64-on-MPS errors while preserving max precision in the table.
     """
     if dim % 2 != 0:
         raise ValueError(f"RoPE dim must be even, got {dim}")
-    base = 1.0 / (
-        theta ** (torch.arange(0, dim, 2, dtype=dtype, device=device).double() / dim)
-    )
-    pos = torch.arange(start, start + length, dtype=dtype, device=device)
-    ang = torch.outer(pos, base)  # [length, dim//2]
-    return torch.polar(torch.ones_like(ang, dtype=dtype), ang)
+
+    # Normalize device
+    if device is None:
+        device = torch.device("cpu")
+    else:
+        device = torch.device(device)
+
+    # Decide whether float64 is actually supported on the *target* device
+    wants_f64 = (dtype == torch.float64)
+    target_supports_f64 = (device.type != "mps")  # MPS does not support float64 tensors in PyTorch
+
+    # Helper: build inv_freq + pos on a given device/dtype
+    def _build_angles(on_device: torch.device, real_dtype: torch.dtype) -> torch.Tensor:
+        arange = torch.arange(0, dim, 2, dtype=real_dtype, device=on_device)  # [dim//2]
+        base = 1.0 / (theta ** (arange / dim))
+        pos = torch.arange(start, start + length, dtype=real_dtype, device=on_device)  # [length]
+        return torch.outer(pos, base)  # [length, dim//2]
+
+    if wants_f64 and target_supports_f64:
+        # Full float64 path on CPU/CUDA/etc. (highest precision, no casting)
+        ang = _build_angles(device, torch.float64)
+        # complex128
+        return torch.polar(torch.ones_like(ang, dtype=torch.float64), ang)
+
+    # Otherwise: compute in float64 on CPU, then cast+move safely.
+    # This gives "highest precision possible" even when the target device can't do float64 (e.g., MPS),
+    # and also allows users to request float32/float16/bf16 outputs.
+    ang_cpu64 = _build_angles(torch.device("cpu"), torch.float64)
+
+    # Determine output complex dtype consistent with requested real dtype.
+    # torch.polar expects real inputs; the complex dtype is inferred from the real dtype.
+    # We'll explicitly compute in float64 then cast.
+    rope_cpu_c128 = torch.polar(torch.ones_like(ang_cpu64, dtype=torch.float64), ang_cpu64)  # complex128
+
+    if dtype == torch.float64:
+        # Requested float64, but target can't support it (e.g., MPS): keep complex128 on CPU unless user moved it.
+        # If user set device to MPS, we must downcast before moving.
+        if device.type == "mps":
+            return rope_cpu_c128.to(torch.complex64).to(device)
+        return rope_cpu_c128.to(device)
+
+    if dtype == torch.float32:
+        return rope_cpu_c128.to(torch.complex64).to(device)
+    if dtype == torch.float16:
+        # complex32 isn't a thing; best practical choice is complex64 with fp16 compute elsewhere.
+        return rope_cpu_c128.to(torch.complex64).to(device)
+    if dtype == torch.bfloat16:
+        # Same reasoning as float16.
+        return rope_cpu_c128.to(torch.complex64).to(device)
+
+    # Fallback: try casting real part dtype -> complex mapping via complex64/complex128 choice.
+    # If someone passes an odd dtype, prefer complex64.
+    return rope_cpu_c128.to(torch.complex64).to(device)
 
 
 class WanRotaryPosEmbed(nn.Module):
@@ -884,7 +939,7 @@ class WanRotaryPosEmbed(nn.Module):
         self.freqs_t = rope_1d(t_dim, t_len, theta=theta, start=time_offset)
         self.freqs_h = rope_1d(h_dim, h_len, theta=theta, start=0)
         self.freqs_w = rope_1d(w_dim, w_len, theta=theta, start=0)
-
+        
         # cache half-dims for final concat
         self.t_half = t_dim // 2
         self.h_half = h_dim // 2

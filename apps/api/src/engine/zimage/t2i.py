@@ -178,6 +178,7 @@ class ZImageT2IEngine(ZImageShared):
             self.scheduler.config.get("base_shift", 0.5),
             self.scheduler.config.get("max_shift", 1.15),
         )
+        
 
         self.scheduler.sigma_min = 0.0
         timesteps, num_inference_steps = self._get_timesteps(

@@ -1,0 +1,27 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-flux-dev
+  name: Flux Dev
+  description: Flux Dev is a 12B parameter model for text-to-image generation.
+  tags:
+    - flux
+    - dev
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/flux-dev.png
+  categories:
+    - text-to-image
+
+variants:
+  - id: flux-dev
+    label: "Flux Dev"
+    description: "12B parameter model specialized for image inpainting and outpainting. Seamlessly fills masked regions or extends image boundaries with context-aware content that matches lighting, style, and perspective of the surrounding image."
+    manifest_ref: image/flux-dev-text-to-image
+    default: true
+  - id: flux-dev-krea
+    label: "Flux Dev Krea"
+    description: "12B parameter model specialized for image inpainting and outpainting. Seamlessly fills masked regions or extends image boundaries with context-aware content that matches lighting, style, and perspective of the surrounding image."
+    manifest_ref: image/flux-krea-text-to-image

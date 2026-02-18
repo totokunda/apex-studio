@@ -41,8 +41,24 @@ class WanI2VEngine(WanShared):
         enhance_kwargs: Dict[str, Any] = {},
         chunking_profile: str = "none",
         rope_on_cpu: bool = False,
+        use_tiny_vae: bool = False,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
+        
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
+        
+        if expand_timesteps:
+            fps = 24
+            
         if (
             high_noise_guidance_scale is not None
             and low_noise_guidance_scale is not None
@@ -203,6 +219,7 @@ class WanI2VEngine(WanShared):
             offload=offload,
             dtype=latents.dtype,
             normalize_latents_dtype=latents.dtype,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None)
         )
 
         batch_size, _, num_latent_frames, latent_height, latent_width = latents.shape
@@ -299,13 +316,18 @@ class WanI2VEngine(WanShared):
 
         if offload:
             self._offload("transformer")
+            self._offload("high_noise_transformer")
+            self._offload("low_noise_transformer")
+            
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")
 
         if return_latents:
             safe_emit_progress(progress_callback, 1.0, "Returning latents")
             return latents
         else:
-            video = self.vae_decode(latents, offload=offload)
+            video = self.vae_decode(latents, offload=offload,
+                                    use_tiny_vae=use_tiny_vae,
+                                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None))
             safe_emit_progress(progress_callback, 0.96, "Decoded latents to video")
             postprocessed_video = self._tensor_to_frames(video)
             safe_emit_progress(

@@ -23,8 +23,10 @@ from glob import glob
 from src.mixins.download_mixin import DownloadMixin
 # Import pretrained config from transformers
 from src.utils.defaults import DEFAULT_CONFIG_SAVE_PATH
+from src.config_registry import resolve_config_path, resolve_config_dir, load_config as registry_load_config, config_exists
 from src.types import InputImage, InputVideo, InputAudio
 import types
+import traceback
 import numpy as np
 try:
     import pillow_avif
@@ -123,15 +125,46 @@ class LoaderMixin(DownloadMixin):
 
     def fetch_config(
         self,
-        config_path: str,
+        config_path: str = None,
         config_save_path: str = DEFAULT_CONFIG_SAVE_PATH,
         return_path: bool = False,
+        config_id: str = None,
+        progress_callback: Callable[[int, int | None, str | None], None] | None = None,
     ):
-        path = self._download(config_path, config_save_path)
-        if return_path:
-            return path
-        else:
-            return self._load_config_file(path)
+        # Prefer config_id (local registry) over config_path (remote download)
+        if config_id:
+            try:
+                path = resolve_config_path(config_id)
+                if return_path:
+                    return path
+                else:
+                    return self._load_config_file(path)
+            except FileNotFoundError:
+                self.logger.warning(
+                    f"Config not found in registry for config_id='{config_id}', "
+                    f"falling back to download."
+                )
+
+        # If config_path is already a local path, use it directly
+        if config_path and os.path.exists(config_path):
+            if return_path:
+                return config_path
+            else:
+                return self._load_config_file(config_path)
+
+        # Fallback: download from remote (legacy config_path behavior)
+        if config_path:
+            path = self._download(
+                config_path,
+                config_save_path,
+                progress_callback=progress_callback,
+            )
+            if return_path:
+                return path
+            else:
+                return self._load_config_file(path)
+
+        return None
 
     def _load_model(
         self,
@@ -181,21 +214,28 @@ class LoaderMixin(DownloadMixin):
         if model_class is None:
             raise ValueError(f"Model class for base '{model_base}' not found")
         config_path = component.get("config_path")
+        config_id = component.get("config_id")
         config = {}
 
         if "nunchaku" in model_base:
             return model_class.from_pretrained(model_path, torch_dtype=load_dtype)
 
-        if config_path:
-            pydash.merge(config, self.fetch_config(config_path))
+        if config_id or config_path:
+            fetched = self.fetch_config(config_path=config_path, config_id=config_id)
+            if fetched:
+                pydash.merge(config, fetched)
 
         if component.get("config"):
             pydash.merge(config, component.get("config"))
+            
+        
+
 
         # Lazy import here as well to avoid circular imports.
         from src.converters.convert import (
             get_transformer_converter,
             get_vae_converter,
+            get_helper_converter,
             NoOpConverter,
             get_text_encoder_converter,
         )
@@ -207,14 +247,35 @@ class LoaderMixin(DownloadMixin):
             converter = get_transformer_converter(model_base)
         elif component.get("type") == "text_encoder":
             converter = get_text_encoder_converter(model_base)
+        elif component.get("type") == "helper":
+            converter = get_helper_converter(model_base)
         else:
             converter = NoOpConverter()
-
-        if os.path.isdir(model_path) and not config_path:
+    
+        if os.path.isdir(model_path) and not config_path and not config_id:
             # look for a config.json file
             config_path = os.path.join(model_path, "config.json")
             if os.path.exists(config_path):
                 pydash.merge(config, self._load_json(config_path))
+                
+        init_config = True
+
+        @torch.compiler.disable()
+        def _create_model_from_config():
+            """Create model from config under init_empty_weights. Disable torch.compile to avoid
+            RecursionError when init_weights runs ops (e.g. clamp) on meta tensors."""
+            if expects_pretrained_config:
+                config_class = getattr(model_class, "config_class", _PretrainedConfig())
+                conf = config_class(**config)
+                if hasattr(model_class, "_from_config"):
+                    return model_class._from_config(conf, **extra_kwargs)
+                return model_class.from_config(conf, **extra_kwargs)
+            if hasattr(model_class, "_from_config"):
+                return model_class._from_config(config, **extra_kwargs)
+            try:
+                return model_class.from_config(config, **extra_kwargs)
+            except Exception as e:
+                return None
 
         with init_empty_weights():
             # Check the constructor signature to determine what it expects
@@ -242,22 +303,22 @@ class LoaderMixin(DownloadMixin):
                 ):
                     expects_pretrained_config = True
 
-            if expects_pretrained_config:
-                # Use the model's specific config class if available, otherwise fall back to PretrainedConfig
-                config_class = getattr(model_class, "config_class", PretrainedConfig)
-                conf = config_class(**config)
-                if hasattr(model_class, "_from_config"):
-                    model = model_class._from_config(conf, **extra_kwargs)
-                else:
-                    model = model_class.from_config(conf, **extra_kwargs)
-            else:
-                if hasattr(model_class, "_from_config"):
-                    model = model_class._from_config(config, **extra_kwargs)
-                else:
-                    model = model_class.from_config(config, **extra_kwargs)
+            model = _create_model_from_config()
+            if model is None:
+                init_config = False
+                    
+        if not init_config:
+            try:
+                model = model_class.from_pretrained(model_path, **extra_kwargs)
+            except Exception as e:
+                # as last resort just plug the wholr component into the model
+                model = model_class(**component)
+                
+            return model
 
         if no_weights:
             return model
+        
 
         model_keys = list(model.state_dict().keys())
 
@@ -291,7 +352,7 @@ class LoaderMixin(DownloadMixin):
         # Track whether we've already patched this model for FP-scaled weights
 
         # If we are materializing state_dict tensors directly onto CUDA, proactively
-        # evict cold GPU modules via the global weight manager so we don't OOM mid-load.
+        # offload/evict other GPU-resident components so we don't OOM mid-load.
         load_device_is_cuda = False
         if engine_type == "torch":
             try:
@@ -302,89 +363,78 @@ class LoaderMixin(DownloadMixin):
             except Exception:
                 load_device_is_cuda = False
 
-        wm = None
-        target_free = None
-        vram_mult = None
-        vram_extra = None
+        # Memory-manager-based preflight (only evicts when necessary).
+        _mm = None
+        _vram_mult = None
+        _vram_extra = None
         if engine_type == "torch" and load_device_is_cuda:
             try:
-                if hasattr(torch, "cuda") and torch.cuda.is_available():
-                    from src.memory_management import get_global_weight_manager
+                from src.memory_management import get_memory_manager
 
-                    wm = get_global_weight_manager()
+                _mm = getattr(self, "_component_memory_manager", None) or get_memory_manager()
 
-                    def _env_float(name: str, default: float) -> float:
-                        raw = os.environ.get(name)
-                        if raw is None or str(raw).strip() == "":
-                            return default
-                        try:
-                            return float(str(raw).strip())
-                        except Exception:
-                            return default
-
-                    def _env_int(name: str, default: int) -> int:
-                        raw = os.environ.get(name)
-                        if raw is None or str(raw).strip() == "":
-                            return default
-                        try:
-                            return int(float(str(raw).strip()))
-                        except Exception:
-                            return default
-
-                    target_free = _env_float(
-                        "APEX_LOAD_MODEL_TARGET_FREE_FRACTION", 0.10
-                    )
-                    vram_mult = _env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20)
-                    vram_extra = _env_int(
-                        "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
-                    )
-
+                def _env_float(name: str, default: float) -> float:
+                    raw = os.environ.get(name)
+                    if raw is None or str(raw).strip() == "":
+                        return default
                     try:
-                        wm.refresh_all_locations()
+                        return float(str(raw).strip())
                     except Exception:
-                        pass
+                        return default
 
+                def _env_int(name: str, default: int) -> int:
+                    raw = os.environ.get(name)
+                    if raw is None or str(raw).strip() == "":
+                        return default
                     try:
-                        total_file_bytes = 0
-                        for fp in files_to_load:
-                            try:
-                                total_file_bytes += int(os.path.getsize(str(fp)))
-                            except Exception:
-                                continue
-                        if total_file_bytes > 0:
-                            req = max(
-                                0,
-                                int(total_file_bytes * float(vram_mult))
-                                + int(vram_extra),
-                            )
-                            wm.evict_for_vram(
-                                reason="load_model_pre",
-                                active=None,
-                                target_free_fraction=float(target_free),
-                                request_bytes=req,
-                            )
+                        return int(float(str(raw).strip()))
+                    except Exception:
+                        return default
+
+                _vram_mult = _env_float("APEX_LOAD_MODEL_VRAM_MULT", 1.20)
+                _vram_extra = _env_int(
+                    "APEX_LOAD_MODEL_VRAM_EXTRA_BYTES", 512 * 1024**2
+                )
+
+                # Initial preflight for the whole model (sum of all files).
+                total_file_bytes = 0
+                for fp in files_to_load:
+                    try:
+                        total_file_bytes += int(os.path.getsize(str(fp)))
+                    except Exception:
+                        continue
+                if total_file_bytes > 0 and hasattr(_mm, "preflight_component_load"):
+                    req_total = max(
+                        0, int(total_file_bytes * float(_vram_mult)) + int(_vram_extra)
+                    )
+                    try:
+                        _mm.preflight_component_load(
+                            engine=self, component=component, reserve_bytes=req_total
+                        )
                     except Exception:
                         pass
             except Exception:
-                wm = None
+                _mm = None
 
         patched_for_fpscaled = False
         gguf_kwargs = component.get("gguf_kwargs", {})
+        
         for file_path in tqdm(
             files_to_load, desc="Loading weights", total=len(files_to_load)
         ):
-            if wm is not None and load_device_is_cuda:
+            if (
+                _mm is not None
+                and load_device_is_cuda
+                and _vram_mult is not None
+                and _vram_extra is not None
+                and hasattr(_mm, "preflight_component_load")
+            ):
                 try:
                     fp_size = int(os.path.getsize(str(file_path)))
-                    if fp_size > 0 and vram_mult is not None and vram_extra is not None:
-                        req = max(0, int(fp_size * float(vram_mult)) + int(vram_extra))
-                        wm.evict_for_vram(
-                            reason="load_model_chunk",
-                            active=None,
-                            target_free_fraction=(
-                                float(target_free) if target_free is not None else None
-                            ),
-                            request_bytes=req,
+                    if fp_size > 0:
+                        req = max(0, int(fp_size * float(_vram_mult)) + int(_vram_extra))
+                        _mm.preflight_component_load(
+                            engine=self, component=component, reserve_bytes=req
                         )
                 except Exception:
                     pass
@@ -401,7 +451,7 @@ class LoaderMixin(DownloadMixin):
 
                 logger.info(f"Loading GGUF model from {file_path}")
                 from src.quantize.ggml_layer import (
-                    patch_model_from_state_dict as patch_model_ggml_from_state_dict,
+                    patch_model_from_state_dict as patch_model_ggml_from_state_dict
                 )
                 from src.quantize.load import load_gguf
 
@@ -412,7 +462,9 @@ class LoaderMixin(DownloadMixin):
                     device=load_device,
                     **gguf_kwargs,
                 )
+
                 converter.convert(state_dict, model_keys)
+
                 # Load GGMLTensors without replacing nn.Parameters by copying data
                 patch_model_ggml_from_state_dict(
                     model,
@@ -459,7 +511,6 @@ class LoaderMixin(DownloadMixin):
                 state_dict = torch.load(
                     file_path, map_location=load_device, weights_only=True, mmap=True
                 )
-
             # remap keys if key_map is provided replace part of existing key with new key
             if key_map:
                 new_state_dict = {}
@@ -472,9 +523,12 @@ class LoaderMixin(DownloadMixin):
                 state_dict = new_state_dict
 
             converter.convert(state_dict, model_keys)
+
             if load_dtype and not is_safetensors:
                 for k, v in state_dict.items():
                     state_dict[k] = v.to(load_dtype)
+            
+            
             # Detect FP-scaled checkpoints (e.g., Wan2.2 FP e4m3fn scaled)
             # and patch the model with FPScaled* layers *before* loading
             # the state dict. We only do this once per model.
@@ -482,18 +536,20 @@ class LoaderMixin(DownloadMixin):
                 from src.utils.mlx import check_mlx_convolutional_weights
 
                 check_mlx_convolutional_weights(state_dict, model)
-            if (
-                not patched_for_fpscaled
-                and getattr(self, "engine_type", "torch") == "torch"
+            
+
+            _this_sd_has_fp_weights = (
+                getattr(self, "engine_type", "torch") == "torch"
                 and isinstance(state_dict, dict)
                 and (
                     any(k.endswith("scale_weight") for k in state_dict.keys())
                     or any(
-                        (v.dtype == torch.float8_e4m3fn or v.dtype == torch.float8_e5m2)
+                        v is not None and isinstance(v, torch.Tensor) and (v.dtype == torch.float8_e4m3fn or v.dtype == torch.float8_e5m2)
                         for v in state_dict.values()
                     )
                 )
-            ):
+            )
+            if _this_sd_has_fp_weights:
                 from src.quantize.scaled_layer import (
                     patch_fpscaled_model_from_state_dict,
                 )
@@ -525,7 +581,6 @@ class LoaderMixin(DownloadMixin):
                 )
                 patched_for_fpscaled = True
             if hasattr(model, "load_state_dict"):
-
                 model.load_state_dict(
                     state_dict, strict=False, assign=True
                 )  # must be false as we are iteratively loading the state dict
@@ -544,6 +599,7 @@ class LoaderMixin(DownloadMixin):
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
+            
 
         if getattr(self, "engine_type", "torch") == "torch":
             has_meta_params = False
@@ -771,6 +827,8 @@ class LoaderMixin(DownloadMixin):
 
             for name, param in model.named_parameters():
                 if param.device.type == "meta":
+                    
+
                     # If this is an FP-scaled model and the offending parameter
                     # is a residual `scale_weight` that never got real weights
                     # loaded, we can safely drop it instead of erroring out.
@@ -916,6 +974,22 @@ class LoaderMixin(DownloadMixin):
         except Exception as e:
             raise
 
+        # Expand any external scheduler catalogs into scheduler_options
+        try:
+            from src.utils.scheduler_manifest import expand_scheduler_manifests
+
+            # Reuse the same heuristic used in src.utils.yaml: find nearest manifest root dir
+            manifest_root = None
+            for parent in file_path.parents:
+                if parent.name in {"manifest", ".local_manifest"}:
+                    manifest_root = parent
+                    break
+            loaded = expand_scheduler_manifests(
+                loaded, base_path=file_path, manifest_root=manifest_root
+            )
+        except Exception:
+            pass
+
         return loaded
 
     def _load_scheduler(self, component: Dict[str, Any]) -> Any:
@@ -953,12 +1027,15 @@ class LoaderMixin(DownloadMixin):
             )
 
         config_path = component.get("config_path")
+        config_id = component.get("config_id")
         config = component.get("config")
-        if config_path and config:
-            fetched_config = self.fetch_config(config_path)
+        fetched_config = None
+        if config_id or config_path:
+            fetched_config = self.fetch_config(config_path=config_path, config_id=config_id)
+        if fetched_config and config:
             config = {**fetched_config, **config}
-        elif config_path:
-            config = self.fetch_config(config_path)
+        elif fetched_config:
+            config = fetched_config
         else:
             config = component.get("config", {})
 

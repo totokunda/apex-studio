@@ -25,7 +25,7 @@ import { LuPause, LuPlay } from "react-icons/lu";
 import { useClipStore } from "@/lib/clip";
 import { useControlsStore } from "@/lib/control";
 import { useViewportStore } from "@/lib/viewport";
-import VideoPreview from "@/components/preview/clips/VideoPreview";
+import VideoPreview from "@/components/preview/clips/VideoPreview2";
 import ImagePreview from "@/components/preview/clips/ImagePreview";
 import { getApplicatorsForClip } from "@/lib/applicator-utils";
 import { useWebGLHaldClut } from "@/components/preview/webgl-filters";

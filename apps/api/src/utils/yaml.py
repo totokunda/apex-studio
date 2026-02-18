@@ -2,6 +2,8 @@ import yaml
 from pathlib import Path
 import pprint
 
+from src.utils.scheduler_manifest import expand_scheduler_manifests
+
 
 # 1) Create a Loader subclass that we can attach extra state to
 class LoaderWithInclude(yaml.FullLoader):
@@ -105,7 +107,7 @@ def load_yaml(file_path: str | Path):
         elif stem == "shared" or stem.startswith("shared."):
             # Infer alias from parent directory (e.g., manifest/wan/shared.v1.yml → 'wan')
             parent_name = p.parent.name
-            if parent_name and parent_name != "manifest":
+            if parent_name and parent_name not in {"manifest", ".local_manifest"}:
                 alias = parent_name
         if not alias:
             # Fallbacks: try parent dir name, else stem
@@ -117,12 +119,22 @@ def load_yaml(file_path: str | Path):
     LoaderWithInclude.shared_manifests = shared_manifests
     # Provide resolution hints to the include loader
     LoaderWithInclude.base_dir = file_path.parent
-    # Find nearest 'manifest' directory as root for shared lookups
+    # Find nearest manifest root directory as root for shared lookups
     manifest_root = None
     for parent in file_path.parents:
-        if parent.name == "manifest":
+        if parent.name in {"manifest", ".local_manifest"}:
             manifest_root = parent
             break
     LoaderWithInclude.manifest_root = manifest_root or file_path.parent
     # --- PASS 2: real load with !include expansion ---
-    return yaml.load(text, Loader=LoaderWithInclude)
+    loaded = yaml.load(text, Loader=LoaderWithInclude)
+    # Best-effort: allow scheduler manifests to live separately
+    try:
+        loaded = expand_scheduler_manifests(
+            loaded,
+            base_path=file_path,
+            manifest_root=LoaderWithInclude.manifest_root,
+        )
+    except Exception:
+        pass
+    return loaded

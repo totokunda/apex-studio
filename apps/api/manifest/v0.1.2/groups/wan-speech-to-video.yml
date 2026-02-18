@@ -1,0 +1,25 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-wan-speech-to-video
+  name: Wan Speech to Video
+  description: Wan 2.2 14B is a 14B parameter model for speech-to-video generation.
+  tags:
+    - wan
+    - s2v
+    - 14b
+    - "2.2"
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/wan-2.2-speech-to-video.mp4
+  categories:
+    - audio-to-video
+
+variants:
+  - id: wan-2-2-14b-speech-to-video
+    label: "Speech to Video"
+    description: "14B parameter model that generates lip-synced talking-head video directly from a speech audio input. Produces natural facial expressions, head movements, and accurate mouth shapes synchronized to the spoken audio."
+    manifest_ref: video/wan-2.2-14b-speech-to-video
+    default: true

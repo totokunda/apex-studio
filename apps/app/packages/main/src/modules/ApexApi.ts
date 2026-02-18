@@ -903,6 +903,19 @@ export class ApexApi implements AppModule {
       },
     );
 
+    // List all manifest groups
+    ipcMain.handle("manifest:groups", async () => {
+      return this.makeRequest<any>("GET", "/manifest/groups");
+    });
+
+    // Get a specific manifest group by id
+    ipcMain.handle("manifest:group", async (_event, groupId: string) => {
+      return this.makeRequest<any>(
+        "GET",
+        `/manifest/groups/${encodeURIComponent(groupId)}`,
+      );
+    });
+
     // Get manifest content by id
     ipcMain.handle("manifest:get", async (_event, manifestId: string) => {
       return this.makeRequest<any>(

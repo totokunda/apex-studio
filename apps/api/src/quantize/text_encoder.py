@@ -31,6 +31,7 @@ from transformers import AutoConfig
 import math
 import numpy as np
 import torch
+from src.quantize.quants import quantize
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -110,9 +111,11 @@ class ModelBase:
         split_max_tensors: int = 0,
         split_max_size: int = 0,
         dry_run: bool = False,
+        
         small_first_shard: bool = False,
         hparams: dict[str, Any] | None = None,
         remote_hf_model_id: str | None = None,
+        
     ):
         if (
             type(self) is ModelBase
@@ -134,6 +137,33 @@ class ModelBase:
         self.use_temp_file = use_temp_file
         self.lazy = not eager or (remote_hf_model_id is not None)
         self.remote_hf_model_id = remote_hf_model_id
+
+        # Auto-detect "mistral format" from the actual on-disk layout.
+        #
+        # Some architectures (e.g. Mistral3ForConditionalGeneration / Pixtral-style) are
+        # HuggingFace-format (config.json + model-*.safetensors), and setting
+        # is_mistral_format=True would incorrectly:
+        # - look for "consolidated*.safetensors" shards
+        # - load "params.json" instead of "config.json"
+        # - expect "vision_encoder" instead of "vision_config"
+        #
+        # We therefore key off the presence of params.json or consolidated safetensors.
+        if remote_hf_model_id is None:
+            detected_mistral_format = (self.dir_model / "params.json").is_file()
+            if not detected_mistral_format:
+                detected_mistral_format = (
+                    len(
+                        ModelBase.get_model_part_names(
+                            self.dir_model, "consolidated", ".safetensors"
+                        )
+                    )
+                    > 0
+                )
+            self.is_mistral_format = detected_mistral_format
+        else:
+            # Remote HuggingFace models always use HF layout.
+            self.is_mistral_format = False
+
         if remote_hf_model_id is not None:
             self.is_safetensors = True
 
@@ -412,7 +442,6 @@ class ModelBase:
                             gguf.MODEL_TENSOR.POS_EMBD,
                             gguf.MODEL_TENSOR.TOKEN_TYPES,
                             gguf.MODEL_TENSOR.SSM_CONV1D,
-                            gguf.MODEL_TENSOR.SHORTCONV_CONV,
                             gguf.MODEL_TENSOR.TIME_MIX_FIRST,
                             gguf.MODEL_TENSOR.TIME_MIX_W1,
                             gguf.MODEL_TENSOR.TIME_MIX_W2,
@@ -423,8 +452,6 @@ class ModelBase:
                             gguf.MODEL_TENSOR.POSNET_NORM2,
                             gguf.MODEL_TENSOR.V_ENC_EMBD_POS,
                             gguf.MODEL_TENSOR.A_ENC_EMBD_POS,
-                            gguf.MODEL_TENSOR.ALTUP_CORRECT_COEF,
-                            gguf.MODEL_TENSOR.ALTUP_PREDICT_COEF,
                         )
                     )
                     or not new_name.endswith(".weight")
@@ -435,11 +462,7 @@ class ModelBase:
                     self.match_model_tensor_name(new_name, key, bid)
                     for key in (
                         gguf.MODEL_TENSOR.TOKEN_EMBD,
-                        gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
                         gguf.MODEL_TENSOR.OUTPUT,
-                        gguf.MODEL_TENSOR.ALTUP_ROUTER,
-                        gguf.MODEL_TENSOR.LAUREL_L,
-                        gguf.MODEL_TENSOR.LAUREL_R,
                     )
                 ):
                     if self.ftype in (
@@ -451,7 +474,9 @@ class ModelBase:
 
                 # No override (data_qtype is False), or wants to be quantized (data_qtype is True)
                 if isinstance(data_qtype, bool):
-                    if self.ftype == gguf.LlamaFileType.ALL_F32:
+                    if self.ftype == gguf.LlamaFileType.GUESSED:
+                        data_qtype = gguf.GGMLQuantizationType.F16
+                    elif self.ftype == gguf.LlamaFileType.ALL_F32:
                         data_qtype = gguf.GGMLQuantizationType.F32
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_F16:
                         data_qtype = gguf.GGMLQuantizationType.F16
@@ -459,6 +484,34 @@ class ModelBase:
                         data_qtype = gguf.GGMLQuantizationType.BF16
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
                         data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_K:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_K_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_K_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_K_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_K_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q3_K_L:
+                        data_qtype = gguf.GGMLQuantizationType.Q3_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q3_K_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q3_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q3_K_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q3_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q2_K:
+                        data_qtype = gguf.GGMLQuantizationType.Q2_K
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q2_K_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q2_K
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_TQ1_0:
                         data_qtype = gguf.GGMLQuantizationType.TQ1_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_TQ2_0:
@@ -467,11 +520,11 @@ class ModelBase:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
 
                 try:
-                    data = gguf.quants.quantize(data, data_qtype)
+                    data = quantize(data, data_qtype)
                 except gguf.QuantError as e:
                     logger.warning("%s, %s", e, "falling back to F16")
                     data_qtype = gguf.GGMLQuantizationType.F16
-                    data = gguf.quants.quantize(data, data_qtype)
+                    data = quantize(data, data_qtype)
 
                 shape = (
                     gguf.quant_shape_from_byte_shape(data.shape, data_qtype)
@@ -541,6 +594,9 @@ class ModelBase:
     @staticmethod
     def get_model_part_names(dir_model: Path, prefix: str, suffix: str) -> list[str]:
         part_names: list[str] = []
+        # check if dir_model is a file
+        if os.path.isfile(dir_model):
+            return [dir_model.name]
         for filename in os.listdir(dir_model):
             if filename.startswith(prefix) and filename.endswith(suffix):
                 part_names.append(filename)
@@ -605,9 +661,14 @@ class ModelBase:
         try:
             if arch == "UMT5EncoderModel":
                 arch = "T5EncoderModel"
+
             return cls._model_classes[model_type][arch]
         except KeyError:
-            raise NotImplementedError(f"Architecture {arch!r} not supported!") from None
+            # try a different model_type 
+            if model_type == ModelType.TEXT:
+                return cls._model_classes[ModelType.MMPROJ][arch]
+            else:
+                raise NotImplementedError(f"Architecture {arch!r} not supported!") from None
 
 
 class TextModel(ModelBase):
@@ -1113,7 +1174,9 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
-        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        # Prefer merges/special token files from the tokenizer directory if provided.
+        special_dir = self.dir_tokenizer if self.dir_tokenizer is not None else self.dir_model
+        special_vocab = gguf.SpecialVocab(special_dir, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_qwen(self):
@@ -1188,7 +1251,9 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_scores(scores)
         self.gguf_writer.add_token_types(toktypes)
 
-        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        # Prefer special tokens from tokenizer dir if provided.
+        special_dir = self.dir_tokenizer if self.dir_tokenizer is not None else self.dir_model
+        special_vocab = gguf.SpecialVocab(special_dir, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _create_vocab_sentencepiece(self):
@@ -1551,10 +1616,24 @@ class MmprojModel(ModelBase):
 
         # load preprocessor config
         if not self.is_mistral_format:
-            with open(
-                self.dir_model / "preprocessor_config.json", "r", encoding="utf-8"
-            ) as f:
-                self.preprocessor_config = json.load(f)
+            # Some HF multimodal repos store this under the tokenizer/processor folder
+            # rather than alongside the weights/config.
+            candidate_paths: list[Path] = [self.dir_model / "preprocessor_config.json"]
+            if self.dir_tokenizer is not None:
+                candidate_paths.append(self.dir_tokenizer / "preprocessor_config.json")
+
+            preproc_path = next((p for p in candidate_paths if p.is_file()), None)
+            if preproc_path is None:
+                logger.warning(
+                    "preprocessor_config.json not found; using identity mean/std defaults"
+                )
+                self.preprocessor_config = {
+                    "image_mean": [0.0, 0.0, 0.0],
+                    "image_std": [1.0, 1.0, 1.0],
+                }
+            else:
+                with open(preproc_path, "r", encoding="utf-8") as f:
+                    self.preprocessor_config = json.load(f)
 
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = (
@@ -1743,6 +1822,9 @@ class LlamaModel(TextModel):
             "vision_language_adapter.",
             "patch_merger.",
             "pre_mm_projector_norm",
+            # Qwen2.x-VL style vision tower prefix
+            "visual.",
+            "model.visual.",
         ]
 
         is_multimodal_tensor = (
@@ -1855,6 +1937,278 @@ class LlamaModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register(
+    "Mistral3ForConditionalGeneration",  # pixtral / mistral small 3.x multimodal
+)
+class Mistral3CombinedModel(LlamaModel):
+    # TextModel enforces that subclasses define this in their own class dict
+    model_arch = gguf.MODEL_ARCH.LLAMA
+    # Keep HF layout for language-model q_proj/k_proj (do NOT undo RoPE permutation).
+    # This makes GGUF tensors match the HF checkpoint directly, so no post-load
+    # permutation is needed in downstream tooling.
+    undo_permute = False
+
+    """
+    Single-file multimodal GGUF export.
+
+    - Writes the language model tensors (LLAMA-style) AND vision/projector tensors
+      into one GGUF.
+    - Adds the vision-related GGUF metadata keys so runtimes can discover the
+      vision tower and projector.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Reload full HF config to ensure we have vision_config even if self.hparams
+        # has been flattened with text_config.
+        full_config: dict[str, Any] | None = None
+        try:
+            config_path = self.dir_model / "config.json"
+            if config_path.is_file():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    full_config = json.load(f)
+        except Exception:
+            full_config = None
+
+        self._full_config: dict[str, Any] = full_config or {}
+        self._vision_config: dict[str, Any] = self._full_config.get("vision_config", {})
+        if not self._vision_config:
+            # best-effort fallback if some checkpoints use a different key
+            self._vision_config = self._full_config.get("vision_encoder", {}) or {}
+
+        # Create a dedicated name map for vision/projector tensors (MMPROJ schema).
+        # The MMPROJ map is required to produce tensor names like `v.blk.*` and
+        # `v.patch_embd.weight` in the combined file.
+        vision_block_count = (
+            self._vision_config.get("num_hidden_layers")
+            or self._vision_config.get("n_layers")
+            or self._vision_config.get("num_layers")
+            or self._vision_config.get("depth")
+            or 0
+        )
+        # tensor name map expects a positive block count
+        vision_block_count = int(vision_block_count) if vision_block_count else 1
+        self._vision_tensor_map = gguf.get_tensor_name_map(
+            gguf.MODEL_ARCH.MMPROJ, vision_block_count
+        )
+
+        # Load preprocessor config for mean/std (Pixtral stores it alongside tokenizer).
+        self._preprocessor_config: dict[str, Any] | None = None
+        for p in (
+            self.dir_model / "preprocessor_config.json",
+            (self.dir_tokenizer / "preprocessor_config.json")
+            if self.dir_tokenizer is not None
+            else None,
+        ):
+            if p is not None and p.is_file():
+                with open(p, "r", encoding="utf-8") as f:
+                    self._preprocessor_config = json.load(f)
+                break
+
+        # Pixtral uses an extra tensor for the [IMG_BREAK] token embedding.
+        self._img_break_tok_id: int = -1
+        try:
+            if (self._vision_config or {}).get("model_type") == "pixtral":
+                tokenizer_config_file = (
+                    self.dir_model / "tokenizer_config.json"
+                    if self.dir_tokenizer is None
+                    else self.dir_tokenizer / "tokenizer_config.json"
+                )
+                if tokenizer_config_file.is_file():
+                    with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                        added_tokens_decoder = json.load(f).get("added_tokens_decoder", {})
+                    for id_, token_data in added_tokens_decoder.items():
+                        if token_data.get("content") == "[IMG_BREAK]":
+                            self._img_break_tok_id = int(id_)
+                            break
+        except Exception:
+            self._img_break_tok_id = -1
+
+    def _map_vision_tensor_name(
+        self, name: str, try_suffixes: Sequence[str] = ("", ".weight", ".bias")
+    ) -> str:
+        new_name = self._vision_tensor_map.get_name(key=name, try_suffixes=try_suffixes)
+        if new_name is None:
+            raise ValueError(f"Can not map vision tensor {name!r}")
+        return new_name
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Mark this as having a vision encoder and attach vision tower metadata.
+        vcfg = self._vision_config or {}
+        if vcfg:
+            self.gguf_writer.add_clip_has_vision_encoder(True)
+
+            # The projector outputs into the text embedding space.
+            self.gguf_writer.add_vision_projection_dim(self.hparams.get("hidden_size"))
+
+            # Vision config
+            if "image_size" in vcfg:
+                self.gguf_writer.add_vision_image_size(vcfg["image_size"])
+            if "patch_size" in vcfg:
+                self.gguf_writer.add_vision_patch_size(vcfg["patch_size"])
+            if "hidden_size" in vcfg:
+                self.gguf_writer.add_vision_embedding_length(vcfg["hidden_size"])
+            if "intermediate_size" in vcfg:
+                self.gguf_writer.add_vision_feed_forward_length(vcfg["intermediate_size"])
+            if "num_hidden_layers" in vcfg:
+                self.gguf_writer.add_vision_block_count(vcfg["num_hidden_layers"])
+            if "num_attention_heads" in vcfg:
+                self.gguf_writer.add_vision_head_count(vcfg["num_attention_heads"])
+
+            # Preprocessor config (mean/std)
+            if self._preprocessor_config:
+                image_mean = self._preprocessor_config.get("image_mean")
+                image_std = self._preprocessor_config.get("image_std")
+                if image_mean is not None:
+                    self.gguf_writer.add_vision_image_mean(image_mean)
+                if image_std is not None:
+                    self.gguf_writer.add_vision_image_std(image_std)
+
+            # Pixtral-specific keys (if present)
+            if self._full_config.get("model_type") == "mistral3":
+                self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PIXTRAL)
+                layer_norm_eps = vcfg.get("layer_norm_eps", 1e-5)
+                self.gguf_writer.add_vision_attention_layernorm_eps(layer_norm_eps)
+
+                hidden_act = vcfg.get("hidden_act")
+                if hidden_act == "silu":
+                    self.gguf_writer.add_vision_use_silu(True)
+                elif hidden_act == "gelu":
+                    self.gguf_writer.add_vision_use_gelu(True)
+
+                if "spatial_merge_size" in self._full_config:
+                    self.gguf_writer.add_vision_spatial_merge_size(
+                        self._full_config["spatial_merge_size"]
+                    )
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+        # For Pixtral, also export the [IMG_BREAK] token embedding tensor.
+        if self._img_break_tok_id > 0 and "embed_tokens.weight" in name:
+            tensors = list(super().modify_tensors(data_torch, name, bid))
+            try:
+                img_break_embd = data_torch[self._img_break_tok_id]
+                img_break_key = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK]
+                tensors.append((self._map_vision_tensor_name(img_break_key), img_break_embd))
+            except Exception:
+                # If extraction fails, keep the model export working; runtime may not need it.
+                pass
+            return tensors
+
+        # Route vision/projector tensors through the MMPROJ name map, otherwise
+        # fall back to normal LLaMA text handling (including language_model.* prefix stripping).
+        valid_prefixes = (
+            "multi_modal_projector.",
+            "vision_tower.",
+            "vision_encoder.",
+            "vision_language_adapter.",
+            "patch_merger.",
+            "pre_mm_projector_norm",
+        )
+
+        if name.startswith(valid_prefixes) or "vision_tower" in name or "multi_modal_projector" in name:
+            vcfg = self._vision_config or {}
+            # NOTE: Do NOT apply LLaMA RoPE permutation to vision-tower Q/K.
+            # The Pixtral vision tower uses its native HF layout; permuting here
+            # makes q_proj/k_proj incorrect and forces a post-load fix.
+
+            return [(self._map_vision_tensor_name(name), data_torch)]
+
+        return super().modify_tensors(data_torch, name, bid)
+
+    def tensor_force_quant(
+        self, name: str, new_name: str, bid: int | None, n_dims: int
+    ) -> gguf.GGMLQuantizationType | bool:
+        # Pixtral patch embedding uses a 14x14 conv kernel; keep it unquantized.
+        if name.endswith("patch_conv.weight") or new_name.endswith("patch_embd.weight"):
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+
+@ModelBase.register(
+    # FLUX.2 Klein uses a Qwen3 text encoder but the tensor layout is LLAMA-like.
+    # gguf has a dedicated QWEN3 arch + name map, so we can reuse LlamaModel's
+    # tensor handling, but we should *not* apply LLaMA's "undo_permute" step:
+    # the HF Qwen3 checkpoints we use already store q_proj/k_proj in the permuted
+    # RoPE layout expected by the runtime model. Exporting GGUF with undo_permute=True
+    # would reorder Q/K rows and make them appear "inaccurate" compared to BF16/HF.
+    "Qwen3ForCausalLM",
+)
+class Qwen3Model(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+    # Keep HF layout for q_proj/k_proj (do NOT undo the RoPE permutation).
+    undo_permute = False
+
+    def set_vocab(self):
+        # Prefer Qwen tokenizer logic; fall back to GPT2 BPE if tokenizer impl
+        # differs (still works for local merges/vocab files).
+        try:
+            self._set_vocab_qwen()
+        except Exception:
+            self._set_vocab_gpt2()
+
+
+@ModelBase.register(
+    # Qwen2.5-VL (multimodal) uses the QWEN2VL tensor map in GGUF.
+    # In our usage as a diffusion *text encoder*, we export only the text weights
+    # (vision/mmproj is handled separately and can be merged at packaging time).
+    "Qwen2_5_VLForConditionalGeneration",
+    # Kept for forward/backward compatibility with potential upstream naming.
+    "Qwen2VLForConditionalGeneration",
+)
+class Qwen2VLModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.QWEN2VL
+    undo_permute = False
+
+    def set_vocab(self):
+        # Qwen-Image provides a GPT2 BPE tokenizer (vocab.json + merges.txt) under
+        # the `tokenizer/` subfolder. Avoid SentencePiece dependency here and
+        # ensure merges/special tokens are read from the tokenizer directory.
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_dir = self.dir_tokenizer if self.dir_tokenizer is not None else self.dir_model
+        special_vocab = gguf.SpecialVocab(special_dir, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def set_gguf_parameters(self):
+        # Qwen2-VL uses "mrope" sections; llama.cpp requires
+        # `qwen2vl.rope.dimension_sections` to quantize.
+        super().set_gguf_parameters()
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        mrope_section = rope_scaling.get("mrope_section")
+        if mrope_section is not None:
+            dims = list(mrope_section)
+            if len(dims) == 3:
+                # llama.cpp expects 4 values; Unsloth reference GGUF uses a trailing 0
+                # (e.g. [16, 24, 24, 0]) for Qwen2.5-VL.
+                dims.append(0)
+            self.gguf_writer.add_rope_dimension_sections(dims)
+
+
+@ModelBase.register(
+    # Gemma3 multimodal wrapper (used by LTX2 text encoder).
+    "Gemma3ForConditionalGeneration",
+    # Some exports use the causal LM naming.
+    "Gemma3ForCausalLM",
+)
+class Gemma3Model(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.GEMMA3
+    # Gemma does not use the LLaMA q/k permute path.
+    undo_permute = False
+
+    def set_vocab(self):
+        # Gemma uses SentencePiece (`tokenizer.model`).
+        self._set_vocab_sentencepiece()
 
 
 @ModelBase.register("Step1Model")
@@ -2076,6 +2430,8 @@ class Step1Model(TextModel):
 )
 class LlavaVisionModel(MmprojModel):
     img_break_tok_id = -1
+    is_mistral_format = True
+    
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2149,19 +2505,19 @@ class LlavaVisionModel(MmprojModel):
             "patch_merger.",
             "pre_mm_projector_norm",
         )
+        print(f"name: {name}")
+        print(f"is_mistral_format: {self.is_mistral_format}")
 
         if any(name.startswith(prefix) for prefix in valid_prefixes):
             # process vision tensors
-            if (
-                name.endswith(("q_proj.weight", "q_proj.bias"))
-                and not self.is_mistral_format
-            ):
-                data_torch = LlamaModel.permute(data_torch, n_head, n_head)
-            if (
-                name.endswith(("k_proj.weight", "k_proj.bias"))
-                and not self.is_mistral_format
-            ):
-                data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
+            # llama.cpp quantizer requires some tensor shapes to be divisible by 32 for Q8_0.
+            # Pixtral patch embedding uses a 14x14 conv kernel which fails that constraint.
+            # Keep it as F32 so llama-quantize will not attempt to quantize it.
+            if name.endswith("patch_conv.weight") and not self.is_mistral_format:
+                data_torch = data_torch.to(torch.float32)
+
+            # NOTE: Do NOT apply LLaMA RoPE permutation to vision-tower Q/K.
+            # Keep HF layout so the GGUF is correct without extra post-processing.
             return [(self.map_tensor_name(name), data_torch)]
 
         embed_key = (
@@ -2177,6 +2533,16 @@ class LlavaVisionModel(MmprojModel):
             return [(self.map_tensor_name(name), img_break_embd)]
 
         return []  # skip other tensors
+
+    def tensor_force_quant(
+        self, name: str, new_name: str, bid: int | None, n_dims: int
+    ) -> gguf.GGMLQuantizationType | bool:
+        # llama-quantize cannot quantize Pixtral patch embedding conv kernel (14x14) to Q8_0.
+        # Keep it as F16/F32 (unquantized) in Q8_0 exports.
+        if name.endswith("patch_conv.weight") or new_name.endswith("patch_embd.weight"):
+            return gguf.GGMLQuantizationType.F16
+
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 @ModelBase.register(
@@ -2855,6 +3221,14 @@ class T5EncoderModel(TextModel):
                 return []
 
         return [(self.map_tensor_name(name), data_torch)]
+
+    def tensor_force_quant(
+        self, name: str, new_name: str, bid: int | None, n_dims: int
+    ) -> gguf.GGMLQuantizationType | bool:
+        # Keep token embeddings unquantized (F16) to preserve quality
+        if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.TOKEN_EMBD, bid):
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 ###### CONVERSION LOGIC ######

@@ -38,6 +38,12 @@ from src.converters.transformer_converters import (
     FlashVSRTransformerConverter,
     ZImageTransformerConverter,
     LTX2TransformerConverter,
+    LTX22TransformerConverter,
+)
+
+from src.converters.helper_converters import (
+    WhisperConverter,
+    Wav2Vec2ModelMultitalkConverter,
 )
 
 from src.converters.utils import (
@@ -57,6 +63,7 @@ from src.converters.text_encoder_converters import (
 
 from src.converters.vae_converters import (
     LTXVAEConverter,
+    LTX2VAEConverter,
     MagiVAEConverter,
     MMAudioVAEConverter,
     TinyWANVAEConverter,
@@ -112,10 +119,12 @@ def get_transformer_converter(model_base: str):
         return Flux2TransformerConverter()
     elif model_base == "wan.flashvsr":
         return FlashVSRTransformerConverter()
-    elif model_base == "zimage.base":
+    elif model_base == "zimage.base" or model_base == "zimage.control":
         return ZImageTransformerConverter()
     elif model_base == "ltx2.base":
         return LTX2TransformerConverter()
+    elif model_base == "ltx2.base2":
+        return LTX22TransformerConverter()
     elif model_base == "chroma.base":
         return Chroma1HDTransformerConverter()
     else:
@@ -169,6 +178,8 @@ def get_transformer_converter_by_model_name(model_name: str):
 
 
 def get_vae_converter(vae_type: str, **additional_kwargs):
+    if vae_type == "ltx2":
+        return LTX2VAEConverter()
     if vae_type == "ltx":
         return LTXVAEConverter(**additional_kwargs)
     elif vae_type == "magi":
@@ -198,6 +209,13 @@ def get_text_encoder_converter(text_encoder_type: str):
     else:
         return NoOpConverter()
 
+def get_helper_converter(model_base: str):
+    if "WhisperModel" == model_base:
+        return WhisperConverter()
+    elif "Wav2Vec2ModelMultitalk" == model_base:
+        return Wav2Vec2ModelMultitalkConverter()
+    else:
+        return NoOpConverter()
 
 def load_safetensors(dir: pathlib.Path):
     """Load a sharded safetensors file."""

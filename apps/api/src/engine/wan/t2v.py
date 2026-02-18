@@ -40,9 +40,23 @@ class WanT2VEngine(WanShared):
         enhance_kwargs: Dict[str, Any] = {},
         chunking_profile: str = "none",
         rope_on_cpu: bool = False,
+        use_tiny_vae: bool = False,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
-
+        if expand_timesteps:
+            fps = 24
+        
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
+        
         if (
             high_noise_guidance_scale is not None
             and low_noise_guidance_scale is not None
@@ -230,6 +244,11 @@ class WanT2VEngine(WanShared):
             ip_image=ip_image,
             chunking_profile=chunking_profile,
         )
+        
+        if offload:
+            self._offload("transformer")
+            self._offload("high_noise_transformer")
+            self._offload("low_noise_transformer")
 
         safe_emit_progress(progress_callback, 0.92, "Denoising complete")
 
@@ -238,7 +257,9 @@ class WanT2VEngine(WanShared):
             return latents
         else:
             safe_emit_progress(progress_callback, 0.94, "Decoding latents to video")
-            video = self.vae_decode(latents, offload=offload)
+            video = self.vae_decode(latents, offload=offload,
+                                    use_tiny_vae=use_tiny_vae,
+                                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None))
             safe_emit_progress(progress_callback, 0.96, "Decoded latents to video")
             postprocessed_video = self._tensor_to_frames(video)
             safe_emit_progress(

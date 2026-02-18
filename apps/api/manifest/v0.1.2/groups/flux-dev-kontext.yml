@@ -1,0 +1,24 @@
+api_version: apex/v1
+kind: ModelGroup
+type: image
+
+metadata:
+  id: group-flux-dev-kontext
+  name: Flux Dev Kontext
+  description: Flux Kontext is a 12B parameter model for image + text conditioned generation.
+  tags:
+    - flux
+    - dev
+    - kontext
+  author: Apex AI
+  license: Apache-2.0
+  demo_path: models/flux-kontext.png
+  categories:
+    - image-edit
+
+variants:
+  - id: flux-dev-kontext
+    label: "Flux Dev Kontext"
+    description: "12B parameter model specialized for image + text conditioned generation. Seamlessly generates images from text prompts or edits existing images with text guidance."
+    manifest_ref: image/flux-dev-kontext
+    default: true

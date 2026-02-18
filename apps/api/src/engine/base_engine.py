@@ -15,15 +15,15 @@ from contextlib import contextmanager
 from tqdm import tqdm
 import accelerate
 import psutil
-
+import traceback
 from src.utils.defaults import (
     get_components_path,
     get_preprocessor_path,
     get_postprocessor_path,
-    get_offload_path,
     DEFAULT_CACHE_PATH,
 )
 from src.utils.module import find_class_recursive
+from src.config_registry import resolve_config_path, resolve_config_dir, config_exists
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from src.transformer.base import TRANSFORMERS_REGISTRY as TRANSFORMERS_REGISTRY_TORCH
@@ -58,7 +58,6 @@ from src.mixins.cache_mixin import CacheMixin, sanitize_path_for_filename
 from glob import glob
 from safetensors import safe_open
 from src.utils.mlx import convert_dtype_to_torch, convert_dtype_to_mlx
-
 try:
     import mlx.nn as mx_nn  # type: ignore
 except Exception:  # pragma: no cover - MLX is not available on Windows/Linux
@@ -78,6 +77,11 @@ from src.memory_management.group_offloading import (
 from src.memory_management.budget_offloading import (
     _maybe_remove_and_reapply_budget_offloading,
     _is_budget_offload_enabled,
+)
+from src.utils.model_variant_selection import (
+    detect_hardware_memory_profile,
+    get_effective_model_download_profile,
+    select_model_path_item,
 )
 import types
 
@@ -258,6 +262,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     selected_components: Dict[str, Any] | None = None
     auto_apply_loras: bool = True
     auto_memory_management: bool = True
+    disable_text_encoder_cache: bool = False
+    # Debug-only: when enabled, the ComponentMemoryManager attributes CUDA peak
+    # allocator usage to each top-level component forward() and logs a summary
+    # at the end of each engine.run(...).
+    debug_component_vram: bool = False
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -815,6 +824,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     extra_kwargs=component.get("extra_kwargs", {}),
                 )
             except Exception as e:
+                print(e)
+                import traceback
+                traceback.print_exc()
+                exit()
                 pass
 
             helper_class = get_helper(base)
@@ -832,14 +845,23 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     pass
 
         if helper is None:
-            if "config_path" in config and module is not None:
-                config_path = config.pop("config_path")
-                # try download the config file
+            helper_config_id = config.pop("config_id", None)
+            helper_config_path = config.pop("config_path", None)
+            if helper_config_id:
                 try:
-                    config_path = self._download(config_path, get_components_path())
+                    resolved = resolve_config_path(helper_config_id)
+                    config = self._load_config_file(resolved)
+                except FileNotFoundError:
+                    self.logger.warning(
+                        f"Config not found in registry for helper config_id='{helper_config_id}'"
+                    )
+            elif helper_config_path and module is not None:
+                # try download the config file (legacy path)
+                try:
+                    helper_config_path = self._download(helper_config_path, get_components_path())
                 except Exception:
                     pass
-                config = self._load_config_file(config_path)
+                config = self._load_config_file(helper_config_path)
             helper_class = get_helper(base)
             config.pop("label", None)
             config.pop("description", None)
@@ -848,6 +870,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             config.pop("name", None)
             config.pop("type", None)
             config.pop("config_path", None)
+            config.pop("config_id", None)
             config.pop("extra_kwargs", None)
             config.pop("key_map", None)
             helper = helper_class(**config)
@@ -1066,7 +1089,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             load_device=device,
         )
         if self.component_dtypes and "vae" in self.component_dtypes:
-            self.to_dtype(vae, self.component_dtypes["vae"])
+            self.to_dtype(vae, component.get("dtype", self.component_dtypes["vae"]))
         if self.vae_tiling:
             self.enable_vae_tiling()
         if self.vae_slicing:
@@ -1074,7 +1097,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         vae = vae.eval()
         return vae
 
-    def enable_vae_tiling(self, component_name: str = "vae"):
+    def enable_vae_tiling(self, component_name: str = "vae", **vae_tile_kwargs):
         """
         Enable VAE tiling if the component supports it.
 
@@ -1087,7 +1110,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             return
         vae_obj = getattr(self, component_name)
         if hasattr(vae_obj, "enable_tiling"):
-            runtime_kwargs = getattr(self, "_vae_tiling_runtime_kwargs", None)
+            runtime_kwargs = getattr(self, "_vae_tiling_runtime_kwargs", {})
+            if vae_tile_kwargs:
+                runtime_kwargs.update(vae_tile_kwargs)
             if isinstance(runtime_kwargs, dict) and runtime_kwargs:
                 try:
                     vae_obj.enable_tiling(**runtime_kwargs)
@@ -1185,10 +1210,10 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     def load_text_encoder(
         self, component: Dict[str, Any], no_weights: bool = False, device: str = "cpu"
     ):
-        component_name = component.get("name") or "text_encoder"
-        component["load_dtype"] = self.component_load_dtypes.get("text_encoder", None)
-        component["dtype"] = self.component_dtypes.get("text_encoder", None)
+        component["load_dtype"] = component.get("dtype", self.component_load_dtypes.get("text_encoder", None))
+        component["dtype"] = component.get("dtype", self.component_dtypes.get("text_encoder", None))
         text_encoder = TextEncoder(component, no_weights, device=device)
+        text_encoder.enable_cache = not self.disable_text_encoder_cache
 
         # Lazily wrap its internal model once loaded, if memory management is configured
         mm_config = self._resolve_memory_config_for_component(component)
@@ -1293,7 +1318,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         if self.component_dtypes and "transformer" in self.component_dtypes:
             if isinstance(transformer, torch.nn.Module):
 
-                self.to_dtype(transformer, self.component_dtypes["transformer"])
+                self.to_dtype(transformer, component.get("dtype", self.component_dtypes["transformer"]))
 
             elif mx_nn is not None and isinstance(transformer, mx_nn.Module):
                 self.to_mlx_dtype(transformer, self.component_dtypes["transformer"])
@@ -1902,8 +1927,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
         This analyzes the component's size, block structure, and available memory to decide:
         - Whether memory management is needed
-        - Whether to use leaf-level or block-level offloading
-        - Whether to offload to CPU or disk
+        - Whether to use automatic budget offloading (default) or group offloading
+        - Budget is calculated automatically based on available VRAM
 
         Returns:
             MemoryConfig if memory management is needed, None otherwise
@@ -1939,6 +1964,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             "transformer": 8.0,
             "vae": 6.0,
         }
+        
         activation_overhead_gb = float(overhead_by_type_gb.get(component.get("type"), 8.0))
 
         required_gpu_gb = total_size_gb + activation_overhead_gb
@@ -1958,43 +1984,27 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         # Estimate block structure for smarter offloading
         block_size_bytes, num_blocks = self._estimate_block_structure(component)
 
-        # Decide on offloading strategy
-        config = MemoryConfig.for_block_level()
+        # NEW: Use automatic budget offloading by default
+        # This automatically calculates optimal VRAM budgets based on:
+        # - Available VRAM capacity
+        # - Model structure (base blocks + tower blocks)
+        # - Safety margins for activations and fragmentation
+        config = MemoryConfig(
+            offload_mode="budget",
+            budget_mb="auto",  # Automatic budget calculation
+            async_transfers=True,
+            prefetch=True,
+            vram_safety_coefficient=0.8,
+        )
 
-        if (
-            component.get("type") == "transformer"
-            and self.config.get("metadata", {}).get("id") == "zimage-turbo-control"
-        ):
-            config.group_offload_record_stream = False
-            config.group_offload_use_stream = False
-            self.logger.info(
-                f"Component {component.get('name') or ctype}: using no stream offload"
-            )
+        self.logger.info(
+            f"Component {component.get('name') or ctype}: using automatic budget offloading "
+            f"(model size: {total_size_gb:.2f}GB, available VRAM: {gpu_available_gb:.2f}GB)"
+        )
 
-        # Determine if we need disk offload
-        # Calculate how many blocks will be in CPU memory at once (rough estimate: 2-3 blocks)
-        blocks_in_memory = min(3, num_blocks) if num_blocks else 2
-
-        if block_size_bytes and num_blocks and cpu_available_gb:
-            # Estimate memory needed for offloaded blocks
-            estimated_cpu_memory_gb = (block_size_bytes * blocks_in_memory) / 1e9
-
-            # Add safety margin (20%) and check against available CPU RAM
-            if estimated_cpu_memory_gb * 1.2 >= cpu_available_gb * 0.8:
-                # Not enough CPU RAM for safe offloading, use disk
-                config.group_offload_disk_path = get_offload_path()
-                self.logger.info(
-                    f"Component {component.get('name') or ctype}: using disk offload "
-                    f"(estimated {estimated_cpu_memory_gb:.2f}GB needed, "
-                    f"{cpu_available_gb:.2f}GB available)"
-                )
-        elif cpu_available_gb and total_size_gb >= 0.85 * cpu_available_gb:
-            # Fallback: if we don't have block info, use total size
-            config.group_offload_disk_path = get_offload_path()
-            self.logger.info(
-                f"Component {component.get('name') or ctype}: using disk offload "
-                f"(model {total_size_gb:.2f}GB, CPU RAM {cpu_available_gb:.2f}GB available)"
-            )
+        # Note: Budget offloading automatically manages CPU/GPU transfers
+        # and calculates optimal budgets based on available VRAM and model structure.
+        # No disk offload needed as the budget system handles block-level CPU offloading.
 
         return config
 
@@ -2036,9 +2046,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         denormalize_latents: bool = True,
         timestep: Optional[torch.Tensor] = None,
         offload_type: Literal["cpu", "discard"] = "cpu",
+        vae_tile_kwargs: Optional[Dict[str, Any]] = None,
+        use_tiny_vae: bool = False,
     ):
-        if getattr(self, component_name, None) is None:
+        if use_tiny_vae:
+            # Should always have this when using tiny vae
+            component_name = "__tiny_transformer_vae__"
+        if getattr(self, component_name, None) is None and not use_tiny_vae:
             self.load_component_by_type(component_name)
+        else:
+            self.load_component_by_name(component_name)
         self.to_device(getattr(self, component_name))
         if denormalize_latents:
             denormalized_latents = (
@@ -2048,8 +2065,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             )
         else:
             denormalized_latents = latents
+        
+        if not vae_tile_kwargs or vae_tile_kwargs is None:
+            vae_tile_kwargs = {}
 
-        self.enable_vae_tiling(component_name=component_name)
+        self.enable_vae_tiling(component_name=component_name, **vae_tile_kwargs)
 
         video = getattr(self, component_name).decode(
             denormalized_latents, return_dict=False
@@ -2070,9 +2090,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         normalize_latents: bool = True,
         normalize_latents_dtype: torch.dtype | None = None,
         offload_type: Literal["cpu", "discard"] = "discard",
+        use_tiny_vae: bool = False,
+        vae_tile_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        if getattr(self, component_name, None) is None:
+        if getattr(self, component_name, None) is None and not use_tiny_vae:
             self.load_component_by_type("vae")
+        if use_tiny_vae:
+            self.load_component_by_name("__tiny_transformer_vae__")
+            component_name = "__tiny_transformer_vae__"
+        else:
+            self.load_component_by_name(component_name)
         self.to_device(getattr(self, component_name))
 
         # --- VAE encode cache (small, disk-backed) ---
@@ -2114,10 +2141,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 video_for_hash = video_for_hash.to(dtype=vae_dtype)
             video_hash = _hash_tensor_content_cpu(video_for_hash)
             prompt_hash = self.hash(
-                {
+                {  
                     "fn": "vae_encode",
                     "component": component_name,
                     "vae_id": str(vae_id),
+                    "use_tiny_vae": str(use_tiny_vae),
                     "video_hash": video_hash,
                     "video_shape": tuple(video.shape),
                     "vae_dtype": str(vae_dtype),
@@ -2137,8 +2165,9 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 return latents.to(dtype=dtype)
 
         video = video.to(dtype=getattr(self, component_name).dtype, device=self.device)
-
-        self.enable_vae_tiling(component_name=component_name)
+        if not vae_tile_kwargs or vae_tile_kwargs is None:
+            vae_tile_kwargs = {}
+        self.enable_vae_tiling(component_name=component_name, **vae_tile_kwargs)
 
         latents = getattr(self, component_name).encode(video, return_dict=False)[0]
         if sample_mode == "sample":
@@ -2551,6 +2580,16 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         )
 
         return formatted, final_names
+    
+    def _coerce_dtype(self, dtype: str | torch.dtype):
+        if isinstance(dtype, str):
+            if dtype.lower() == "float32" or dtype.lower() == "fp32":
+                return torch.float32
+            elif dtype.lower() == "float16" or dtype.lower() == "fp16":
+                return torch.float16
+            elif dtype.lower() == "bfloat16" or dtype.lower() == "bf16":
+                return torch.bfloat16
+        return torch.dtype(dtype)
 
     def download(
         self,
@@ -2569,10 +2608,36 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             postprocessors_path = get_postprocessor_path()
 
         os.makedirs(save_path, exist_ok=True)
+        download_progress_callback = getattr(self, "download_progress_callback", None)
+
+        def _emit_download_progress(
+            downloaded: int,
+            total: Optional[int],
+            label: Optional[str] = None,
+        ) -> None:
+            if not callable(download_progress_callback):
+                return
+            try:
+                download_progress_callback(downloaded, total, label)
+            except TypeError:
+                # Backward compatibility with older two-arg callbacks.
+                try:
+                    download_progress_callback(downloaded, total)
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
         components_cfg = self.config.get("components", [])
         if not isinstance(components_cfg, list):
             return
+        model_download_profile = get_effective_model_download_profile()
+        hardware_profile = detect_hardware_memory_profile()
+        manifest_metadata = (
+            self.config.get("metadata")
+            if isinstance(self.config.get("metadata"), dict)
+            else {}
+        )
 
         # -------------------------------------------------------------
         # Pre-pass: resolve `type: extra_model_path` pseudo-components.
@@ -2603,44 +2668,32 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             raw_model_paths = pseudo.get("model_paths", pseudo.get("model_path"))
             selected_source: str | None = None
             selected_label = pseudo.get("name") or pseudo.get("label")
+            selected_spec = None
+            if selected_label:
+                selected_spec = self.selected_components.get(selected_label)
+            if selected_spec is None and isinstance(target_ref, str):
+                selected_spec = self.selected_components.get(target_ref)
 
-            if isinstance(raw_model_paths, str):
-                selected_source = raw_model_paths
-            elif isinstance(raw_model_paths, list) and raw_model_paths:
-                # Choose variant using selected_components keyed by label/name, then fallback.
-                selected_item = None
-                if selected_label:
-                    selected_item = self.selected_components.get(selected_label)
-                if not isinstance(selected_item, dict):
-                    selected_item = (
-                        raw_model_paths[0]
-                        if isinstance(raw_model_paths[0], dict)
-                        else None
-                    )
+            candidate_paths: list[Any]
+            if isinstance(raw_model_paths, list):
+                candidate_paths = raw_model_paths
+            elif raw_model_paths is None:
+                candidate_paths = []
+            else:
+                candidate_paths = [raw_model_paths]
 
-                if isinstance(selected_item, dict):
-                    desired_variant = selected_item.get("variant")
-                    # Find matching variant entry; fallback to first dict entry with a path.
-                    for item in raw_model_paths:
-                        if not isinstance(item, dict):
-                            continue
-                        if (
-                            desired_variant is None
-                            or item.get("variant") == desired_variant
-                        ):
-                            selected_source = selected_item.get(
-                                "path", item.get("path")
-                            )
-                            break
-                    if selected_source is None:
-                        for item in raw_model_paths:
-                            if isinstance(item, dict) and item.get("path"):
-                                selected_source = str(item.get("path"))
-                                break
-            elif isinstance(raw_model_paths, dict):
-                p = raw_model_paths.get("path")
-                if isinstance(p, str):
-                    selected_source = p
+            selected_item = select_model_path_item(
+                candidate_paths,
+                selected_model_spec=selected_spec,
+                component_type="extra_model_path",
+                manifest_metadata=manifest_metadata,
+                model_download_profile=model_download_profile,
+                hardware_profile=hardware_profile,
+            )
+            if isinstance(selected_item, dict):
+                selected_source_val = selected_item.get("path")
+                if isinstance(selected_source_val, str) and selected_source_val.strip():
+                    selected_source = selected_source_val
 
             if not selected_source:
                 continue
@@ -2648,7 +2701,11 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             # Download or resolve local path.
             local_path = self.is_downloaded(selected_source, components_path)
             if local_path is None:
-                local_path = self._download(selected_source, components_path)
+                local_path = self._download(
+                    selected_source,
+                    components_path,
+                    progress_callback=_emit_download_progress,
+                )
             if not local_path:
                 continue
 
@@ -2709,57 +2766,159 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 # Pseudo component: already handled in pre-pass.
                 continue
 
-            if config_path := component.get("config_path"):
+            config_id = component.get("config_id")
+            config_path = component.get("config_path")
+            if config_id:
+                try:
+                    resolved_path = resolve_config_path(config_id)
+                    component["config_path"] = resolved_path
+                except FileNotFoundError:
+                    self.logger.warning(
+                        f"Config not found in registry for config_id='{config_id}'"
+                    )
+            elif config_path:
                 downloaded_config_path = self.fetch_config(
-                    config_path, return_path=True, config_save_path=components_path
+                    config_path,
+                    return_path=True,
+                    config_save_path=components_path,
+                    progress_callback=_emit_download_progress,
                 )
                 if downloaded_config_path:
                     component["config_path"] = downloaded_config_path
 
             component_type = component.get("type")
             component_name = component.get("name")
+            
+            if component.get("dtype"):
+                component["dtype"] = self._coerce_dtype(component.get("dtype"))
+                component["load_dtype"] = component["dtype"]
 
             if component_type == "scheduler":
                 scheduler_options = component.get("scheduler_options")
                 if not scheduler_options:
                     new_components_cfg.append(component)
                     continue
-                selected_scheduler_option = self.selected_components.get(
+                selected_scheduler_spec = self.selected_components.get(
                     component_name, self.selected_components.get(component_type, None)
                 )
 
-                if not selected_scheduler_option:
-                    # take the first scheduler option
-                    selected_scheduler_option = scheduler_options[0]
+                # Allow a few convenient forms:
+                # - {"name": "...", "config": {...}} (preferred)
+                # - "SchedulerName" (shorthand)
+                selected_name = None
+                selected_runtime_config: Dict[str, Any] = {}
+                if isinstance(selected_scheduler_spec, str):
+                    selected_name = selected_scheduler_spec
+                elif isinstance(selected_scheduler_spec, dict):
+                    selected_name = selected_scheduler_spec.get("name")
+                    # Important: never allow stale persisted scheduler metadata
+                    # (e.g. base/config_path from legacy manifests) to override
+                    # the selected scheduler option from the active catalog.
+                    explicit_config = selected_scheduler_spec.get("config")
+                    if isinstance(explicit_config, dict):
+                        selected_runtime_config.update(explicit_config)
 
-                match_found = False
-                for scheduler_option in scheduler_options:
-                    if selected_scheduler_option["name"] == scheduler_option["name"]:
-                        current_component = component.copy()
-                        del current_component["scheduler_options"]
-                        selected_scheduler_option.update(current_component)
-                        selected_scheduler_option.update(scheduler_option)
-                        component = selected_scheduler_option
-                        match_found = True
-                        break
-                if not match_found:
-                    # use the first scheduler option
-                    selected_scheduler_option = scheduler_options[0]
-                    current_component = component.copy()
-                    del current_component["scheduler_options"]
-                    selected_scheduler_option.update(current_component)
-                    selected_scheduler_option.update(scheduler_options[0])
-                    component = selected_scheduler_option
-                    match_found = True
+                    # Back-compat: older payloads can flatten config keys onto
+                    # the selected scheduler object. Keep only non-structural keys.
+                    reserved_keys = {
+                        "name",
+                        "label",
+                        "description",
+                        "type",
+                        "base",
+                        "config",
+                        "config_id",
+                        "config_path",
+                        "scheduler_manifest",
+                        "scheduler_options",
+                        "default",
+                    }
+                    for k, v in selected_scheduler_spec.items():
+                        if k in reserved_keys:
+                            continue
+                        selected_runtime_config[k] = v
+
+                if not selected_name:
+                    # Prefer manifest default (if present), else take the first option.
+                    default_name = component.get("default")
+                    if isinstance(default_name, str) and default_name.strip():
+                        selected_name = default_name.strip()
+                    else:
+                        selected_name = scheduler_options[0].get("name")
+
+                selected_option = next(
+                    (
+                        o
+                        for o in scheduler_options
+                        if isinstance(o, dict) and selected_name == o.get("name")
+                    ),
+                    None,
+                )
+                if selected_option is None:
+                    if isinstance(selected_name, str) and selected_name.strip():
+                        self.logger.warning(
+                            "Unknown scheduler selection "
+                            f"'{selected_name}' for component "
+                            f"'{component_name or component_type}'. "
+                            "Falling back to manifest defaults."
+                        )
+                    default_name = component.get("default")
+                    selected_option = (
+                        next(
+                            (
+                                o
+                                for o in scheduler_options
+                                if isinstance(o, dict) and o.get("name") == default_name
+                            ),
+                            None,
+                        )
+                        if isinstance(default_name, str) and default_name.strip()
+                        else None
+                    )
+                if selected_option is None:
+                    selected_option = next(
+                        (o for o in scheduler_options if isinstance(o, dict)), None
+                    )
+                if selected_option is None:
+                    new_components_cfg.append(component)
+                    continue
+
+                current_component = component.copy()
+                current_component.pop("scheduler_options", None)
+                merged = dict(current_component)
+                merged.update(selected_option)
+                component = merged
+
+                # Apply any runtime overrides *after* selecting the option.
+                # Keep this strictly to scheduler `config` to prevent legacy
+                # fields in persisted clip state from forcing old schedulers.
+                if selected_runtime_config:
+                    base_cfg = component.get("config")
+                    if not isinstance(base_cfg, dict):
+                        base_cfg = {}
+                    merged_cfg = dict(base_cfg)
+                    merged_cfg.update(selected_runtime_config)
+                    component["config"] = merged_cfg
 
                 if component_name:
                     component["name"] = component_name
 
-                if component.get("config_path"):
+                sched_config_id = component.get("config_id")
+                sched_config_path = component.get("config_path")
+                if sched_config_id:
+                    try:
+                        resolved = resolve_config_path(sched_config_id)
+                        component["config_path"] = resolved
+                    except FileNotFoundError:
+                        self.logger.warning(
+                            f"Scheduler config not found for config_id='{sched_config_id}'"
+                        )
+                elif sched_config_path:
                     downloaded_config_path = self.fetch_config(
-                        component["config_path"],
+                        sched_config_path,
                         return_path=True,
                         config_save_path=components_path,
+                        progress_callback=_emit_download_progress,
                     )
                     if downloaded_config_path:
                         component["config_path"] = downloaded_config_path
@@ -2767,47 +2926,60 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             else:
                 model_path = component.get("model_path")
                 if isinstance(model_path, list):
-                    selected_model_item = self.selected_components.get(
+                    selected_model_spec = self.selected_components.get(
                         component_name,
                         self.selected_components.get(component_type, None),
                     )
-                    if not selected_model_item:
-                        # take the first model path item
-                        selected_model_item = model_path[0]
+                    selected_model_item = select_model_path_item(
+                        model_path,
+                        selected_model_spec=selected_model_spec,
+                        component_type=str(component_type or ""),
+                        manifest_metadata=manifest_metadata,
+                        model_download_profile=model_download_profile,
+                        hardware_profile=hardware_profile,
+                    )
 
-                    for model_path_item in model_path:
-                        if selected_model_item.get("variant") == model_path_item.get(
-                            "variant"
-                        ):
-                            component["model_path"] = selected_model_item.get(
-                                "path", model_path_item.get("path")
+                    selected_model_path: Optional[str] = None
+                    if isinstance(selected_model_item, dict):
+                        p = selected_model_item.get("path")
+                        if isinstance(p, str) and p.strip():
+                            selected_model_path = p
+                        if isinstance(selected_model_item.get("key_map"), dict):
+                            component["key_map"] = selected_model_item.get("key_map")
+                        if isinstance(selected_model_item.get("extra_kwargs"), dict):
+                            component["extra_kwargs"] = selected_model_item.get(
+                                "extra_kwargs"
                             )
-                            if isinstance(model_path_item.get("key_map"), dict):
-                                component["key_map"] = model_path_item.get("key_map")
-                            if isinstance(model_path_item.get("extra_kwargs"), dict):
-                                component["extra_kwargs"] = model_path_item.get(
-                                    "extra_kwargs"
-                                )
 
-                    if isinstance(component["model_path"], list):
-                        # get the first item that is not None
-                        component["model_path"] = next(
-                            item.get("path")
-                            for item in component["model_path"]
-                            if item.get("path") is not None
-                        )
+                    if not selected_model_path:
+                        for item in model_path:
+                            if isinstance(item, dict) and isinstance(item.get("path"), str):
+                                selected_model_path = str(item.get("path"))
+                                break
+                            if isinstance(item, str) and item.strip():
+                                selected_model_path = item
+                                break
 
-                    path = self.is_downloaded(component["model_path"], components_path)
+                    if not selected_model_path:
+                        new_components_cfg.append(component)
+                        continue
 
+                    path = self.is_downloaded(selected_model_path, components_path)
                     if path is None:
                         component["model_path"] = self._download(
-                            component["model_path"], components_path
+                            selected_model_path,
+                            components_path,
+                            progress_callback=_emit_download_progress,
                         )
                     else:
                         component["model_path"] = path
 
                 elif isinstance(model_path, str):
-                    downloaded_model_path = self._download(model_path, components_path)
+                    downloaded_model_path = self._download(
+                        model_path,
+                        components_path,
+                        progress_callback=_emit_download_progress,
+                    )
                     if downloaded_model_path:
                         component["model_path"] = downloaded_model_path
 
@@ -2815,11 +2987,15 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 for m_index, extra_model_path in enumerate(extra_model_paths):
                     if isinstance(extra_model_path, dict):
                         downloaded_extra_model_path = self._download(
-                            extra_model_path["path"], components_path
+                            extra_model_path["path"],
+                            components_path,
+                            progress_callback=_emit_download_progress,
                         )
                     else:
                         downloaded_extra_model_path = self._download(
-                            extra_model_path, components_path
+                            extra_model_path,
+                            components_path,
+                            progress_callback=_emit_download_progress,
                         )
                     if downloaded_extra_model_path:
                         component["extra_model_paths"][

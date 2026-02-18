@@ -1,0 +1,20 @@
+{
+  "_class_name": "AutoencoderKLHunyuanVideo15",
+  "_diffusers_version": "0.36.0.dev0",
+  "block_out_channels": [
+    128,
+    256,
+    512,
+    1024,
+    1024
+  ],
+  "downsample_match_channel": true,
+  "in_channels": 3,
+  "latent_channels": 32,
+  "layers_per_block": 2,
+  "out_channels": 3,
+  "scaling_factor": 1.03682,
+  "spatial_compression_ratio": 16,
+  "temporal_compression_ratio": 4,
+  "upsample_match_channel": true
+}

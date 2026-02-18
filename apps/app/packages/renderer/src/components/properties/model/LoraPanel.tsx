@@ -45,10 +45,10 @@ interface LoraPanelProps {
   panelSize: number;
 }
 
-const isLoraDownloading = (item: any): boolean => {
+const isLoraDownloading = (item: LoraType): boolean => {
   if (typeof item === "string") return true;
   if (typeof item !== "object" || item == null) return false;
-  return !(item as any).is_downloaded;
+  return !(item).verified;
 };
 
 const POLL_MS = 2000;
@@ -177,7 +177,7 @@ const LoraDownloadRow: React.FC<{
       : (item as any).label ||
         (item as any).name ||
         (path ? path.split("/").pop() || path : "LoRA");
-  const isDownloaded = typeof item === "string" ? false : !!(item as any).is_downloaded;
+  const isVerified = typeof item === "string" ? false : !!(item as any).verified;
   const [startDownloading, setStartDownloading] = useState(false);
 
   const {
@@ -203,10 +203,16 @@ const LoraDownloadRow: React.FC<{
       ? !!(item as any).verified
       : undefined;
 
+  const prevJobIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (jobId && !jobUpdates?.length) setStartDownloading(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // `jobId` can appear after first render (mutation success + store update). If we
+    // only set `startDownloading` on mount, the UI can get stuck showing neither
+    // the progress section nor the "Starting download…" placeholder.
+    if (!jobId) return;
+    if (prevJobIdRef.current === jobId) return;
+    prevJobIdRef.current = jobId;
+    if (!jobUpdates?.length) setStartDownloading(true);
+  }, [jobId, jobUpdates?.length]);
 
   useEffect(() => {
     if (isDownloading || !jobId) setStartDownloading(false);
@@ -279,7 +285,7 @@ const LoraDownloadRow: React.FC<{
         </div>
       </div>
 
-      {!isDownloaded && (
+      {!isVerified && (
         <>
           {isDownloading && (
             <DownloadProgressSection
@@ -596,8 +602,8 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   const [isAddingLora, setIsAddingLora] = useState(false);
   const [newLoraName, setNewLoraName] = useState("");
   const [newLoraSource, setNewLoraSource] = useState("");
-  const [activeTab, setActiveTab] = useState<"downloads" | "installed">(
-    "installed",
+  const [activeTab, setActiveTab] = useState<"downloads" | "verified">(
+    "verified",
   );
   const sourceHelpShort = "Enter a CivitAI ID/URN, URL, or local path.";
   if (!clip || !clip.manifest) return null;
@@ -748,6 +754,21 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
         .map((j) => j.job_id as string),
     );
 
+    // Polling can lag behind job start, so also subscribe to any jobIds we already
+    // know belong to this manifest (from the persisted jobId->manifest mapping).
+    const manifestMappedJobIds = new Set(
+      Object.keys(jobIdToManifestId || {}).filter(
+        (jobId) =>
+          !!jobId &&
+          (!currentManifestId || jobIdToManifestId?.[jobId] === currentManifestId),
+      ),
+    );
+
+    const desiredJobIds = new Set<string>([
+      ...Array.from(activeJobIds),
+      ...Array.from(manifestMappedJobIds),
+    ]);
+
     const cleanupJob = async (jobId: string) => {
       try {
         const parts = getJobIdToParts(jobId);
@@ -774,7 +795,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
     };
 
     // Connect to new jobs (only those tied to this manifest via the store mapping).
-    activeJobIds.forEach((jobId) => {
+    desiredJobIds.forEach((jobId) => {
       const mappedManifestId = jobIdToManifestId?.[jobId];
       if (currentManifestId && mappedManifestId !== currentManifestId) return;
       if (subscribedRef.current.has(jobId)) return;
@@ -854,7 +875,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
       const mappedManifestId = jobIdToManifestId?.[jobId];
       const isFinalizing = finalizingJobIds.has(jobId) || terminalJobIds.has(jobId);
       const stillRelevant =
-        (activeJobIds.has(jobId) || isFinalizing) &&
+        (desiredJobIds.has(jobId) || isFinalizing) &&
         (!currentManifestId || mappedManifestId === currentManifestId);
       if (!stillRelevant) {
         cleanup();
@@ -1066,6 +1087,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
       ),
     [loras],
   );
+
   const hasInstalledLoras = useMemo(
     () => visibleLoras.some((lora) => !isLoraDownloading(lora)),
     [visibleLoras],
@@ -1075,7 +1097,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
   useEffect(() => {
     const verifiedInstalledCount = (manifest?.spec?.loras || []).filter((l: any) => {
       if (!l || typeof l !== "object") return false;
-      const downloaded = !!(l as any).is_downloaded;
+      const downloaded = !!(l as any).verified;
       const verified = (l as any).verified === true;
       return downloaded && verified;
     }).length;
@@ -1093,7 +1115,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
       hadDownloadActivityRef.current &&
       verifiedInstalledCount > prev
     ) {
-      setActiveTab("installed");
+      setActiveTab("verified");
       // Reset activity so we only auto-switch once per "burst" of downloads.
       hadDownloadActivityRef.current = false;
     }
@@ -1153,7 +1175,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
             l.remote_source === p.source
           );
         });
-        if (found && typeof found === "object" && !!(found as any).is_downloaded) return false;
+        if (found && typeof found === "object" && !!(found as any).verified) return false;
         return true;
       }),
     );
@@ -1197,14 +1219,14 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab("installed")}
+          onClick={() => setActiveTab("verified")}
           className={`flex-1 text-[11px] font-medium px-2 py-1.5 rounded-r-[6px] transition-colors ${
-            activeTab === "installed"
+            activeTab === "verified"
               ? "bg-brand-accent-shade text-brand-light"
               : "bg-brand-background-light text-brand-light/70 hover:text-brand-light"
           }`}
         >
-          Installed
+          Verified
         </button>
       </div>
 
@@ -1390,7 +1412,7 @@ const LoraPanel: React.FC<LoraPanelProps> = ({ clipId, panelSize }) => {
         </>
       )}
 
-      {activeTab === "installed" && (
+      {activeTab === "verified" && (
         <>
           {!hasInstalledLoras && (
             <div className="text-brand-light/90 text-[12px] font-medium flex flex-col justify-center items-center gap-y-2 p-4 w-full h-28 border border-brand-light/10 rounded-md bg-brand">

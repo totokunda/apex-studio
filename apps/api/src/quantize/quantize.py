@@ -27,7 +27,7 @@ class TextEncoderQuantizer(BaseQuantizer):
     def __init__(
         self,
         output_path: str,
-        model_path: str = None,
+        model_path: str,
         tokenizer_path: str = None,
         model_type: ModelType = ModelType.TEXT,
         quantization: QuantType | str = QuantType.F16,
@@ -45,9 +45,10 @@ class TextEncoderQuantizer(BaseQuantizer):
         self.quantization = quantization
 
         self.model_path = self._download(self.model_path, DEFAULT_COMPONENTS_PATH)
-        self.tokenizer_path = self._download(
-            self.tokenizer_path, DEFAULT_COMPONENTS_PATH
-        )
+        if self.tokenizer_path is not None:
+            self.tokenizer_path = self._download(
+                self.tokenizer_path, DEFAULT_COMPONENTS_PATH
+            )
 
     @torch.inference_mode()
     def quantize(
@@ -63,6 +64,9 @@ class TextEncoderQuantizer(BaseQuantizer):
         use_temp_file: bool = False,
         bigendian: bool = False,
         llama_quantize_path: str = "llama-quantize",
+        hparams: dict = None,
+        override_quant_path: str | None = None,
+        keep_temp_file: bool = False,
         **kwargs,
     ):
         if isinstance(quantization, str):
@@ -75,39 +79,67 @@ class TextEncoderQuantizer(BaseQuantizer):
             output_path = self.output_path
 
         requires_llama_cpp_quant = self._requires_llama_cpp_quant(quantization)
+        
+        print(f"requires_llama_cpp_quant: {requires_llama_cpp_quant}")
 
-        hparams = ModelBase.load_hparams(Path(self.model_path), False)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(Path(self.model_path), False)
         model_architecture = get_model_architecture(hparams, self.model_type)
 
         model_class = ModelBase.from_model_architecture(
             model_architecture, model_type=self.model_type
         )
 
+        # Multimodal exports can include conv/patch-embed tensors that llama.cpp's
+        # `llama-quantize` cannot quantize (e.g. Pixtral 14x14 kernel). For those
+        # models, write the target quantization directly (mixed precision) instead
+        # of going through llama-quantize.
+        # Also bypass llama-quantize for models with tensor_force_quant overrides
+        # (e.g. T5EncoderModel keeping token embeddings unquantized) so that
+        # per-tensor precision choices are preserved.
+        if requires_llama_cpp_quant and (
+            getattr(model_class, "model_type", None) == ModelType.MMPROJ
+            or "vision_config" in hparams
+            or "vision_encoder" in hparams
+            or model_architecture in ("T5EncoderModel", "UMT5EncoderModel")
+        ):
+            requires_llama_cpp_quant = False
+
+        
+        temp_file = None
         if requires_llama_cpp_quant:
-            with NamedTemporaryFile(delete=True) as temp_file:
-                quant_path = temp_file.name
+            temp_file = NamedTemporaryFile(delete=not keep_temp_file, suffix=".gguf", delete_on_close=not keep_temp_file)
+            quant_path = temp_file.name
         else:
-            temp_file = None
             quant_path = self._fix_output_path(output_path, quantization.value)
 
-        model_instance = model_class(
-            Path(self.model_path),
-            Path(self.tokenizer_path) if self.tokenizer_path is not None else None,
-            qconfig_map["F16"].ftype,
-            Path(quant_path),
-            is_big_endian=bigendian,
-            use_temp_file=use_temp_file,
-            eager=self.kwargs.get("no_lazy", False),
-            metadata_override=self.kwargs.get("metadata", None),
-            model_name=self.kwargs.get("model_name", None),
-            split_max_tensors=split_max_tensors,
-            split_max_size=split_max_size,
-            dry_run=dry_run,
-            small_first_shard=small_first_shard,
-            remote_hf_model_id=hf_repo_id,
-        )
+        if override_quant_path is not None:
+            quant_path = override_quant_path
+        else:
+            ftype = (
+                qconfig_map["F16"].ftype
+                if requires_llama_cpp_quant
+                else qconfig_map[quantization.value].ftype
+            )
+            model_instance = model_class(
+                Path(self.model_path),
+                Path(self.tokenizer_path) if self.tokenizer_path is not None else None,
+                ftype,
+                Path(quant_path),
+                is_big_endian=bigendian,
+                use_temp_file=use_temp_file,
+                eager=self.kwargs.get("no_lazy", False),
+                metadata_override=self.kwargs.get("metadata", None),
+                model_name=self.kwargs.get("model_name", None),
+                split_max_tensors=split_max_tensors,
+                split_max_size=split_max_size,
+                dry_run=dry_run,
+                small_first_shard=small_first_shard,
+                remote_hf_model_id=hf_repo_id,
+                hparams=hparams,
+            )
 
-        model_instance.write()
+            model_instance.write()
 
         if requires_llama_cpp_quant:
             save_path = self._llama_cpp_quant(
@@ -116,9 +148,10 @@ class TextEncoderQuantizer(BaseQuantizer):
         else:
             save_path = quant_path
 
-        if temp_file is not None:
+        if temp_file is not None and not keep_temp_file:
             temp_file.close()
-
+            
+        print(f"Saved quantized model to {save_path}")
         return save_path
 
 
@@ -169,7 +202,7 @@ class TransformerQuantizer(BaseQuantizer):
         small_first_shard: bool = False,
         bigendian: bool = False,
         keys_to_exclude: List[str] = None,
-        num_workers: int = None,
+        num_workers: int = 1,
     ):
 
         if model_path is None:

@@ -9,6 +9,7 @@ import { exportClip, exportSequence } from "@app/export-renderer";
 import type { ManifestComponent } from "@/lib/manifest/api";
 import { prepareExportClipsForValue } from "@/lib/prepareExportClips";
 import { getSchedulerComponentKey } from "@/lib/manifest/componentKey";
+import { resolveManifestVariantId } from "@/lib/manifest/variantStorageKey";
 import { useProjectsStore } from "@/lib/projects";
 type MediaItem = {
   type: "image" | "video" | "audio";
@@ -274,11 +275,24 @@ const buildSelectedComponentDefaults = (manifest: any): Record<string, any> => {
       Array.isArray(comp.scheduler_options) &&
       comp.scheduler_options.length > 0
     ) {
-      const first = comp.scheduler_options[0];
+      const defaultName = String((comp as any).default || "").trim();
+      const preferred = defaultName
+        ? comp.scheduler_options.find(
+            (opt: any) => String(opt?.name || "") === defaultName,
+          )
+        : undefined;
+      const chosen = preferred || comp.scheduler_options[0];
+      const baseConfig =
+        chosen && typeof (chosen as any).config === "object" && !Array.isArray((chosen as any).config)
+          ? ({ ...(chosen as any).config } as Record<string, any>)
+          : {};
       defaults[key] = {
-        name: first.name,
-        base: (first as any).base,
-        config_path: (first as any).config_path,
+        name: (chosen as any).name,
+        base: (chosen as any).base,
+        config_path: (chosen as any).config_path,
+        config_id: (chosen as any).config_id,
+        config: baseConfig,
+        ...baseConfig,
       };
     } else if (comp.model_path) {
       const items = normalizeModelPaths(comp).filter((it) =>
@@ -985,6 +999,16 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     const durationSeconds = duration / fps;
     engineInputs["duration"] = `${durationSeconds}s`;
     const manifestId = (clip as ModelClipProps)?.manifest?.metadata?.id;
+    const variantId = (() => {
+      const explicitVariantId = String(
+        (clip as ModelClipProps)?.variantId || "",
+      ).trim();
+      if (explicitVariantId) return explicitVariantId;
+      return resolveManifestVariantId({
+        group: (clip as ModelClipProps)?.group,
+        manifest: (clip as ModelClipProps)?.manifest,
+      });
+    })();
     const selectedExisting = (clip as ModelClipProps)?.selectedComponents || {};
     const manifestForDefaults =
       manifestData || (clip as ModelClipProps)?.manifest;
@@ -1024,8 +1048,6 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
 
     const activeProject = useProjectsStore.getState().getActiveProject();
     const folderUuid = activeProject?.folderUuid;
-
-
     const res = await runEngine({
       manifest_id: manifestId,
       inputs: engineInputs,
@@ -1072,6 +1094,8 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
           modelStatus: "pending" as const,
           assetId: undefined,
           createdAt: Date.now(),
+          manifestId: manifestId ? String(manifestId) : undefined,
+          variantId,
           src: undefined,
           selectedComponents: selectedComponentsForEngine,
           values: getRawModelValues(clipId),

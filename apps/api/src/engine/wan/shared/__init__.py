@@ -633,10 +633,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
 
         total_steps = len(timesteps) if timesteps is not None else 0
         safe_emit_progress(denoise_progress_callback, 0.0, "Starting denoise")
-
-        if total_steps <= 8:
-            render_on_step = False
-
+        
         if ip_image is not None:
             ip_image_latent = self._encode_ip_image(ip_image, dtype=transformer_dtype)
         else:
@@ -720,6 +717,7 @@ class WanShared(BaseEngine, WanMLXDenoise):
                     noise_pred = uncond_noise_pred + guidance_scale * (
                         noise_pred - uncond_noise_pred
                     )
+                    
 
                 latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 

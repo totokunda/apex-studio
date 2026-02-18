@@ -1,0 +1,153 @@
+- base: wan.multitalk
+  extra_kwargs:
+    ignore_model_load: true
+  label: Chinese Wav2Vec2 Base
+  model_path:
+  - file_size: 1520899445
+    path: TencentGameMate/chinese-wav2vec2-base
+    resource_requirements:
+      min_vram_gb: 6
+      recommended_vram_gb: 10
+  type: helper
+- base: CLIPImageProcessor
+  label: Image Processor
+  model_path:
+  - file_size: 5030848
+    path: Wan-AI/Wan2.2-Animate-14B-Diffusers/image_processor
+    precision: fp16
+    resource_requirements:
+      min_vram_gb: 5
+      recommended_vram_gb: 9
+    type: safetensors
+    variant: default
+  module: transformers
+  name: image_processor
+  type: helper
+- base: clip
+  label: CLIP Image Encoder
+  model_class: CLIPVisionModel
+  model_path:
+  - file_size: 1264218342
+    path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+    precision: fp16
+    resource_requirements:
+      min_vram_gb: 5
+      recommended_vram_gb: 9
+    type: safetensors
+    variant: default
+  name: clip
+  preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+  processor_class: CLIPImageProcessor
+  type: helper
+- base: wan.mova
+  config_path: OpenMOSS-Team/MOVA-360p/dual_tower_bridge/config.json
+  label: Dual Tower Bridge
+  model_path:
+  - path: OpenMOSS-Team/MOVA-360p/dual_tower_bridge
+    precision: fp16
+    type: safetensors
+    variant: default
+  name: dual_tower_bridge
+  type: helper
+- base: SiglipVisionModel
+  label: HunyuanVideo Image Encoder
+  model_path:
+  - file_size: 856506533
+    path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v/image_encoder
+    precision: fp16
+    resource_requirements:
+      min_vram_gb: 5
+      recommended_vram_gb: 9
+    type: safetensors
+    variant: default
+  module: transformers
+  name: image_encoder
+  type: helper
+- base: SiglipImageProcessor
+  config_path: hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v/feature_extractor/preprocessor_config.json
+  label: HunyuanVideo Image Feature Extractor
+  module: transformers
+  name: feature_extractor
+  type: helper
+- base: clip
+  label: CLIP Image Encoder
+  model_class: CLIPVisionModel
+  model_path:
+  - file_size: 1264218342
+    path: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/image_encoder
+    precision: fp16
+    resource_requirements:
+      min_vram_gb: 5
+      recommended_vram_gb: 9
+    type: safetensors
+    variant: default
+  name: clip
+  preprocessor_path: https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/resolve/main/image_processor/preprocessor_config.json
+  processor_class: CLIPImageProcessor
+  type: helper
+- base: wan.multitalk
+  label: Chinese Wav2Vec2 Base
+  model_path:
+  - file_size: 1520899445
+    path: TencentGameMate/chinese-wav2vec2-base
+    resource_requirements:
+      min_vram_gb: 6
+      recommended_vram_gb: 10
+  type: helper
+- base: Wav2Vec2FeatureExtractor
+  label: Audio Processor
+  model_path:
+  - file_size: 1841
+    path: tolgacangoz/Wan2.2-S2V-14B-Diffusers/audio_processor
+    precision: fp16
+    resource_requirements:
+      min_vram_gb: 5
+      recommended_vram_gb: 9
+    type: safetensors
+    variant: default
+  module: transformers
+  name: audio_processor
+  type: helper
+- base: Wav2Vec2ForCTC
+  label: Audio Encoder
+  model_path:
+  - file_size: 1261945024
+    path: tolgacangoz/Wan2.2-S2V-14B-Diffusers/audio_encoder
+    precision: fp16
+    resource_requirements:
+      min_vram_gb: 5
+      recommended_vram_gb: 9
+    type: safetensors
+    variant: default
+  module: transformers
+  name: audio_encoder
+  type: helper
+- base: wan.humo_audio_processor
+  fps: 25
+  label: HuMo Audio Processor
+  model_path:
+  - file_size: 3091543112
+    path: totoku/whisper-large-v3
+    precision: fp16
+    resource_requirements:
+      min_vram_gb: 7
+      recommended_vram_gb: 11
+    type: safetensors
+    variant: default
+  name: wan.humo_audio_processor
+  sample_rate: 16000
+  type: helper
+- base: Qwen2VLProcessor
+  label: Image Processor
+  model_path:
+  - file_size: 15879236
+    path: Qwen/Qwen-Image-Edit-2511/processor
+    precision: fp16
+    resource_requirements:
+      min_vram_gb: 5
+      recommended_vram_gb: 9
+    type: safetensors
+    variant: default
+  module: transformers.models.qwen2_vl.processing_qwen2_vl
+  name: image.processor
+  type: helper

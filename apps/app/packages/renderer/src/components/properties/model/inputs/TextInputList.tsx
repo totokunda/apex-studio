@@ -152,12 +152,12 @@ const TextInputList: React.FC<TextInputListProps> = ({
         // Radix ScrollArea.Viewport is `h-full`, so the Root must have an explicit height
         // (maxHeight alone won't constrain the viewport). Only enable scrolling when needed
         // to avoid extra empty space for short lists.
-        const shouldScroll = internalValue.length > 3;
+        const shouldScroll = internalValue.length > Infinity;
 
         // Padding is important here because ScrollArea.Root is overflow-hidden,
         // and our delete button is slightly offset outside each card.
         const content = (
-          <div className="flex flex-col gap-2 pr-3 pt-3 pb-2">
+          <div className="flex flex-col gap-2  pt-3 pb-2">
             {internalValue.length === 0 && (
               <div className="w-full flex flex-col items-start justify-center gap-y-1 py-3 opacity-70 bg-brand rounded-md border border-brand-light/5 px-3">
                 <span className="text-brand-light text-[11px] font-medium">

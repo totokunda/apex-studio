@@ -1,0 +1,221 @@
+api_version: apex/v1
+kind: Model
+type: audio
+metadata:
+  id: mmaudio
+  model: wan
+  name: MMAudio
+  version: 0.1.2
+  description: MMAudio is a model for generating audio from video and text prompts.
+  tags:
+  - mmaudio
+  - t2v
+  - i2v
+  author: Tencent
+  license: Tencent Hunyuan Community License Agreement
+  categories:
+  - video-to-audio
+spec:
+  engine: mmaudio
+  model_type: tv2a
+  engine_type: torch
+  default_duration_secs: 5.0
+  fps: 24
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - cpu
+    - metal
+  attention_types:
+  - sdpa
+  - flash
+  - flash3
+  - sage
+  - metal_flash
+  - efficient_dot_product_attention
+  components:
+  - type: scheduler
+    name: scheduler
+    label: Scheduler
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 1.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: vae
+    name: vae
+    label: Audio VAE
+    base: mmaudio
+    extra_kwargs:
+      require_conversion: true
+    config:
+      mode: 44k
+      vocoder_config_id: MMAudio/vocoder
+    model_path:
+    - path: totoku/apex-models/Ovi-5s/audio_vae/v1-44.pth
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1221942998
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
+  - type: extra_model_path
+    name: vocoder_model
+    label: Vocoder Model
+    component: vae
+    model_path:
+    - path: totoku/apex-models/MMAudio/vocoder/bigvgan_generator.pt
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 489041291
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+  - type: text_encoder
+    name: text_encoder
+    label: CLIP Model
+    base: CLIPModel
+    module: transformers
+    config_id: MMAudio/text_encoder
+    dtype: float32
+    model_path:
+    - path: totoku/apex-models/MMAudio/text_encoder/model.safetensors
+      variant: default
+      precision: fp32
+      type: safetensors
+      file_size: 3946981844
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    tokenizer_name: totoku/apex-models
+    tokenizer_kwargs:
+      subfolder: MMAudio/text_encoder
+  - type: helper
+    name: syncformer_model
+    label: Synchformer Model
+    base: hunyuanvideofoley.synchformer
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/syncformer_encoder
+      variant: default
+      precision: bf16
+      type: pth
+      file_size: 949901692
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+  - type: transformer
+    name: transformer
+    label: Transformer
+    base: mmaudio.base
+    config_id: MMAudio/transformer
+    model_path:
+    - path: totoku/apex-models/MMAudio/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 2061198808
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+  defaults:
+    run:
+      num_inference_steps: 25
+      guidance_scale: 4.0
+      return_latents: false
+      timesteps_as_indices: true
+      expand_timesteps: false
+      text_encoder_kwargs: {}
+      attention_kwargs: {}
+  ui:
+    panels:
+    - name: video
+      label: Video
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: video
+      label: Video
+      description: The input video to generate an audio from.
+      type: video
+      panel: video
+      required: false
+    - id: prompt
+      label: Prompt
+      description: Describe the audio you want to generate.
+      placeholder: Rain falling on a roof.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the generation.
+      placeholder: noisy, harsh
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: ''
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 25
+      min: 1
+      max: 100
+      step: 1
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      type: number+slider
+      value_type: float
+      panel: sampling
+      required: false
+      default: 4.0
+      min: 1.0
+      max: 15.0
+      step: 0.5

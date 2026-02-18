@@ -8,6 +8,8 @@ from torch.nn import functional as F
 import logging
 import cv2
 
+from src.utils.dtype import supports_double
+
 Image = np.ndarray
 Boxes = torch.Tensor
 ImageSizeType = Tuple[int, int]
@@ -89,7 +91,7 @@ class BoxMode(IntEnum):
                 arr.shape[-1] == 5
             ), "The last dimension of input shape must be 5 for XYWHA format"
             original_dtype = arr.dtype
-            arr = arr.double()
+            arr = arr.double() if supports_double(arr.device) else arr.to(torch.float32)
 
             w = arr[:, 2]
             h = arr[:, 3]
@@ -110,7 +112,7 @@ class BoxMode(IntEnum):
             arr = arr[:, :4].to(dtype=original_dtype)
         elif from_mode == BoxMode.XYWH_ABS and to_mode == BoxMode.XYWHA_ABS:
             original_dtype = arr.dtype
-            arr = arr.double()
+            arr = arr.double() if supports_double(arr.device) else arr.to(torch.float32)
             arr[:, 0] += arr[:, 2] / 2.0
             arr[:, 1] += arr[:, 3] / 2.0
             angles = torch.zeros((arr.shape[0], 1), dtype=arr.dtype)

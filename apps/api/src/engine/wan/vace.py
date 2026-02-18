@@ -46,8 +46,18 @@ class WanVaceEngine(WanShared):
         enhance_kwargs: Dict[str, Any] = {},
         chunking_profile: str = "none",
         rope_on_cpu: bool = False,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         mask_provided = mask is not None
 
@@ -290,12 +300,14 @@ class WanVaceEngine(WanShared):
             offload=offload,
             dtype=torch.float32,
             normalize_latents_dtype=torch.float32,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
         )
         reactive = self.vae_encode(
             reactive,
             offload=offload,
             dtype=torch.float32,
             normalize_latents_dtype=torch.float32,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
         )
 
         latents = torch.cat([inactive, reactive], dim=1)
@@ -315,6 +327,7 @@ class WanVaceEngine(WanShared):
                     offload=offload,
                     dtype=torch.float32,
                     normalize_latents_dtype=torch.float32,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
                 )
                 reference_latent = reference_latent.squeeze(0)  # [C, 1, H, W]
                 reference_latent = torch.cat(
@@ -445,7 +458,11 @@ class WanVaceEngine(WanShared):
         else:
             latents = latents[:, :, num_reference_images:]
             safe_emit_progress(progress_callback, 0.94, "Decoding latents to video")
-            video = self.vae_decode(latents, offload=offload)
+            video = self.vae_decode(
+                latents,
+                offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+            )
             safe_emit_progress(progress_callback, 0.96, "Decoded latents to video")
             postprocessed_video = self._tensor_to_frames(video)
             safe_emit_progress(

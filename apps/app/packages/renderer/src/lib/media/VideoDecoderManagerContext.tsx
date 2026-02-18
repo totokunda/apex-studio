@@ -32,7 +32,7 @@ export const VideoDecoderManagerProvider: React.FC<ProviderProps> = ({ children 
           if (mediaInfo && mediaInfo.video && !managerRef.current?.hasAsset(decoderId)) {
             const decoderConfig = mediaInfo.videoDecoderConfig;
             if (decoderConfig) {
-              managerRef.current?.addAsset(assets[clip.assetId], {
+              void managerRef.current?.addAsset(assets[clip.assetId], {
                 mediaInfo,
                 videoDecoderConfig: decoderConfig,
                 logicalId: decoderId,
@@ -47,6 +47,18 @@ export const VideoDecoderManagerProvider: React.FC<ProviderProps> = ({ children 
 
     if (!managerRef.current) {
         managerRef.current = new VideoDecoderManager();
+        // Expose seek stats on window for DevTools benchmarking:
+        //   window.__apexSeekStats()  → { total, accurate, fast }
+        //   window.__apexResetSeekStats()  → resets counters to 0
+        (window as any).__apexSeekStats = () => managerRef.current?.getSeekStats();
+        (window as any).__apexResetSeekStats = () => {
+            if (managerRef.current) {
+                (managerRef.current as any)._seekTotal = 0;
+                (managerRef.current as any)._seekAccurate = 0;
+                (managerRef.current as any)._seekFast = 0;
+            }
+            console.log("[apex] Seek stats reset.");
+        };
     }
 
     return (

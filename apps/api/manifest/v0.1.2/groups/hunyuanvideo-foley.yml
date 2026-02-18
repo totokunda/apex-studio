@@ -1,0 +1,24 @@
+api_version: apex/v1
+kind: ModelGroup
+type: audio
+
+metadata:
+  id: group-hunyuanvideo-foley
+  name: HunyuanVideo Foley
+  description: Generate high-fidelity 48kHz Foley audio from a video and a text prompt.
+  tags:
+    - hunyuanvideo
+    - foley
+    - video-to-audio
+  author: Tencent
+  license: Tencent Hunyuan Community License Agreement
+  demo_path: models/hunyuanvideo-foley.mp4
+  categories:
+    - video-to-audio
+
+variants:
+  - id: hunyuanvideo-foley
+    label: "HunyuanVideo Foley"
+    description: "High-fidelity Foley audio generator that produces 48kHz sound from video and text prompts. Uses SigLIP visual understanding and Synchformer temporal alignment to create precisely synchronized environmental sounds, footsteps, impacts, and ambient audio."
+    manifest_ref: audio/hunyuanvideo-foley
+    default: true

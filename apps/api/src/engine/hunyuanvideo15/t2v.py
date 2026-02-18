@@ -8,7 +8,7 @@ from src.types.media import InputImage
 from src.helpers.hunyuanvideo15.cache import CacheHelper
 import torch
 from src.utils.progress import safe_emit_progress, make_mapped_progress
-
+from src.model_cache import DeepCacheHelper, TeaCacheHelper, TaylorCacheHelper
 
 class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
     """HunyuanVideo 1.5 Text-to-Video Engine Implementation"""
@@ -87,6 +87,17 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
         guidance_scale: float = 1.0,
         guidance_rescale: float = 0.0,
         use_light_vae: bool = False,
+        enable_cache: bool = True,
+        cache_type: str = "deepcache",
+        cache_start_step: int = 11,
+        cache_end_step: int = 45,
+        cache_step_interval: int = 4,
+        no_cache_block_id: Optional[Dict[str, List[int]]] = None,
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
+        use_tiny_vae: bool = bool,
         **kwargs,
     ):
 
@@ -104,6 +115,13 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
         self._current_timestep = None
         self._interrupt = False
         transformer_dtype = self.component_dtypes["transformer"]
+        
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
 
         device = self.device
 
@@ -169,11 +187,13 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
         self.to_device(self.scheduler)
         # 4. Prepare timesteps
         safe_emit_progress(progress_callback, 0.15, "Preparing timesteps")
+        
         sigmas = (
             np.linspace(1.0, 0.0, num_inference_steps + 1)[:-1]
             if sigmas is None
             else sigmas
         )
+        
         timesteps, num_inference_steps = self._get_timesteps(
             self.scheduler, num_inference_steps, sigmas=sigmas
         )
@@ -191,9 +211,11 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
             generator,
             latents,
         )
+        
         cond_latents_concat, mask_concat = self.prepare_cond_latents_and_mask(
             latents, transformer_dtype, device
         )
+        
         image_embeds = torch.zeros(
             batch_size,
             self.vision_num_semantic_tokens,
@@ -230,15 +252,44 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
             0.45,
             f"Starting denoise (CFG: {'on' if do_classifier_free_guidance else 'off'})",
         )
+        
+        self.cache_helper = None
+        
+        if enable_cache:
+            no_cache_steps = list(range(0, cache_start_step)) + list(range(cache_start_step, cache_end_step, cache_step_interval)) + list(range(cache_end_step, num_inference_steps))
+            cache_type = cache_type
+            if cache_type == 'deepcache':
+                self.cache_helper = DeepCacheHelper(
+                    double_blocks=self.transformer.transformer_blocks,
+                    no_cache_steps=no_cache_steps,
+                    no_cache_block_id=no_cache_block_id,
+                )
+            elif cache_type == 'teacache':
+                self.cache_helper = TeaCacheHelper(
+                    double_blocks=self.transformer.transformer_blocks,
+                    no_cache_steps=no_cache_steps,
+                )
+            elif cache_type == 'taylorcache':
+                self.cache_helper = TaylorCacheHelper(
+                    double_blocks=self.transformer.transformer_blocks,
+                    no_cache_steps=no_cache_steps,
+                )
+            self.cache_helper.enable()
+            logger.info(f"Enabled {cache_type} cache")
+        
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
+                
+                if self.cache_helper is not None:
+                    self.cache_helper.cur_timestep = i
 
                 self._current_timestep = t
                 latent_model_input = torch.cat(
                     [latents, cond_latents_concat, mask_concat], dim=1
                 )
+                
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0]).to(
                     latent_model_input.dtype
@@ -331,7 +382,7 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
                 ):
-                    progress_bar.update()
+                    progress_bar.update() 
                     denoise_progress_callback(
                         float(i + 1) / float(max(num_inference_steps, 1)),
                         f"Denoising step {i + 1}/{num_inference_steps}",
@@ -347,13 +398,13 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
         else:
             if not self.vae:
                 self.load_component_by_type("vae")
-            self.vae.enable_tiling(use_light_vae=use_light_vae)
             self.to_device(self.vae)
             safe_emit_progress(
                 progress_callback, 0.95, "Decoding latents to video with light VAE"
             )
+            
             safe_emit_progress(progress_callback, 0.95, "Decoding latents to video")
-            video = self.vae_decode(latents, offload=offload)
+            video = self.vae_decode(latents, offload=offload, use_tiny_vae=use_tiny_vae, vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None))
             postprocessed_video = self._tensor_to_frames(video)
             safe_emit_progress(
                 progress_callback, 1.0, "Completed image-to-video pipeline"

@@ -1,5 +1,5 @@
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getManifest, getManifestPart, listManifests, listModelTypes, type ModelTypeInfo } from "./api";
+import { getManifest, getManifestPart, listManifests, listManifestGroups, listModelTypes, type ManifestGroup, type ModelTypeInfo } from "./api";
 import { ManifestDocument } from "@/lib/manifest";
 import _ from "lodash";
 
@@ -33,21 +33,130 @@ export async function fetchModelTypes(): Promise<ModelTypeInfo[]> {
   return (Array.isArray(data) ? data : []) as ModelTypeInfo[];
 }
 
+/**
+ * Fetch all manifest groups from the backend and prime the per-manifest cache
+ * for every resolved variant.  Returns an empty array (rather than throwing)
+ * when the backend does not support the groups endpoint, so callers can
+ * safely fall back to the flat manifest list.
+ */
+export async function fetchManifestGroups(
+  queryClient: QueryClient,
+): Promise<ManifestGroup[]> {
+  try {
+    const response = await listManifestGroups();
+    if (!response.success || !response.data?.length) {
+      return [];
+    }
+    
+    const groups = response.data;
+    // Prime individual manifest caches from resolved group variants
+    for (const group of groups) {
+      for (const variant of group.variants ?? []) {
+        if (variant.manifest) {
+          const id = variant.manifest.metadata?.id;
+          if (id) {
+            queryClient.setQueryData(["manifest", id], variant.manifest);
+          }
+        }
+      }
+    }
+    return groups;
+  } catch {
+    // Backend does not support groups – degrade gracefully
+    return [];
+  }
+}
+
+/**
+ * Fetch manifests with group support.
+ *
+ * Strategy:
+ *   1. Fetch groups and flat manifests in parallel.
+ *   2. If groups are available, derive the display list from each group's
+ *      default variant manifest (one card per group, deduplicating variants).
+ *   3. If groups are unavailable (old backend), return the flat manifest list.
+ *
+ * The flat manifest query ALWAYS runs so that the per-manifest cache stays
+ * warm for downstream consumers (ModelPage, useManifestQuery, etc.).
+ */
+export async function fetchManifestsWithGroupSupport(
+  queryClient: QueryClient,
+): Promise<{ manifests: ManifestDocument[]; groups: ManifestGroup[] }> {
+  const [groups, flatManifests] = await Promise.all([
+    fetchManifestGroups(queryClient),
+    fetchManifestsAndPrimeCache(queryClient),
+  ]);
+
+  if (groups.length > 0) {
+    // Build a de-duplicated manifest list from group default variants.
+    // Groups that couldn't resolve their manifest_ref fall back to the
+    // matching flat manifest (by variant id) if available.
+    const groupManifests: ManifestDocument[] = [];
+    const seenIds = new Set<string>();
+
+    for (const group of groups) {
+      const variants = group.variants ?? [];
+      const defaultVariant = variants.find((v) => v.default) ?? variants[0];
+      if (!defaultVariant) continue;
+
+      let manifest = defaultVariant.manifest as ManifestDocument | null | undefined;
+
+      // Fallback: try to find the manifest in the flat list by variant id
+      if (!manifest && defaultVariant.id) {
+        manifest = flatManifests.find(
+          (m) => m.metadata?.id === defaultVariant.id,
+        );
+      }
+
+      if (manifest) {
+        const id = manifest.metadata?.id;
+        if (id && !seenIds.has(id)) {
+          seenIds.add(id);
+          groupManifests.push(manifest);
+        }
+      }
+    }
+
+    if (groupManifests.length > 0) {
+      return { manifests: groupManifests, groups };
+    }
+  }
+
+  // Fallback: no groups available, return flat manifests
+  return { manifests: flatManifests, groups: [] };
+}
+
 export async function prefetchModelMenuQueries(
   queryClient: QueryClient,
 ): Promise<void> {
-  await Promise.allSettled([
-    queryClient.prefetchQuery({
-      queryKey: ["manifest"],
-      queryFn: () => fetchManifestsAndPrimeCache(queryClient),
-      staleTime: 30_000,
-    }),
+  // Prefetch model types and groups in parallel.  The flat manifest list is
+  // only fetched as a fallback when groups returns empty (old backend).
+  const [, groupsResult] = await Promise.allSettled([
     queryClient.prefetchQuery({
       queryKey: ["modelTypes"],
       queryFn: fetchModelTypes,
       staleTime: 30_000,
     }),
+    queryClient.prefetchQuery({
+      queryKey: ["manifestGroups"],
+      queryFn: () => fetchManifestGroups(queryClient),
+      staleTime: 30_000,
+    }),
   ]);
+
+  // Only prefetch the flat manifest list when groups didn't return data.
+  const groups =
+    groupsResult.status === "fulfilled"
+      ? queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"])
+      : undefined;
+
+  if (!groups || groups.length === 0) {
+    await queryClient.prefetchQuery({
+      queryKey: ["manifest"],
+      queryFn: () => fetchManifestsAndPrimeCache(queryClient),
+      staleTime: 30_000,
+    });
+  }
 }
 
 export const useManifestQuery = (manifestId: string | null, forceRefresh: boolean = false) => {

@@ -58,7 +58,11 @@ class WanS2VEngine(WanShared):
             [torch.cat([cond[:, :, 0:1], cond], dim=2) for cond in pose_video], dim=0
         )  # Shape: [num_chunks, 3, num_frames_per_chunk+1, height, width]
 
-        pose_condition = self.vae_encode(all_poses, sample_mode="mode")[:, :, 1:]
+        pose_condition = self.vae_encode(
+            all_poses,
+            sample_mode="mode",
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+        )[:, :, 1:]
 
         return pose_condition
 
@@ -121,11 +125,20 @@ class WanS2VEngine(WanShared):
 
             if isinstance(generator, list):
                 latent_condition = [
-                    self.vae_encode(video_condition, offload=offload) for _ in generator
+                    self.vae_encode(
+                        video_condition,
+                        offload=offload,
+                        vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+                    )
+                    for _ in generator
                 ]
                 latent_condition = torch.cat(latent_condition)
             else:
-                latent_condition = self.vae_encode(video_condition, offload=offload)
+                latent_condition = self.vae_encode(
+                    video_condition,
+                    offload=offload,
+                    vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+                )
                 latent_condition = latent_condition.repeat(batch_size, 1, 1, 1, 1)
 
             motion_pixels = torch.zeros(
@@ -141,7 +154,11 @@ class WanS2VEngine(WanShared):
             if init_first_frame:
                 self.drop_first_motion = False
                 motion_pixels[:, :, -6:] = video_condition
-            motion_latents = self.vae_encode(motion_pixels, offload=offload)
+            motion_latents = self.vae_encode(
+                motion_pixels,
+                offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+            )
 
             return (
                 latents,
@@ -329,8 +346,18 @@ class WanS2VEngine(WanShared):
         render_on_step_interval: int = 3,
         num_chunks: Optional[int] = None,
         chunking_profile: str = "none",
+        vae_tile_sample_min_height: int = 256,
+        vae_tile_sample_min_width: int = 256,
+        vae_tile_sample_stride_height: int = 192,
+        vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
+        self.vae_tile_kwargs = {
+            "min_height": vae_tile_sample_min_height,
+            "min_width": vae_tile_sample_min_width,
+            "stride_height": vae_tile_sample_stride_height,
+            "stride_width": vae_tile_sample_stride_width,
+        }
         safe_emit_progress(progress_callback, 0.0, "Starting s2v pipeline")
 
         use_cfg_guidance = negative_prompt is not None and guidance_scale > 1.0
@@ -623,7 +650,11 @@ class WanS2VEngine(WanShared):
             else:
                 decode_latents = torch.cat([condition, latents], dim=2)
 
-            video = self.vae_decode(decode_latents, offload=offload)
+            video = self.vae_decode(
+                decode_latents,
+                offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+            )
             video = video[:, :, -(num_frames_per_chunk):]
 
             if self.drop_first_motion and r == 0:
@@ -641,7 +672,10 @@ class WanS2VEngine(WanShared):
 
             # Update motion_latents for next iteration
             motion_latents = self.vae_encode(
-                videos_last_pixels, sample_mode="mode", offload=offload
+                videos_last_pixels,
+                sample_mode="mode",
+                offload=offload,
+                vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
             )
 
             video_chunks.append(video)
@@ -663,7 +697,10 @@ class WanS2VEngine(WanShared):
         return self._tensor_to_frames(video_chunks)
 
     def _render_step(self, latents, render_on_step_callback):
-        video = self.vae_decode(latents)
+        video = self.vae_decode(
+            latents,
+            vae_tile_kwargs=getattr(self, "vae_tile_kwargs", None),
+        )
         total_video = torch.cat(self._preview_video_chunks + [video], dim=2)
         rendered_video = self._tensor_to_frames(total_video)
         render_on_step_callback(rendered_video[0])

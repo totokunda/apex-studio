@@ -417,7 +417,7 @@ const ModelClip: React.FC<Props> = ({
                 ref={modelNameRef}
                 x={size + 7}
                 y={timelineHeight - 19}
-                text={currentClip?.manifest?.metadata?.name ?? ""}
+                text={currentClip?.group?.name ?? currentClip?.manifest?.metadata?.name ?? ""}
                 fontSize={10}
                 fontFamily="Poppins"
                 fontStyle="500"
@@ -451,7 +451,7 @@ const ModelClip: React.FC<Props> = ({
                 const iconSlotWidth = 28;
                 const totalIconsWidth = ordered.length * iconSlotWidth;
                 const rightPadding = 0;
-                const modelName = currentClip?.manifest?.metadata?.name ?? "";
+                const modelName = currentClip?.group?.name ?? currentClip?.manifest?.metadata?.name ?? "";
                 if (modelName && modelNameWidth === 0) return null;
                 const leftOccupied = size + 7 + modelNameWidth + 6;
                 const availableRightWidth = Math.max(

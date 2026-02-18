@@ -1,0 +1,30 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-wan-multitalk
+  name: MultiTalk and InfiniteTalk
+  description: Wan 2.1 14B MultiTalk models for talking head generation.
+  tags:
+    - wan
+    - multitalk
+    - infinitetalk
+    - 14b
+  author: Meigen AI
+  license: Apache-2.0
+  demo_path: models/multitalk.mp4
+  categories:
+    - audio-to-video
+
+variants:
+  - id: wan-2-1-14b-multitalk
+    label: "Wan MultiTalk"
+    description: "Generate realistic talking-head video from audio input with support for multiple speakers and diverse facial expressions. Produces lip-synced, expressive results from a single reference image and audio track."
+    manifest_ref: video/wan-2.1-14b-multitalk
+    default: true
+
+  - id: wan-2-1-14b-infinitetalk
+    label: "Wan InfiniteTalk"
+    description: "Continuous talking-head generation that can produce arbitrarily long speaking sequences without degradation. Designed for extended dialogue scenes, podcasts, or virtual presenter content where duration is unbounded."
+    manifest_ref: video/wan-2.1-14b-infinitetalk

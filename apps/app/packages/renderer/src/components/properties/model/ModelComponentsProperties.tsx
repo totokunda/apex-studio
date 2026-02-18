@@ -101,11 +101,24 @@ const ModelComponentsProperties = ({
         const names = comp.scheduler_options.map((o) => String(o.name));
         const hasValid = curr && names.includes(String(curr.name));
         if (!hasValid) {
-          const first = comp.scheduler_options[0];
+          const defaultName = String((comp as any).default || "").trim();
+          const preferred = defaultName
+            ? comp.scheduler_options.find(
+                (opt: any) => String(opt?.name || "") === defaultName,
+              )
+            : undefined;
+          const chosen = preferred || comp.scheduler_options[0];
+          const baseConfig =
+            chosen && typeof (chosen as any).config === "object" && !Array.isArray((chosen as any).config)
+              ? ({ ...(chosen as any).config } as Record<string, any>)
+              : {};
           setSelection(key, {
-            name: first.name,
-            base: first.base,
-            config_path: first.config_path,
+            name: (chosen as any).name,
+            base: (chosen as any).base,
+            config_path: (chosen as any).config_path,
+            config_id: (chosen as any).config_id,
+            config: baseConfig,
+            ...baseConfig,
           });
         }
       }
@@ -230,7 +243,7 @@ const ModelComponentsProperties = ({
   return (
     <div className="flex flex-col p-4 justify-start items-stretch w-full">
       <div className="flex flex-col gap-3 w-full">
-        {components.map((comp, index) => {
+        {components.filter((comp) => comp.type !== "scheduler").map((comp, index) => {
           if (comp.model_path) {
             return (
               <div key={`${comp.type}-${index}`} className="w-full">

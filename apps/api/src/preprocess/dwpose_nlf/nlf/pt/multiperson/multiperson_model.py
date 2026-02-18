@@ -5,6 +5,7 @@ import torch
 import torchvision.transforms.v2.functional
 from pt import ptu, ptu3d
 from pt.multiperson import plausibility_check as plausib, warping
+from src.utils.dtype import supports_double
 from pt.models.bodymodel import BodyModel
 
 # Dummy value which will mean that the intrinsic_matrix are unknown
@@ -574,11 +575,10 @@ class MultipersonNLF(torch.nn.Module):
             poses3d_flat_submean, uncert_flat**-1.5, dim=-3, n_iter=10, eps=50.0
         )
         # MPS doesn't support double precision, so use float32 for MPS devices
-        is_mps = poses3d_flat.device.type == "mps"
-        if is_mps:
-            poses3d_flat = poses3d_flat_submean.float() + mean.squeeze(1).float()
-        else:
+        if supports_double(poses3d_flat_submean.device):
             poses3d_flat = poses3d_flat_submean.double() + mean.squeeze(1).double()
+        else:
+            poses3d_flat = poses3d_flat_submean.float() + mean.squeeze(1).float()
 
         uncert_flat = weighted_mean(uncert_flat, final_weights, dim=-2)
 
@@ -611,11 +611,11 @@ class MultipersonNLF(torch.nn.Module):
         n_box_per_image = torch.tensor(n_box_per_image_list, device=device)
         # Convert to world coordinates
         # MPS doesn't support double precision, so use float32 for MPS devices
-        is_mps = device.type == "mps"
-        if is_mps:
-            extrinsic_matrix_dtype = extrinsic_matrix.float()
-        else:
-            extrinsic_matrix_dtype = extrinsic_matrix.double()
+        extrinsic_matrix_dtype = (
+            extrinsic_matrix.double()
+            if supports_double(extrinsic_matrix.device)
+            else extrinsic_matrix.float()
+        )
         inv_extrinsic_matrix = torch.repeat_interleave(
             torch.linalg.inv(extrinsic_matrix_dtype), n_box_per_image, dim=0
         )
@@ -764,13 +764,12 @@ class MultipersonNLF(torch.nn.Module):
             crops_flat, new_intrinsic_matrix_flat, weights, aug_should_flip_flat
         )
         # MPS doesn't support double precision, so use float32 for MPS devices
-        is_mps = poses_flat.device.type == "mps"
-        if is_mps:
-            poses_flat = poses_flat.float()
-            R_dtype = R.float()
-        else:
+        if supports_double(poses_flat.device):
             poses_flat = poses_flat.double()
             R_dtype = R.double()
+        else:
+            poses_flat = poses_flat.float()
+            R_dtype = R.float()
         n_joints = poses_flat.shape[-2]
 
         poses = torch.reshape(poses_flat, [-1, n_cases, n_joints, 3])

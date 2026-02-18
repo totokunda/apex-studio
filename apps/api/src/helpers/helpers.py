@@ -1,7 +1,7 @@
 from pathlib import Path
 import importlib
 import inspect
-
+import traceback
 from loguru import logger
 
 from src.register import ClassRegister
@@ -52,6 +52,7 @@ def _auto_register_helpers() -> None:
                 module = importlib.import_module(module_name)
             except Exception as e:
                 logger.error(f"Error importing helper module {module_name}: {e}")
+                traceback.print_exc()
                 continue
 
             for _, cls in inspect.getmembers(module, inspect.isclass):

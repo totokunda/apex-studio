@@ -28,11 +28,43 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
   // Build chronological (oldest -> newest) updates,
   // skipping preview frames and deduping while keeping the most recent duplicate
   const rawUpdates = (job?.updates || []) as Array<any>;
+  const files = (job?.files || {}) as Record<
+    string,
+    {
+      filename: string;
+      progress?: number;
+      downloadedBytes?: number;
+      totalBytes?: number;
+      status?: "downloading" | "completed" | "error";
+      lastUpdateTime?: number;
+    }
+  >;
+
+  const formatBytes = (value?: number) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      return null;
+    }
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let n = value;
+    let idx = 0;
+    while (n >= 1024 && idx < units.length - 1) {
+      n /= 1024;
+      idx += 1;
+    }
+    return idx === 0 ? `${Math.round(n)} ${units[idx]}` : `${n.toFixed(1)} ${units[idx]}`;
+  };
+
+  const fileRows = Object.values(files)
+    .sort((a, b) => (b.lastUpdateTime || 0) - (a.lastUpdateTime || 0))
+    .slice(0, 6);
+
   const dedupeKeys = new Set<string>();
   const filteredFromEnd: Array<any> = [];
 
   for (let i = rawUpdates.length - 1; i >= 0; i--) {
     const u = rawUpdates[i];
+    const stage = ((u as any)?.metadata?.stage || "").toString();
+    if (stage === "weights_download") continue;
     const pct =
       typeof u.progress === "number" ? Math.round(u.progress) : undefined;
     const msg = (u.message || job?.currentStep || "Working...")
@@ -87,6 +119,52 @@ const ProgressPanel: React.FC<ProgressPanelProps> = ({ clipId }) => {
         </span>
       </div>
       <ScrollArea className="w-full flex-1 min-h-0">
+        {fileRows.length > 0 && (
+          <div className="mb-3 rounded-[6px] border border-brand-light/10 bg-brand p-2.5 w-full">
+            <div className="text-[10.5px] font-medium text-brand-light text-start">
+              Model downloads
+            </div>
+            <div className="mt-2 space-y-2">
+              {fileRows.map((f) => {
+                const rawName = (f.filename || "model").toString();
+                const name = rawName.split("/").pop() || rawName;
+                const pct =
+                  typeof f.progress === "number"
+                    ? Math.max(0, Math.min(100, Math.round(f.progress)))
+                    : undefined;
+                const downloaded = formatBytes(f.downloadedBytes);
+                const total = formatBytes(f.totalBytes);
+                const key = `file-${rawName}`;
+                return (
+                  <div key={key} className="w-full">
+                    <div className="flex items-center justify-between gap-2 text-[10.5px]">
+                      <div className="text-brand-light truncate text-start" title={rawName}>
+                        {name}
+                      </div>
+                      <div className="text-brand-light/70 shrink-0">
+                        {typeof pct === "number" ? `${pct}%` : f.status || "downloading"}
+                      </div>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[10px] text-brand-light/60">
+                      <span className="text-start">
+                        {downloaded && total ? `${downloaded} / ${total}` : downloaded || total || ""}
+                      </span>
+                      <span className="text-end">{f.status || "downloading"}</span>
+                    </div>
+                    {typeof pct === "number" && (
+                      <div className="mt-1.5 h-1.5 w-full rounded bg-brand-light/10">
+                        <div
+                          className="h-1.5 rounded bg-brand-accent-two-shade"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {displayUpdates.length > 0 ? (
           <ul className="space-y-3">
             {displayUpdates.map((u, idx) => {

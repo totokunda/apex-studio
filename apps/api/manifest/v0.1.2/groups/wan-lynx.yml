@@ -1,0 +1,24 @@
+api_version: apex/v1
+kind: ModelGroup
+type: video
+
+metadata:
+  id: group-wan-lynx
+  name: Wan Lynx
+  description: Wan Lynx 14B is a 14B parameter model for text-to-video generation using a reference image.
+  tags:
+    - wan
+    - lynx
+    - 14b
+  author: ByteDance
+  license: Apache-2.0
+  demo_path: models/wan-lynx-14b.mp4
+  categories:
+    - reference-image-to-video
+
+variants:
+  - id: wan-lynx-14b
+    label: "Lynx 14B"
+    description: "14B parameter model by ByteDance that generates video guided by a reference image. Preserves the visual identity, style, and key attributes of the reference subject while producing coherent, prompt-driven motion and scene composition."
+    manifest_ref: video/wan-lynx-14b
+    default: true

@@ -1,0 +1,245 @@
+api_version: apex/v1
+kind: Model
+type: audio
+metadata:
+  id: hunyuanvideo-foley
+  model: hunyuanvideo
+  name: HunyuanVideo-Foley
+  version: 0.1.2
+  description: Generate high-fidelity 48kHz Foley audio from a video and a text prompt.
+  tags:
+  - hunyuanvideo
+  - foley
+  - video-to-audio
+  author: Tencent
+  license: Tencent Hunyuan Community License Agreement
+  homepage: https://huggingface.co/tencent/HunyuanVideo-Foley
+  categories:
+  - video-to-audio
+spec:
+  engine: hunyuanvideo
+  model_type: foley
+  engine_type: torch
+  compute_requirements:
+    min_cuda_compute_capability: 7.5
+    supported_compute_types:
+    - cuda
+    - metal
+    - cpu
+  defaults:
+    guidance_scale: 4.5
+    num_inference_steps: 50
+    offload: true
+  components:
+  - type: scheduler
+    name: scheduler
+    label: HunyuanVideo-Foley Scheduler
+    default: EulerFlowScheduler
+    scheduler_manifest: schedulers/flow_matching.yml
+    scheduler_config_defaults:
+      num_train_timesteps: 1000
+      shift: 1.0
+      sigma_max: 1.0
+      sigma_min: 0.002994011976047904
+  - type: transformer
+    name: foley_model
+    label: HunyuanVideo-Foley Diffusion Model
+    base: hunyuanvideo.foley
+    config_id: HunyuanVideo-Foley/transformer
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 10268151752
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-fp8_e4m3fn.safetensors
+      variant: FP8
+      precision: fp8
+      type: safetensors
+      file_size: 7448240840
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q8_0.gguf
+      variant: Q8
+      precision: q8_0
+      type: gguf
+      file_size: 7640443072
+      resource_requirements:
+        min_vram_gb: 11
+        recommended_vram_gb: 15
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q6_k.gguf
+      variant: Q6
+      precision: q6_k
+      type: gguf
+      file_size: 6961629376
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+    - path: totoku/apex-models/HunyuanVideo-Foley/transformer/transformer-q4_k_m.gguf
+      variant: Q4
+      precision: q4_k_m
+      type: gguf
+      file_size: 6239021248
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+  - type: vae
+    name: dac_model
+    label: DAC VAE 128d 48kHz
+    base: dac
+    config_id: HunyuanVideo-Foley/vae
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/vae/vae-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 1486388976
+      resource_requirements:
+        min_vram_gb: 9
+        recommended_vram_gb: 13
+  - type: text_encoder
+    name: clap_model
+    label: CLAP Text Encoder
+    base: ClapTextModelWithProjection
+    config_id: HunyuanVideo-Foley/text_encoder
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/text_encoder/text_encoder-bf16.safetensors
+      variant: default
+      precision: bf16
+      type: safetensors
+      file_size: 776327408
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
+    tokenizer_class: RobertaTokenizer
+    tokenizer_path: totoku/apex-models/HunyuanVideo-Foley/tokenizer
+  - type: helper
+    name: siglip_model
+    label: SigLIP2 Model
+    module: transformers
+    base: SiglipModel
+    config_id: HunyuanVideo-Foley/siglip_encoder
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/siglip_encoder
+      variant: default
+      precision: fp16
+      type: safetensors
+      file_size: 1542001977
+      resource_requirements:
+        min_vram_gb: 6
+        recommended_vram_gb: 10
+  - type: helper
+    name: syncformer_model
+    label: Synchformer Model
+    base: hunyuanvideofoley.synchformer
+    model_path:
+    - path: totoku/apex-models/HunyuanVideo-Foley/syncformer_encoder
+      variant: default
+      precision: bf16
+      type: pth
+      file_size: 949901692
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
+  ui:
+    panels:
+    - name: video
+      label: Video
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - video
+    - name: prompting
+      label: Prompting
+      collapsible: true
+      default_open: true
+      layout:
+        flow: column
+        rows:
+        - - prompt
+    - name: advanced_prompting
+      label: Advanced Prompting
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - negative_prompt
+    - name: sampling
+      label: Sampling
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - num_inference_steps
+        - - guidance_scale
+        - - seed
+    inputs:
+    - id: video
+      label: Video
+      description: The input video to generate Foley audio from.
+      type: video
+      panel: video
+      required: true
+    - id: prompt
+      label: Prompt
+      description: Describe the Foley audio you want to generate for the video.
+      placeholder: Crunchy footsteps on gravel, distant traffic, soft wind, and a
+        brief metallic clink.
+      type: text
+      panel: prompting
+      required: true
+    - id: negative_prompt
+      label: Negative Prompt
+      description: Describe what to avoid in the audio generation.
+      placeholder: noisy, harsh, distorted, clipping
+      type: text
+      panel: advanced_prompting
+      required: false
+      default: noisy, harsh
+    - id: num_inference_steps
+      label: Inference Steps
+      description: Number of denoising steps.
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 50
+      min: 1
+      max: 100
+      step: 1
+      required: false
+    - id: guidance_scale
+      label: Guidance Scale
+      description: Classifier-free guidance strength.
+      type: number+slider
+      value_type: float
+      panel: sampling
+      default: 4.5
+      min: 1.0
+      max: 15.0
+      step: 0.5
+      required: false
+    - id: seed
+      label: Seed
+      description: Random seed for reproducibility.
+      type: random
+      default: -1
+      min: 0
+      max: 4294967295
+      value_type: integer
+      panel: sampling
+      required: false
+    - id: use_video_duration
+      label: Use Video Duration
+      description: Use the duration of the video to determine the number of frames.
+      type: boolean
+      panel: sampling
+      required: false
+      default: true
