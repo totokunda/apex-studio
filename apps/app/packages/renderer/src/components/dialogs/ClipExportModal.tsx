@@ -152,7 +152,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-sm w-full bg-brand-background/90 backdrop-blur-sm text-foreground p-0 gap-0 overflow-hidden dark font-inter border border-brand-light/10">
-        <DialogHeader className="px-5 py-3.5 border-b border-brand-light/10 flex-shrink-0 bg-brand-background">
+        <DialogHeader className="px-5 py-3.5 border-b border-brand-light/10 shrink-0 bg-brand-background">
           <DialogTitle className="text-start text-[13px] font-medium text-brand-light">
             {title}
           </DialogTitle>
@@ -342,7 +342,7 @@ export const ClipExportModal: React.FC<ClipExportModalProps> = ({
           </Button>
           <Button
             type="button"
-            className="h-7 px-5 bg-brand-accent hover:bg-brand-accent-two-shade text-brand-light text-[11px] font-medium rounded-[6px] border border-brand-accent-two-shade"
+            className="h-7 px-5 text-brand-lighter bg-linear-to-br from-brand-accent-shade to-brand-accent-two-shade hover:bg-brand-accent-two-shade text-[11px] font-medium rounded-[5px] border border-brand-accent-two-shade"
             onClick={handleExportClick}
             disabled={isExporting}
           >

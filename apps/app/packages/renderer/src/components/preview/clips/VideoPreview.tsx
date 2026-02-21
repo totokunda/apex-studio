@@ -37,33 +37,32 @@ const calculateIterateRange = (
   selectedAssetId: string,
   assetId: string
 ) => {
-    const isUsingPreprocessorSrc = selectedAssetId !== assetId;
-    const adjustedCurrentFrame = isUsingPreprocessorSrc
-      ? currentFrame - (trimStart || 0)
-      : currentFrame;
-    const idealStartFrame =
-      Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
-    const actualStartFrame = Math.floor(
-      (idealStartFrame / projectFps) * clipFps + 1e-4,
-    );
-    const totalFrames = Math.max(
-      0,
-      Math.floor((mediaInfo.duration || 0) * clipFps),
-    );
-    const startIdx =
-      Math.max(0, Math.min(totalFrames, actualStartFrame)) +
-      Math.round(((mediaInfo.startFrame || 0) / projectFps) * clipFps);
-      
-    const targetEndFrame = mediaInfo.endFrame
-      ? Math.round(((mediaInfo.endFrame || 0) / projectFps) * clipFps)
-      : undefined;
+  const isUsingPreprocessorSrc = selectedAssetId !== assetId;
+  const adjustedCurrentFrame = isUsingPreprocessorSrc
+    ? currentFrame - (trimStart || 0)
+    : currentFrame;
+  const idealStartFrame =
+    Math.max(0, adjustedCurrentFrame - frameOffset) * Math.max(0.1, speed);
+  const actualStartFrame = Math.floor(
+    (idealStartFrame / projectFps) * clipFps + 1e-4,
+  );
+  const totalFrames = Math.max(
+    0,
+    Math.floor((mediaInfo.duration || 0) * clipFps),
+  );
+  const startIdx =
+    Math.max(0, Math.min(totalFrames, actualStartFrame)) +
+    Math.round(((mediaInfo.startFrame || 0) / projectFps) * clipFps);
 
-    const startTime = startIdx / clipFps;
-    const endTime = targetEndFrame !== undefined 
-        ? targetEndFrame / clipFps 
-        : (mediaInfo.duration || 0);
-        
-    return { startTime, endTime, startIdx };
+  const targetEndFrame = mediaInfo.endFrame
+    ? Math.round(((mediaInfo.endFrame || 0) / projectFps) * clipFps)
+    : undefined;
+
+  const startTime = startIdx / clipFps;
+  const endTime = targetEndFrame !== undefined
+    ? targetEndFrame / clipFps
+    : (mediaInfo.duration || 0);
+  return { startTime, endTime, startIdx };
 };
 
 const VideoPreview: React.FC<
@@ -134,7 +133,7 @@ const VideoPreview: React.FC<
       : useInputScopedControls
         ? focusFrameFromInputs
         : focusFrameFromControls;
-  
+
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const displaySizeRef = useRef<{
@@ -146,6 +145,7 @@ const VideoPreview: React.FC<
   const [imageSource, setImageSource] = useState<HTMLCanvasElement | null>(
     null,
   );
+
   const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
   const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<Konva.Image>(null);
@@ -371,13 +371,6 @@ const VideoPreview: React.FC<
     sharpness: clip?.sharpness,
     noise: clip?.noise,
     vignette: clip?.vignette,
-    colorTintColor: clip?.colorTintColor,
-    colorTintIntensity: clip?.colorTintIntensity,
-    scanLines: clip?.scanLines,
-    chromaticAberration: clip?.chromaticAberration,
-    interlace: clip?.interlace,
-    pixelate: clip?.pixelate,
-    jitter: clip?.jitter,
   });
 
   // Use ref to store current applicators to avoid callback recreation
@@ -486,13 +479,6 @@ const VideoPreview: React.FC<
       sharpness: clip?.sharpness,
       noise: clip?.noise,
       vignette: clip?.vignette,
-      colorTintColor: clip?.colorTintColor,
-      colorTintIntensity: clip?.colorTintIntensity,
-      scanLines: clip?.scanLines,
-      chromaticAberration: clip?.chromaticAberration,
-      interlace: clip?.interlace,
-      pixelate: clip?.pixelate,
-      jitter: clip?.jitter,
     };
     applicatorsRef.current = applicators;
   }, [
@@ -551,11 +537,16 @@ const VideoPreview: React.FC<
         rectWidth,
         rectHeight,
       );
-      
+
       // Have cached info; force immediate redraw
       lastRenderedFrameRef.current = -1;
     }
-  }, [selectedAssetId, rectWidth, rectHeight, setMediaInfoAndBump]);
+  }, [
+    selectedAssetId,
+    rectWidth,
+    rectHeight,
+    setMediaInfoAndBump,
+  ]);
 
 
   // Compute aspect-fit display size and offsets within the preview rect
@@ -705,19 +696,40 @@ const VideoPreview: React.FC<
       // Apply masks before running filters/applicators so downstream operations see masked pixels
 
       const maskedCanvas = toolRef.current !== "mask" ? applyMaskRef.current(workingCanvas, maskFrame) : workingCanvas;
-      let processedCanvas = maskedCanvas;
+      if (maskedCanvas !== workingCanvas) {
+        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+        try {
+          workingCtx.drawImage(
+            maskedCanvas,
+            0,
+            0,
+            workingCanvas.width,
+            workingCanvas.height,
+          );
+        } catch {}
+      }
 
       // Apply WebGL filters for better performance (fast enough for real-time playback)
-      // Use passthrough mode to keep filter output on GPU/canvas chain.
-      processedCanvas = applyFiltersRef.current(
-        processedCanvas,
-        filterParamsRef.current,
-        { output: "passthrough" },
-      );
+      // Use ref values to avoid callback recreation on filter/applicator changes
+      applyFiltersRef.current(workingCanvas, filterParamsRef.current);
+
+      // Apply applicators to canvas
+      let processedCanvas = workingCanvas;
 
       for (const applicator of applicatorsRef.current) {
         const result = applicator.apply(processedCanvas);
-        if (result) processedCanvas = result;
+        // Ensure result is copied back to working canvas for chaining
+        if (result !== processedCanvas) {
+          workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+          workingCtx.drawImage(
+            result,
+            0,
+            0,
+            workingCanvas.width,
+            workingCanvas.height,
+          );
+          processedCanvas = workingCanvas;
+        }
       }
 
       // Always draw the final processed result back to display canvas
@@ -890,31 +902,6 @@ const VideoPreview: React.FC<
     ],
   );
 
-  // Debounced worker seek for fast scrubbing (non-accurate seeks).
-  // On Windows, each worker seek message triggers expensive D3D11VA decoder
-  // operations. Without debouncing, rapid focusFrame updates (10-60/sec during
-  // timeline scrubbing) flood the worker with seeks, each partially initialising
-  // before being cancelled. A 60ms window collapses rapid scrub events into a
-  // single seek call, dramatically reducing churn while still feeling responsive.
-  // Accurate seeks (settle / explicit frame locks) bypass the debounce entirely.
-  const debouncedSeekRef = useRef<ReturnType<typeof _.debounce> | null>(null);
-  useEffect(() => {
-    debouncedSeekRef.current = _.debounce(
-      (logicalId: string, timestamp: number) => {
-        // Guard: if playback started during the debounce window, skip the seek.
-        if (isPlayingRef.current) return;
-        decoderManager.seek(logicalId, timestamp, false).catch(() => {});
-      },
-      60,
-      { leading: false, trailing: true },
-    );
-    return () => {
-      debouncedSeekRef.current?.cancel();
-    };
-    // Re-create whenever the decoder manager instance changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [decoderManager]);
-
   const seekToCurrentFrame = useCallback(
     async (isAccurateSeekNeededInput: boolean = false) => {
 
@@ -974,16 +961,7 @@ const VideoPreview: React.FC<
 
       const logicalId = makeDecoderId(targetAssetId);
 
-      if (isAccurateSeekNeededInput) {
-        // Accurate seeks (settle / explicit frame lock) fire immediately so the
-        // user gets a sharp frame as soon as they stop scrubbing.
-        debouncedSeekRef.current?.cancel();
-        await decoderManager.seek(logicalId, timestamp, true);
-      } else {
-        // Fast scrub: collapse rapid seek requests into a single worker message
-        // to avoid flooding the D3D11VA decode pipeline on Windows.
-        debouncedSeekRef.current?.(logicalId, timestamp);
-      }
+      await decoderManager.seek(logicalId, timestamp, isAccurateSeekNeededInput);
 
       activeDecoderAssetIdRef.current = logicalId;
 
@@ -1050,6 +1028,7 @@ const VideoPreview: React.FC<
             timestamp: number;
             duration: number;
           }) => {
+            console.log("onFrame!!!!", data);
             drawWrappedCanvas(data, decoderMaskFrameRef.current);
           };
 
@@ -1068,7 +1047,7 @@ const VideoPreview: React.FC<
             }
           } else {
             const activeProject = getActiveProject();
-            await decoderManager.addAsset(asset, {
+            decoderManager.addAsset(asset, {
               mediaInfo: info,
               videoDecoderConfig: config,
               folderUuid: activeProject?.folderUuid,
@@ -1123,6 +1102,7 @@ const VideoPreview: React.FC<
 
     if (!Number.isFinite(clipFps) || clipFps <= 0) return;
     if (!Number.isFinite(projectFps) || projectFps <= 0) return;
+
 
     const { startTime, endTime, startIdx } = calculateIterateRange(
       currentFrame,
@@ -1241,30 +1221,12 @@ const VideoPreview: React.FC<
               skipDrawRef.current = true;
               return;
             }
-            // If we're ahead of the timeline, wait until the timeline catches up.
-            // On Windows the DWM compositor can delay RAF callbacks by one or
-            // more vsync intervals (16-33ms), causing the decoder to stall
-            // indefinitely when a frame arrives just before a compositor pause.
-            // We use a deadline-aware loop: if the RAF hasn't fired within
-            // 1.5× the expected frame interval, we break out anyway so playback
-            // never stalls under compositor jitter.
-            if (sampleIdx > (localFocus = computeLocalFocusMedia())) {
-              const frameBudgetMs = (1000 / Math.max(1, projectFps)) * 1.5;
-              const deadline = performance.now() + frameBudgetMs;
-              await new Promise<void>((resolve) => {
-                const check = () => {
-                  if (
-                    !checkCancel() ||
-                    sampleIdx <= computeLocalFocusMedia() ||
-                    performance.now() >= deadline
-                  ) {
-                    resolve();
-                  } else {
-                    requestAnimationFrame(check);
-                  }
-                };
-                requestAnimationFrame(check);
-              });
+            // If we're ahead of the timeline, wait until the timeline catches up (sync to rAF)
+            while (sampleIdx > (localFocus = computeLocalFocusMedia())) {
+              if (!checkCancel()) return;
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => resolve()),
+              );
             }
           }
 
@@ -1385,17 +1347,45 @@ const VideoPreview: React.FC<
 
           // Apply masks before filters so masked pixels feed the rest of the pipeline
           const maskedCanvas = toolRef.current !== "mask" ? applyMaskRef.current(workingCanvas, maskFrameForCurrentFocus) : workingCanvas;
-          let processedCanvas = maskedCanvas;
+          if (maskedCanvas !== workingCanvas) {
+            workingCtx.clearRect(
+              0,
+              0,
+              workingCanvas.width,
+              workingCanvas.height,
+            );
+            workingCtx.drawImage(
+              maskedCanvas,
+              0,
+              0,
+              workingCanvas.width,
+              workingCanvas.height,
+            );
+          }
 
           // Apply filters to the clean frame
-          processedCanvas = applyFilters(processedCanvas, filterParamsRef.current, {
-            output: "passthrough",
-          });
+          applyFilters(workingCanvas, filterParamsRef.current);
 
           // Apply applicators (filter clips from layers above)
+          let processedCanvas = workingCanvas;
           for (const applicator of applicatorsRef.current) {
             const result = applicator.apply(processedCanvas);
-            if (result) processedCanvas = result;
+            if (result !== processedCanvas) {
+              workingCtx.clearRect(
+                0,
+                0,
+                workingCanvas.width,
+                workingCanvas.height,
+              );
+              workingCtx.drawImage(
+                result,
+                0,
+                0,
+                workingCanvas.width,
+                workingCanvas.height,
+              );
+              processedCanvas = workingCanvas;
+            }
           }
 
           // Always draw final result back to display canvas
@@ -1419,13 +1409,6 @@ const VideoPreview: React.FC<
     clip?.sharpness,
     clip?.noise,
     clip?.vignette,
-    clip?.colorTintColor,
-    clip?.colorTintIntensity,
-    clip?.scanLines,
-    clip?.chromaticAberration,
-    clip?.interlace,
-    clip?.pixelate,
-    clip?.jitter,
     isPlaying,
     applyFilters,
     applicators,

@@ -216,14 +216,14 @@ const ProjectCard: React.FC<{ project: ProjectSettings }> = ({ project }) => {
 
   return (
     <div 
-      className="group relative flex shadow flex-col w-full h-fit bg-brand-background/80 hover:bg-brand-background/70 rounded-lg p-3 border border-brand-light/5 hover:border-brand-light/20 transition-all duration-200 cursor-pointer"
+      className="group relative flex shadow-md flex-col w-full h-fit bg-brand hover:bg-brand/70 rounded-md border border-brand-light/1  hover:border-brand-light/15 transition-all duration-200 cursor-pointer"
       onClick={() => {
         // When clicked, set as active project and launch
         setActiveProjectId(project.id);
         launchMainWindow();
       }}
     >
-      <div className="w-full aspect-video bg-black/40 rounded-md overflow-hidden relative mb-3">
+      <div className="w-full aspect-video bg-black/40 rounded-t-md overflow-hidden relative mb-3 border-b border-brand-light/5">
         {coverSrc ? (
           <img src={coverSrc} alt={project.name} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
         ) : (
@@ -232,7 +232,7 @@ const ProjectCard: React.FC<{ project: ProjectSettings }> = ({ project }) => {
           </div>
         )}
       </div>
-      <div className="flex flex-col px-1 gap-1">
+      <div className="flex flex-col  gap-1 px-4 pb-3 ">
         <span className="text-[13px] text-brand-light truncate text-start">
           {project.name}
         </span>
@@ -899,13 +899,13 @@ const Launcher: React.FC = () => {
             setNewProjectName(getNextDefaultProjectName());
             setCreateOpen(true);
           }}
-          className="flex items-center gap-2 w-fit bg-brand-background border mt-8 mr-12 border-brand-light/10 text-brand-light rounded-md px-5 py-2 hover:bg-brand/60 hover:border-brand-light/20 transition-colors duration-200"
+          className="flex items-center gap-2 w-fit bg-brand border mt-8 mr-12 border-brand-light/10 text-brand-light rounded-[6px] px-5 py-2 hover:bg-brand/60 hover:border-brand-light/20 transition-colors duration-200"
         >
           <LuPlus className="w-4 h-4" />
           <span className="text-[12.5px] font-medium">Create</span>
         </button>
       </div>
-      <div className="absolute bottom-0 left-0 right-0 px-12 py-6 border-t z-50 bg-brand-background-dark border-brand-light/10 flex items-center justify-between">
+      <div className="absolute bottom-0 left-0 right-0 px-12 py-5 bg-black z-50  border-brand-light/10 flex items-center justify-between">
         <button
           type="button"
           onClick={() => {
@@ -920,9 +920,9 @@ const Launcher: React.FC = () => {
           </span>
         </button>
         <button 
-          onClick={() => void onLaunch()}
+          onClick={() => void onLaunch()} 
           disabled={isChecking || isLaunching || !canLaunch}
-          className="flex items-center gap-2 w-fit bg-brand-accent-two-shade text-brand-light rounded-md px-6 py-2 hover:bg-brand-accent-shade transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-brand-accent-two-shade"
+          className="flex items-center gap-2 w-fit bg-linear-to-br from-brand-accent-two-shade to-brand-accent-light text-brand-light rounded-md px-6 py-2 hover:bg-brand-accent-shade transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-brand-accent-two-shade"
         >
           <PiRocketLaunchFill className="w-3.5 h-3.5" />
           <span className="text-[13px] font-medium text-brand-light">
@@ -945,7 +945,7 @@ const Launcher: React.FC = () => {
                 <button
                   type="button"
                   aria-label={`Delete ${project.name}`}
-                  className="absolute bottom-2.5 right-2.5 p-1 rounded hover:bg-brand-light/5"
+                  className="absolute bottom-2.5 right-2.5 p-1.5 rounded hover:bg-brand-light/5 group"
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -953,7 +953,7 @@ const Launcher: React.FC = () => {
                     setDeleteOpen(true);
                   }}
                 >
-                  <LuTrash className="w-3.5 h-3.5 text-brand-light/40 hover:text-brand-light/60 transition-colors duration-200" />
+                  <LuTrash className="w-3.5 h-3.5 text-brand-light/60 group-hover:text-brand-lighter transition-colors duration-200" />
                 </button>
               </div>
             ))}
@@ -998,12 +998,12 @@ const Launcher: React.FC = () => {
               disabled={isCreatingProject}
             />
           </div>
-          <DialogFooter className="gap-2 sm:gap-0">
+          <DialogFooter className="gap-2 sm:gap-0 ">
             <button
               type="button"
               disabled={isCreatingProject}
               onClick={() => setCreateOpen(false)}
-              className="dark border border-brand-light/15 text-brand-light hover:bg-brand-light/10 text-[11.5px] font-medium px-5 h-8 rounded-[6px] duration-200"
+              className="bg-brand-background-light border-brand-light/10 text-brand-light hover:bg-brand-light/10 border text-[11.5px] font-medium px-5 h-8 rounded-[6px] duration-200"
             >
               Cancel
             </button>
@@ -1045,7 +1045,7 @@ const Launcher: React.FC = () => {
           <AlertDialogFooter>
             <AlertDialogCancel
               disabled={isDeletingProject}
-              className="dark border-brand-light/15 text-brand-light hover:bg-brand-light/10 text-[11.5px] font-medium px-5 h-8 rounded-[6px] duration-200"
+              className="bg-brand-background-light border-brand-light/10 text-brand-light hover:bg-brand-light/10 text-[11.5px] font-medium px-5 h-8 rounded-[4px] duration-200"
             >
               Cancel
             </AlertDialogCancel>
@@ -1055,7 +1055,7 @@ const Launcher: React.FC = () => {
                 e.preventDefault();
                 void handleConfirmDelete();
               }}
-              className="bg-red-500/80 hover:bg-red-500/70 text-brand-light text-[11.5px] font-medium px-5 h-8 rounded-[6px] duration-200"
+              className="bg-red-500/80 hover:bg-red-500/70 border border-brand-light/10 text-brand-light text-[11.5px] font-medium px-5 h-8 rounded-[4px] duration-200"
             >
               {isDeletingProject ? "Deleting..." : "Delete"}
             </AlertDialogAction>

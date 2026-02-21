@@ -24,7 +24,7 @@ import { KonvaEventObject } from "konva/lib/Node";
 import { BASE_LONG_SIDE, DEFAULT_FPS } from "@/lib/settings";
 
 import _ from "lodash";
-import VideoPreview from "./clips/VideoPreview5";
+import VideoPreview from "./clips/VideoPreview";
 import AudioPreview from "./clips/AudioPreview";
 import ImagePreview from "./clips/ImagePreview";
 import ShapePreview from "./clips/ShapePreview";
@@ -518,6 +518,30 @@ const Preview: React.FC<PreviewProps> = () => {
     // This keeps portrait sizes from becoming excessively tall.
     return { rectWidth: baseShortSide * ratio, rectHeight: baseShortSide };
   }, [aspectRatio.width, aspectRatio.height]);
+
+  const holeRect = useMemo(() => {
+    const x = Math.round(position.x);
+    const y = Math.round(position.y);
+    const width = Math.round(rectWidth * scale);
+    const height = Math.round(rectHeight * scale);
+
+    const safeW = Math.max(0, size.width);
+    const safeH = Math.max(0, size.height);
+
+    const left = Math.max(0, Math.min(safeW, x));
+    const top = Math.max(0, Math.min(safeH, y));
+    const right = Math.max(0, Math.min(safeW, x + width));
+    const bottom = Math.max(0, Math.min(safeH, y + height));
+
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+    };
+  }, [position.x, position.y, rectWidth, rectHeight, scale, size.width, size.height]);
 
   // Helper: recenter all clips for a given rect size
   const recenterAllClips = useCallback(
@@ -2771,11 +2795,45 @@ const Preview: React.FC<PreviewProps> = () => {
         <FullscreenPreview onExit={() => setIsFullscreen(false)} />
       ) : (
         <div className="w-full h-full relative" ref={containerRef}>
+          {/* Keep preview surroundings opaque while leaving the aspect rect transparent ("hole"). */}
+          <div className="absolute inset-0 pointer-events-none z-0">
+            <div
+              className="absolute bg-brand-background"
+              style={{ left: 0, top: 0, width: "100%", height: holeRect.top }}
+            />
+            <div
+              className="absolute bg-brand-background"
+              style={{
+                left: 0,
+                top: holeRect.top,
+                width: holeRect.left,
+                height: holeRect.height,
+              }}
+            />
+            <div
+              className="absolute bg-brand-background"
+              style={{
+                left: holeRect.right,
+                top: holeRect.top,
+                width: Math.max(0, size.width - holeRect.right),
+                height: holeRect.height,
+              }}
+            />
+            <div
+              className="absolute bg-brand-background"
+              style={{
+                left: 0,
+                top: holeRect.bottom,
+                width: "100%",
+                height: Math.max(0, size.height - holeRect.bottom),
+              }}
+            />
+          </div>
           <Stage
             ref={stageRef}
             width={size.width}
             height={size.height}
-            className="bg-brand-background"
+            className="bg-transparent relative z-10"
             onWheel={handleWheel}
             onMouseDown={onMouseDown}
             onMouseMove={onMouseMove}
@@ -2800,7 +2858,7 @@ const Preview: React.FC<PreviewProps> = () => {
                   height={rectHeight}
                   // Keep the stage background visible so clips with transparency
                   // don't appear to have a "black screen" behind them.
-                  fill={"rgb(0,0,0)"}
+                  fill={"rgb(0,0,0,0)"}
                   onTransform={() => {
                     const node = aspectRectRef.current;
                     if (!node) return;
@@ -3086,6 +3144,7 @@ const Preview: React.FC<PreviewProps> = () => {
           {sortClips(filterClips(clips, true)).map((clip: AnyClipProps) => {
 
             const isActive = clipWithinFrame(clip, focusFrame, false, 0);
+
 
             if (
               clip.type === "audio" ||

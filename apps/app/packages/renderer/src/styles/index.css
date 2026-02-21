@@ -26,10 +26,17 @@
 }
 
 body {
-  background: #000000;
+  background: transparent;
+  margin: 0;
   /* disable scrollbar */
   overflow: hidden;
   font-family: var(--font-inter);
+}
+
+html,
+body,
+#root {
+  background: transparent !important;
 }
 
 button {
@@ -204,7 +211,7 @@ input {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
   }
 }
 

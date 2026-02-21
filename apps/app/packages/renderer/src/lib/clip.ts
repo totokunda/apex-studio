@@ -1171,16 +1171,18 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
       return { clips: resolvedClips, clipDuration, assets: prunedAssets };
     });
   },
-  addClip: (clip: AnyClipProps) =>
+  addClip: (clip: AnyClipProps) => {
     set((state) => {
       const newClips = [...state.clips, clip];
       const resolvedClips = resolveOverlaps(newClips);
       const clipDuration = calculateTotalClipDuration(resolvedClips);
       get()._updateZoomLevel(resolvedClips, clipDuration);
       const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
+
       return { clips: resolvedClips, clipDuration, assets: prunedAssets };
-    }),
-  removeClip: (clipId: string) =>
+    });
+  },
+  removeClip: (clipId: string) => {
     set((state) => {
       const clipToDelete = state.clips.find((c) => c.clipId === clipId);
 
@@ -1240,8 +1242,11 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
       const clipDuration = calculateTotalClipDuration(resolvedClips);
       const prunedAssets = pruneAssetsForClips(state.assets, resolvedClips);
       get()._updateZoomLevel(resolvedClips, clipDuration);
+
       return { clips: resolvedClips, clipDuration, assets: prunedAssets };
-    }),
+    });
+
+  },
   updateClip: (clipId: string, clipToUpdate: Partial<AnyClipProps>) =>
     set((state) => {
       const index = state.clips.findIndex((c) => c.clipId === clipId);
@@ -1495,20 +1500,32 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
 
     if (side === "right") {
       // Resize right edge - adjust current clip's end and shift all clips after it
-      const oldEndFrame = currentClip.endFrame || 0;
-      const newEndFrame = Math.max((currentClip.startFrame || 0) + 1, newFrame);
+      const start = Math.max(0, currentClip.startFrame || 0);
+      const oldEndFrame = Math.max(start + 1, currentClip.endFrame || start + 1);
+      const trimEnd = Number(currentClip.trimEnd ?? 0);
+      let newEndFrame = Math.max(start + 1, newFrame);
+      const maxAllowedEnd = oldEndFrame - trimEnd;
+      if (Number.isFinite(maxAllowedEnd)) {
+        newEndFrame = Math.min(newEndFrame, maxAllowedEnd);
+      }
       const frameDelta = newEndFrame - oldEndFrame;
 
-      if (frameDelta + (currentClip.trimEnd || 0) > 0) {
+      if (frameDelta + trimEnd > 0) {
         return false;
       }
     } else if (side === "left") {
       // Resize left edge - adjust current clip's start and shift all clips before it
-      const oldStartFrame = currentClip.startFrame || 0;
-      const newStartFrame = Math.min((currentClip.endFrame || 0) - 1, newFrame);
-      let frameDelta = newStartFrame - oldStartFrame;
+      const oldStartFrame = Math.max(0, currentClip.startFrame || 0);
+      const end = Math.max(currentClip.endFrame || 0, oldStartFrame + 1);
+      const trimStart = Number(currentClip.trimStart ?? 0);
+      let newStartFrame = Math.min(end - 1, newFrame);
+      const minAllowedStart = oldStartFrame - trimStart;
+      if (Number.isFinite(minAllowedStart)) {
+        newStartFrame = Math.max(newStartFrame, minAllowedStart);
+      }
+      const frameDelta = newStartFrame - oldStartFrame;
 
-      if (frameDelta + (currentClip.trimStart || 0) < 0) {
+      if (frameDelta + trimStart < 0) {
         return false;
       }
     }
@@ -1527,11 +1544,14 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         return { clips: state.clips };
       }
       const newClips = [...state.clips];
+      const currentClipIndex = newClips.findIndex((c) => c.clipId === clipId);
+      if (currentClipIndex === -1) return { clips: state.clips };
 
       if (side === "right") {
         // Resize right edge - adjust current clip's end and shift all clips after it
-        const oldEndFrame = currentClip.endFrame || 0;
         const start = Math.max(0, currentClip.startFrame || 0);
+        const oldEndFrame = Math.max(start + 1, currentClip.endFrame || start + 1);
+        const trimEnd = Number(currentClip.trimEnd ?? 0);
         let desiredEndFrame = Math.max(start + 1, newFrame);
 
         // Clamp by model min/max duration if applicable
@@ -1567,24 +1587,29 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
           }
         } catch {}
 
+        const maxAllowedEnd = oldEndFrame - trimEnd;
+        if (Number.isFinite(maxAllowedEnd)) {
+          desiredEndFrame = Math.min(desiredEndFrame, maxAllowedEnd);
+        }
         const frameDelta = desiredEndFrame - oldEndFrame;
- 
-        
-        if (frameDelta + (currentClip.trimEnd || 0) > 0) {
+        if (frameDelta === 0) {
+          return { clips: state.clips };
+        }
+        if (frameDelta + trimEnd > 0) {
           return { clips: state.clips };
         }
 
-        const currentClipIndex = newClips.findIndex((c) => c.clipId === clipId);
         newClips[currentClipIndex] = {
           ...currentClip,
           endFrame: desiredEndFrame,
-          trimEnd: frameDelta + (currentClip.trimEnd || 0),
+          trimEnd: frameDelta + trimEnd,
         };
       
       } else if (side === "left") {
         // Resize left edge - adjust current clip's start and shift all clips before it
-        const oldStartFrame = currentClip.startFrame || 0;
+        const oldStartFrame = Math.max(0, currentClip.startFrame || 0);
         const end = Math.max(currentClip.endFrame || 0, oldStartFrame + 1);
+        const trimStart = Number(currentClip.trimStart ?? 0);
         let desiredStartFrame = Math.min(end - 1, newFrame);
 
         // Clamp by model min/max duration if applicable
@@ -1620,27 +1645,24 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
           }
         } catch {}
 
-        let frameDelta = desiredStartFrame - oldStartFrame;
+        const minAllowedStart = oldStartFrame - trimStart;
+        if (Number.isFinite(minAllowedStart)) {
+          desiredStartFrame = Math.max(desiredStartFrame, minAllowedStart);
+        }
+        const frameDelta = desiredStartFrame - oldStartFrame;
 
-        if (frameDelta + (currentClip.trimStart || 0) < 0) {
+        if (frameDelta === 0) {
+          return { clips: state.clips };
+        }
+        if (frameDelta + trimStart < 0) {
           return { clips: state.clips };
         }
 
-        if (frameDelta == 0 && (currentClip.trimStart || 0) > 0) {
-          frameDelta = Math.max(
-            0,
-            Math.min(1, (currentClip.trimStart || 0) - 1),
-          );
-        } else {
-          const currentClipIndex = newClips.findIndex(
-            (c) => c.clipId === clipId,
-          );
-          newClips[currentClipIndex] = {
-            ...currentClip,
-            startFrame: desiredStartFrame,
-            trimStart: frameDelta + (currentClip.trimStart || 0),
-          };
-        }
+        newClips[currentClipIndex] = {
+          ...currentClip,
+          startFrame: desiredStartFrame,
+          trimStart: frameDelta + trimStart,
+        };
       }
   
       const resolvedClips = resolveOverlaps(newClips);

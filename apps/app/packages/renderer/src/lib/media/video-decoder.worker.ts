@@ -3,8 +3,10 @@ import {
   EncodedPacket,
   Input,
   UrlSource,
-  ALL_FORMATS
+  ALL_FORMATS,
+  InputTrack
 } from "mediabunny";
+import { mergeAlphaIntoColor } from "./merge-alpha";
 // Minimal asset shape expected from the main thread. This mirrors the core
 // fields of the renderer-side `Asset` type but is kept local to the worker
 // for decoupling and to avoid importing renderer modules here.
@@ -100,11 +102,18 @@ function fileURLToPathInWorker(raw: string): string {
   }
 }
 
-// NOTE: The previous isAppUrlDefinitely404 HEAD-request check was removed.
-// On Windows, each IPC round-trip to the app:// protocol handler adds 20-200ms
-// of latency per call, and two sequential HEAD fetches per decoder init caused
-// visible seek/scrub lag. mediabunny handles missing/invalid URLs gracefully
-// on its own, so we let it fail naturally instead of pre-checking.
+// Best-effort helper to quickly detect a 404 for an app:// URL before we hand
+// it off to mediabunny. If the HEAD request itself fails (e.g. protocol does
+// not support HEAD), we treat it as "unknown" and *do not* block source
+// creation – only an explicit 404 status will cause us to skip this URL.
+async function isAppUrlDefinitely404(url: URL): Promise<boolean> {
+  try {
+    const res = await fetch(url.toString(), { method: "HEAD" });
+    return res.status === 404;
+  } catch {
+    return false;
+  }
+}
 
 // State
 type AssetState = {
@@ -112,6 +121,12 @@ type AssetState = {
   alphaDecoder: VideoDecoder | null;
   sink: EncodedPacketSink | null;
   input: Input | null;
+  mergeGlCanvas:      OffscreenCanvas | null;
+  mergeGl:            WebGL2RenderingContext | null;
+  mergeGlProgram:     WebGLProgram | null;
+  mergeGlTexColor:    WebGLTexture | null;
+  mergeGlTexAlpha:    WebGLTexture | null;
+  mergeGlInitialized: boolean;
 
 // Caching
   cachedDecodedFrames: Map<number, VideoFrame>;
@@ -154,22 +169,19 @@ type AssetState = {
 
 const assetStates = new Map<string, AssetState>();
 
-// Shared tuning constants
-const MAX_CACHE_SIZE = 240; // Keep ~2 seconds of frames (at 30fps)
-// Windows D3D11VA hardware decoders have higher per-frame latency than macOS
-// VideoToolbox, so the decode pipeline needs more in-flight frames to stay
-// full and avoid starvation gaps during playback. We detect Windows via the
-// user-agent string (workers don't have navigator.platform in all runtimes,
-// but navigator.userAgent is reliable in Electron's renderer workers).
-const IS_WINDOWS =
-  typeof navigator !== "undefined" &&
-  /windows/i.test(navigator.userAgent || "");
-const MAX_ITERATION_IN_FLIGHT = IS_WINDOWS ? 8 : 4;
-const MAX_DECODE_QUEUE_SIZE = IS_WINDOWS ? 12 : 8;
+// these can be reused across assets
+const packetSinks = new Map<string, EncodedPacketSink>();
+
+const MAX_CACHE_SIZE = 16;
+
+const MAX_ITERATION_IN_FLIGHT = 4;
+const MAX_DECODE_QUEUE_SIZE = 8;
 const MAX_DECODE_QUEUE_WAIT_MS = 500;
 const MAX_RESYNC_ATTEMPTS = 4;
 const DECODE_QUEUE_SLEEP_MS = 5;
 const KEYFRAME_REQUIRED_RE = /key\s*frame/i;
+
+const DIAGNOSTIC_TICK_MS = 2000;
 
 // Emit a one-time debug message as soon as the worker script is evaluated so
 // we can confirm that this exact file is being loaded by the main thread.
@@ -184,6 +196,98 @@ try {
   // Best-effort only.
 }
 
+function getDecoderState(decoder: VideoDecoder | null): string {
+  if (!decoder) return "none";
+  return (decoder.state as string) || "unknown";
+}
+
+
+function getOrCreatePacketSink(assetId: string, videoTrack: InputTrack): EncodedPacketSink {
+  let sink = packetSinks.get(assetId);
+  if (!sink) {
+    sink = new EncodedPacketSink(videoTrack);
+    packetSinks.set(assetId, sink);
+  }
+  return sink;
+}
+
+function emitDiagnostics(event: string, assetId?: string, requestId?: number) {
+  const assets: Array<Record<string, any>> = [];
+  let totalFrameCache = 0;
+  let totalKeyPacketCache = 0;
+  let totalPendingAlpha = 0;
+  let totalPendingColor = 0;
+  let totalIterationInFlight = 0;
+
+  for (const [id, state] of assetStates) {
+    const frameCache = state.cachedDecodedFrames.size;
+    const keyPacketCache = state.keyPacketCache.size;
+    const pendingAlpha = state.alphaFramesByTimestamp.size;
+    const pendingColor = state.pendingColorFramesByTimestamp.size;
+    const iterationInFlight = state.iterationInFlight;
+
+    totalFrameCache += frameCache;
+    totalKeyPacketCache += keyPacketCache;
+    totalPendingAlpha += pendingAlpha;
+    totalPendingColor += pendingColor;
+    totalIterationInFlight += iterationInFlight;
+
+    assets.push({
+      assetId: id,
+      frameCache,
+      keyPacketCache,
+      pendingAlpha,
+      pendingColor,
+      iterationInFlight,
+      seekTargetTimestamp: state.seekTargetTimestamp,
+      decoderState: getDecoderState(state.decoder),
+      decoderQueueSize:
+        state.decoder && (state.decoder.state as string) !== "closed"
+          ? state.decoder.decodeQueueSize
+          : 0,
+      alphaDecoderState: getDecoderState(state.alphaDecoder),
+      alphaDecoderQueueSize:
+        state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed"
+          ? state.alphaDecoder.decodeQueueSize
+          : 0,
+      showingPreview: state.showingPreview,
+      customOutputHandler: !!state.customOutputHandler,
+      hasPendingSeekFrame: !!state.pendingSeekFrame,
+      currentRequestId: state.currentRequestId,
+    });
+  }
+
+  try {
+    // @ts-ignore
+    postMessage({
+      type: "debug",
+      scope: "video-decoder-worker",
+      event: "diag-state",
+      assetId,
+      requestId,
+      payload: {
+        event,
+        nowMs: performance.now(),
+        assetCount: assetStates.size,
+        totals: {
+          frameCache: totalFrameCache,
+          keyPacketCache: totalKeyPacketCache,
+          pendingAlpha: totalPendingAlpha,
+          pendingColor: totalPendingColor,
+          iterationInFlight: totalIterationInFlight,
+        },
+        assets,
+      },
+    } satisfies WorkerResponse);
+  } catch {
+    // Best-effort only.
+  }
+}
+
+setInterval(() => {
+  emitDiagnostics("tick");
+}, DIAGNOSTIC_TICK_MS);
+
 function getOrCreateState(assetId: string): AssetState {
   let state = assetStates.get(assetId);
   if (!state) {
@@ -192,6 +296,12 @@ function getOrCreateState(assetId: string): AssetState {
       alphaDecoder: null,
       sink: null,
       input: null,
+      mergeGlCanvas: null,
+      mergeGl: null,
+      mergeGlProgram: null,
+      mergeGlTexColor: null,
+      mergeGlTexAlpha: null,
+      mergeGlInitialized: false,
       cachedDecodedFrames: new Map<number, VideoFrame>(),
       keyPacketCache: new Map<number, EncodedPacket>(),
       isCachingKeyPackets: false,
@@ -229,72 +339,9 @@ function resetAlphaMergeQueues(state: AssetState) {
   state.pendingColorFramesByTimestamp.clear();
 }
 
-function ensureMergeCanvases(state: AssetState, width: number, height: number) {
-  if (
-    !state.mergeCanvas ||
-    state.mergeCanvas.width !== width ||
-    state.mergeCanvas.height !== height
-  ) {
-    state.mergeCanvas = new OffscreenCanvas(width, height);
-    state.mergeCtx = state.mergeCanvas.getContext("2d", {
-      willReadFrequently: true,
-    }) as OffscreenCanvasRenderingContext2D | null;
-  }
-  if (
-    !state.alphaCanvas ||
-    state.alphaCanvas.width !== width ||
-    state.alphaCanvas.height !== height
-  ) {
-    state.alphaCanvas = new OffscreenCanvas(width, height);
-    state.alphaCtx = state.alphaCanvas.getContext("2d", {
-      willReadFrequently: true,
-    }) as OffscreenCanvasRenderingContext2D | null;
-  }
-}
 
-function mergeAlphaIntoColor(
-  state: AssetState,
-  colorFrame: VideoFrame,
-  alphaFrame: VideoFrame,
-): VideoFrame {
-  const width = colorFrame.displayWidth || (colorFrame as any).codedWidth || 0;
-  const height =
-    colorFrame.displayHeight || (colorFrame as any).codedHeight || 0;
-  if (!width || !height) {
-    // Fallback: if we can't determine dimensions, just return color as-is.
-    // Caller will close `alphaFrame`.
-    return colorFrame;
-  }
 
-  ensureMergeCanvases(state, width, height);
-  const ctx = state.mergeCtx;
-  const aCtx = state.alphaCtx;
-  if (!ctx || !aCtx || !state.mergeCanvas || !state.alphaCanvas) {
-    return colorFrame;
-  }
 
-  // Render both frames into RGBA buffers via 2D canvas drawImage conversion.
-  ctx.clearRect(0, 0, width, height);
-  ctx.drawImage(colorFrame as any, 0, 0, width, height);
-  const colorImage = ctx.getImageData(0, 0, width, height);
-
-  aCtx.clearRect(0, 0, width, height);
-  aCtx.drawImage(alphaFrame as any, 0, 0, width, height);
-  const alphaImage = aCtx.getImageData(0, 0, width, height);
-
-  const c = colorImage.data;
-  const a = alphaImage.data;
-  // Use the alpha frame's luminance (red channel after drawImage) as the output alpha.
-  for (let i = 0; i < c.length; i += 4) {
-    c[i + 3] = a[i]; // take R as alpha (grayscale)
-  }
-
-  ctx.putImageData(colorImage, 0, 0);
-  return new VideoFrame(state.mergeCanvas, {
-    timestamp: colorFrame.timestamp,
-    duration: colorFrame.duration ?? undefined,
-  });
-}
 
 function createAlphaFrameHandler(assetId: string) {
   return (alphaFrame: VideoFrame) => {
@@ -406,6 +453,7 @@ function ensureAlphaDecoder(state: AssetState, assetId: string) {
 }
 
 function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
+  
   const state = assetStates.get(assetId);
   if (!state) {
     frame.close();
@@ -418,7 +466,6 @@ function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
   }
 
   const frameTime = frame.timestamp / 1e6;
-
   // 1. Cache
   cacheFrame(state, frame);
 
@@ -446,6 +493,7 @@ function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
     if (frameTime >= state.seekTargetTimestamp - 0.04) {
       state.seekDone = true;
       postFrame(assetId, frame, state.currentRequestId);
+      console.log("dispatchDecodedFrame", assetId, frame);
       state.seekTargetTimestamp = null;
       if (state.pendingSeekFrame) {
         state.pendingSeekFrame.close();
@@ -672,12 +720,6 @@ async function getNextKeyPacketSafe(
 }
 
 function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean {
-  // Timing instrumentation: measure how long a GPU decoder reset/configure takes.
-  // Visible in DevTools Performance tab or via:
-  //   performance.getEntriesByType("measure").filter(m => m.name.startsWith("gpu-reset"))
-  const resetMark = `gpu-reset-start-${assetId}-${performance.now().toFixed(0)}`;
-  performance.mark(resetMark);
-
   if (!state.config) return false;
   const decoder = ensureDecoderInstance(state, assetId);
   if (!decoder) return false;
@@ -697,7 +739,6 @@ function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean 
       state.config = fallbackConfig;
       decoder.configure(fallbackConfig as VideoDecoderConfig);
     } catch {
-      try { performance.measure(`gpu-reset-${assetId}`, resetMark); } catch { /* ignore */ }
       return false;
     }
   }
@@ -713,7 +754,6 @@ function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean 
     }
   }
 
-  try { performance.measure(`gpu-reset-${assetId}`, resetMark); } catch { /* ignore */ }
   return true;
 }
 
@@ -768,6 +808,7 @@ async function decodePacketSafe(
 // Message Listener
 self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
   const msg = e.data;
+
   // Mirror a tiny debug summary back to the main thread so that
   // activity in this worker is visible in the normal renderer console.
   try {
@@ -839,8 +880,7 @@ async function handleConfigure(
 ) {
   const { assetId, config: cfg } = msg;
   const id = assetId ?? cfg.asset.id;
-
-
+  
   if (!id) {
     throw new Error("configure message missing asset identifier");
   }
@@ -862,7 +902,6 @@ async function handleConfigure(
     cfg.userDataPath.length > 0 &&
     filePath.includes(cfg.userDataPath?.replace(/^\/+/, ""))
 
-
   // If the incoming asset path is explicitly rooted under Electron's userData
   // directory, prefer serving via app://user-data regardless of engine_results
   // naming. Otherwise, preserve the existing heuristic that favors apex-cache
@@ -876,6 +915,12 @@ async function handleConfigure(
     if (cfg.folderUuid && primarySourceDir === "apex-cache") {
       url.searchParams.set("folderUuid", cfg.folderUuid);
     }
+    // Skip this URL up-front if we *know* it returns a 404; otherwise fall
+    // back to the previous behavior and let mediabunny attempt to open it.
+    const is404 = await isAppUrlDefinitely404(url);
+    if (is404) {
+      throw new Error("Primary app:// URL returned 404");
+    }
     input = new Input({ formats, source: new UrlSource(url) });
   } catch (e) {
     try {
@@ -885,6 +930,10 @@ async function handleConfigure(
       const url = new URL(`app://${secondarySourceDir}/${filePath}`);
       if (cfg.folderUuid && secondarySourceDir === "apex-cache") {
         url.searchParams.set("folderUuid", cfg.folderUuid);
+      }
+      const is404 = await isAppUrlDefinitely404(url);
+      if (is404) {
+        throw new Error("Secondary app:// URL returned 404");
       }
       input = new Input({ formats, source: new UrlSource(url) });
     } catch (e) {
@@ -898,7 +947,7 @@ async function handleConfigure(
 
 
   // 2. Setup Sink
-  state.sink = new EncodedPacketSink(videoTrack);
+  state.sink = getOrCreatePacketSink(id, videoTrack);
 
   // 3. Setup Decoder
   // NOTE: Some TS lib.dom versions don't expose `alpha` on VideoDecoderConfig yet.
@@ -936,6 +985,9 @@ async function handleConfigure(
     }
   }
   void cacheKeyPackets(state);
+
+  emitDiagnostics("configure", id, requestId);
+
   postMessage({
     type: "ready",
     requestId,
@@ -949,13 +1001,9 @@ async function handleSeek(
   requestId: number,
   assetId?: string,
 ) {
-  // Performance instrumentation — visible in DevTools Performance tab and via
-  // performance.getEntriesByType("measure") in the console.
-  const seekPerfMark = `seek-start-${requestId}`;
-  performance.mark(seekPerfMark);
 
   const id = assetId;
-
+ 
   if (!id) return;
   const state = assetStates.get(id);
   if (!state || !state.sink || !state.config) return;
@@ -989,7 +1037,6 @@ async function handleSeek(
 
   // 1. Cache Hit
   const cached = findCachedFrame(state, timestamp);
-
 
   if (cached) {
     postFrame(id, cached, requestId);
@@ -1034,26 +1081,17 @@ async function handleSeek(
   let resyncAttempts = 0;
   let previewArmed = isFastScrubbing;
 
-  // Reset and configure the decoder once up-front, before the resync loop.
-  // Previously this was called on every loop iteration, which meant redundant
-  // GPU pipeline flushes on each resync attempt — very costly on Windows
-  // D3D11VA hardware decoders. We now only re-reset inside the loop when the
-  // decoder has actually closed mid-seek (rare error path).
-  if (!resetAndConfigureDecoders(state, id)) {
-    // @ts-ignore
-    postMessage({ type: "seekDone", requestId, assetId: id });
-    return;
-  }
+
+  console.log("seek", timestamp, forceAccurate, requestId, id);
 
   while (
     currentPacket &&
     state.currentRequestId === requestId &&
     resyncAttempts <= MAX_RESYNC_ATTEMPTS
   ) {
-    // Only re-reset if the decoder was closed during the previous iteration.
-    if (!state.decoder || (state.decoder.state as string) === "closed") {
-      if (!resetAndConfigureDecoders(state, id)) break;
-    }
+    if (!resetAndConfigureDecoders(state, id)) break;
+
+  
 
     const decodedKey = await decodePacketSafe(
       state,
@@ -1135,18 +1173,13 @@ async function handleSeek(
     state.pendingSeekFrame = null;
   }
 
-  // Measure total seek latency so it's visible in DevTools Performance tab.
-  // Read in console with: performance.getEntriesByType("measure").filter(m => m.name.startsWith("seek-"))
-  try {
-    performance.measure(`seek-latency-req${requestId}`, `seek-start-${requestId}`);
-  } catch { /* mark may have been GC'd; safe to ignore */ }
-
   // @ts-ignore
   postMessage({
     type: "seekDone",
     requestId,
     assetId: id,
   });
+  emitDiagnostics("seekDone", id, requestId);
 }
 
 async function handleIterate(
@@ -1161,6 +1194,8 @@ async function handleIterate(
     if (!state || !state.sink || !state.config) return;
     ensureDecoderInstance(state, id);
     if (!state.decoder) return;
+
+    console.log("handleIterate", startTime, endTime, requestId, id);
 
     state.currentRequestId = requestId;
     resetAlphaMergeQueues(state);
@@ -1220,27 +1255,12 @@ async function handleIterate(
         let currentPacket: EncodedPacket | null = initialPacket;
         let resyncAttempts = 0;
 
-        // Reset and configure the decoder once before entering the resync loop.
-        // Calling resetAndConfigureDecoders on every iteration was flushing the
-        // GPU decode pipeline unnecessarily on each resync attempt — extremely
-        // expensive on Windows D3D11VA hardware decoders and a primary cause of
-        // playback stutter. We now only re-reset inside the loop when the decoder
-        // has closed mid-iteration (a rare error recovery path).
-        if (!resetAndConfigureDecoders(state, id)) {
-          // @ts-ignore
-          postMessage({ type: "iterateDone", requestId, assetId: id });
-          return;
-        }
-
         while (
           currentPacket &&
           state.currentRequestId === requestId &&
           resyncAttempts <= MAX_RESYNC_ATTEMPTS
         ) {
-          // Only re-reset if the decoder closed during the previous iteration.
-          if (!state.decoder || (state.decoder.state as string) === "closed") {
-            if (!resetAndConfigureDecoders(state, id)) break;
-          }
+          if (!resetAndConfigureDecoders(state, id)) break;
 
           const decodedKey = await decodePacketSafe(
             state,
@@ -1316,6 +1336,7 @@ async function handleIterate(
       requestId,
       assetId: id,
     });
+    emitDiagnostics("iterateDone", id, requestId);
 }
 
 function dispose(assetId?: string) {
@@ -1350,6 +1371,9 @@ function dispose(assetId?: string) {
     state.customOutputHandler = null;
     state.iterationInFlight = 0;
     state.iterationResume = null;
+
+    emitDiagnostics("dispose", assetId);
+
     return;
   }
 
@@ -1358,4 +1382,6 @@ function dispose(assetId?: string) {
     dispose(id);
   }
   assetStates.clear();
+
+  emitDiagnostics("dispose-all");
 }

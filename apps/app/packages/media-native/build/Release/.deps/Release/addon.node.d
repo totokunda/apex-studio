@@ -1,0 +1,1 @@
+cmd_Release/addon.node := c++ -bundle -undefined dynamic_lookup -Wl,-search_paths_first -mmacosx-version-min=13.5 -arch arm64 -L./Release -stdlib=libc++  -o Release/addon.node Release/obj.target/addon/src/addon.o Release/nothing.a -L/opt/homebrew/Cellar/mlt/7.36.1_1/lib -lmlt-7 -framework Cocoa -framework Foundation -framework AVFoundation -framework QuartzCore

@@ -426,7 +426,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg w-full bg-brand-background/90 backdrop-blur-sm text-foreground p-0 gap-0 overflow-hidden dark font-inter border border-brand-light/10">
-        <DialogHeader className="px-5 py-3.5 border-b border-brand-light/10 flex-shrink-0 bg-brand-background">
+        <DialogHeader className="px-5 py-3.5 border-b border-brand-light/10 shrink-0 bg-brand-background">
           <DialogTitle className="text-start text-[13px] font-medium text-brand-light">
             Export
           </DialogTitle>

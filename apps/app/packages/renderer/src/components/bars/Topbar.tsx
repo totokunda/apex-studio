@@ -484,7 +484,7 @@ const TopBar: React.FC<TopBarProps> = () => {
   }, [clips, timelines, getClipsForGroup]);
 
   return (
-    <div className="w-full relative h-8 mt-2 px-6 pl-4 flex items-center justify-between space-x-2">
+    <div className="w-full relative h-8 mt-2 px-6 pl-4 flex items-center justify-between space-x-2 bg-black">
       {/* Project name editor */}
       <div className="flex flex-row items-center gap-1.5 min-w-0">
         {/* Projects dropdown (top-left) */}

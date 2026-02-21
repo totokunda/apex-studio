@@ -12,6 +12,7 @@
     "baseUrl": ".",
     "paths": {
       "@app/preload": ["../preload"],
+      "@app/media-native": ["../media-native"],
       "@app/renderer": ["../renderer"],
       "@app/export-renderer": ["../export-renderer"]
     }

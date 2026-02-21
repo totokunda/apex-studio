@@ -203,8 +203,12 @@ const App: React.FC = () => {
     >
       <main
         ref={containerRef}
-        className="w-full text-center font-inter bg-black h-screen flex flex-col"
+        className="w-full text-center font-inter bg-transparent h-screen flex flex-col relative"
       >
+        <div className="pointer-events-none fixed inset-0 z-0">
+          <div className="absolute inset-0 bg-black" />
+        </div>
+        <div className="relative z-10 w-full h-full flex flex-col">
         <Topbar />
         <Toaster />
         <div className="flex h-[calc(100vh-36px)] min-h-[calc(100vh-36px)] w-full p-3">
@@ -219,13 +223,13 @@ const App: React.FC = () => {
                   className="gap-0.5 overflow-hidden"
                 >
                   <MediaModelPanel order={1} />
-                  <ResizableHandle className="bg-transparent" />
+                  <ResizableHandle className="bg-black" />
                   <PreviewPanel order={3} />
-                  <ResizableHandle className="bg-transparent" />
+                  <ResizableHandle className="bg-black" />
                   <PropertiesPanel order={4} />
                 </ResizablePanelGroup>
               </ResizablePanel>
-              <ResizableHandle className="bg-transparent" />
+              <ResizableHandle className="bg-black" />
               <TimelinePanel />
             </ResizablePanelGroup>
           )}
@@ -240,7 +244,7 @@ const App: React.FC = () => {
                 minSize={20}
                 maxSize={50}
               />
-              <ResizableHandle className="bg-transparent" />
+              <ResizableHandle className="bg-black" />
               <ResizablePanel defaultSize={70} minSize={30}>
                 <ResizablePanelGroup direction="vertical" className="gap-0.5">
                   <ResizablePanel defaultSize={60} minSize={40}>
@@ -249,7 +253,7 @@ const App: React.FC = () => {
                       className="gap-0.5"
                     >
                       <PreviewPanel order={2} defaultSize={55} minSize={30} />
-                      <ResizableHandle className="bg-transparent" />
+                      <ResizableHandle className="bg-black" />
                       <PropertiesPanel
                         order={2}
                         defaultSize={45}
@@ -257,7 +261,7 @@ const App: React.FC = () => {
                       />
                     </ResizablePanelGroup>
                   </ResizablePanel>
-                  <ResizableHandle className="bg-transparent" />
+                  <ResizableHandle className="bg-black" />
                   <TimelinePanel />
                 </ResizablePanelGroup>
               </ResizablePanel>
@@ -280,18 +284,19 @@ const App: React.FC = () => {
                         defaultSize={35}
                         minSize={25}
                       />
-                      <ResizableHandle className="bg-transparent" />
+                      <ResizableHandle className="bg-black" />
                       <PreviewPanel order={1} defaultSize={40} minSize={30} />
                     </ResizablePanelGroup>
                   </ResizablePanel>
-                  <ResizableHandle className="bg-transparent" />
+                  <ResizableHandle className="bg-black" />
                   <TimelinePanel />
                 </ResizablePanelGroup>
               </ResizablePanel>
-              <ResizableHandle className="bg-transparent" />
+              <ResizableHandle className="bg-black" />
               <PropertiesPanel order={2} defaultSize={35} minSize={20} />
             </ResizablePanelGroup>
           )}
+        </div>
         </div>
       </main>
       <GlobalContextMenu />

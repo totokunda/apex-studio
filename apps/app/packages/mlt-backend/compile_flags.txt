@@ -1,4 +1,0 @@
--I../../node_modules/node-addon-api
--I/opt/homebrew/include/node
--I/opt/homebrew/opt/mlt/include/mlt-7
--std=c++17

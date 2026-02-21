@@ -43,7 +43,6 @@ export const VideoDecoderManagerProvider: React.FC<ProviderProps> = ({ children 
         }
       }
     }, [assetClipSig, activeFolderUuid]);
-    
 
     if (!managerRef.current) {
         managerRef.current = new VideoDecoderManager();
@@ -51,6 +50,11 @@ export const VideoDecoderManagerProvider: React.FC<ProviderProps> = ({ children 
         //   window.__apexSeekStats()  → { total, accurate, fast }
         //   window.__apexResetSeekStats()  → resets counters to 0
         (window as any).__apexSeekStats = () => managerRef.current?.getSeekStats();
+        (window as any).__apexVideoDecoderStats = () =>
+          managerRef.current?.getDecoderDebugStats();
+        if (typeof (window as any).__apexVideoDecoderDebug === "undefined") {
+          (window as any).__apexVideoDecoderDebug = false;
+        }
         (window as any).__apexResetSeekStats = () => {
             if (managerRef.current) {
                 (managerRef.current as any)._seekTotal = 0;
@@ -94,5 +98,3 @@ function getFallbackVideoDecoderManager(): VideoDecoderManager {
   }
   return FALLBACK_MANAGER;
 }
-
-

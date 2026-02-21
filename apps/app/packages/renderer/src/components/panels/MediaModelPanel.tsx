@@ -169,7 +169,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
         </button>
         <div
           className={cn(
-            "pointer-events-none absolute inset-y-3 left-5 w-8 bg-gradient-to-r from-brand-background to-transparent transition-opacity duration-200",
+            "pointer-events-none absolute inset-y-3 left-5 w-8 bg-linear-to-r from-brand-background to-transparent transition-opacity duration-200",
             canScrollLeft ? "opacity-100" : "opacity-0",
           )}
         />
@@ -177,7 +177,7 @@ const MediaModelPanel: React.FC<MediaModelPanelProps> = ({
           ref={triggersRef}
           style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
           onWheel={handleTriggerWheel}
-          className="overflow-x-auto scroll-smooth [&::-webkit-scrollbar]:hidden"
+          className="overflow-x-auto scroll-smooth  [&::-webkit-scrollbar]:hidden "
         >
           <div className="flex flex-row gap-x-2 w-fit">
             <MediaModelTrigger

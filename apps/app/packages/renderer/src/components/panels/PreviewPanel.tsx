@@ -19,7 +19,7 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({
       defaultSize={defaultSize}
       minSize={minSize}
       order={order}
-      className="flex flex-col w-full bg-brand relative flex-1 overflow-hidden rounded-lg"
+      className="flex flex-col w-full bg-transparent relative flex-1 overflow-hidden rounded-lg"
     >
       <FloatingBar />
       <Preview />

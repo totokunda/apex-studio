@@ -1413,20 +1413,23 @@ const TimelineClip: React.FC<
       const rect = stage.container().getBoundingClientRect();
       const stageX = e.clientX - rect.left;
       const newFrame = calculateFrameFromX(stageX);
+      const liveClip = getClipById(clipId, timelineId);
+      const liveStartFrame = liveClip?.startFrame ?? currentStartFrame;
+      const liveEndFrame = liveClip?.endFrame ?? currentEndFrame;
 
       if (resizeSide === "right") {
         let targetFrame = newFrame;
 
         // Check for preprocessor boundaries - prevent resizing past preprocessors
-        if (currentClip && currentClip.type === "video") {
+        if (liveClip && liveClip.type === "video") {
           const preprocessors =
-            (currentClip as VideoClipProps | ImageClipProps).preprocessors ||
+            (liveClip as VideoClipProps | ImageClipProps).preprocessors ||
             [];
           if (preprocessors.length > 0) {
             // Find the rightmost preprocessor end position (in absolute frames)
             const rightmostPreprocessorEnd = Math.max(
               ...preprocessors.map(
-                (p) => (currentStartFrame || 0) + (p.endFrame ?? 0),
+                (p) => (liveStartFrame || 0) + (p.endFrame ?? 0),
               ),
             );
             // Limit resize to not go below the rightmost preprocessor end
@@ -1479,12 +1482,12 @@ const TimelineClip: React.FC<
           const snappedFrame = Math.round(
             tStart + (best.edge / Math.max(1, stageWidth)) * (tEnd - tStart),
           );
-          targetFrame = Math.max((currentStartFrame || 0) + 1, snappedFrame);
+          targetFrame = Math.max((liveStartFrame || 0) + 1, snappedFrame);
           setSnapGuideX(Math.round(timelinePadding + best.edge));
         } else {
           setSnapGuideX(null);
         }
-        if (targetFrame !== currentEndFrame) {
+        if (targetFrame !== liveEndFrame) {
           // Use the new contiguous resize method - local state will update via useEffect
           resizeClip(clipId, "right", targetFrame);
         }
@@ -1492,15 +1495,15 @@ const TimelineClip: React.FC<
         let targetFrame = newFrame;
 
         // Check for preprocessor boundaries - prevent resizing past preprocessors
-        if (currentClip && currentClip.type === "video") {
+        if (liveClip && liveClip.type === "video") {
           const preprocessors =
-            (currentClip as VideoClipProps | ImageClipProps).preprocessors ||
+            (liveClip as VideoClipProps | ImageClipProps).preprocessors ||
             [];
           if (preprocessors.length > 0) {
             // Find the leftmost preprocessor start position (in absolute frames)
             const leftmostPreprocessorStart = Math.min(
               ...preprocessors.map(
-                (p) => (currentStartFrame || 0) + (p.startFrame ?? 0),
+                (p) => (liveStartFrame || 0) + (p.startFrame ?? 0),
               ),
             );
             // Limit resize to not go above the leftmost preprocessor start
@@ -1552,7 +1555,7 @@ const TimelineClip: React.FC<
           const snappedFrame = Math.round(
             tStart + (best.edge / Math.max(1, stageWidth)) * (tEnd - tStart),
           );
-          targetFrame = Math.min((currentEndFrame || 0) - 1, snappedFrame);
+          targetFrame = Math.min((liveEndFrame || 0) - 1, snappedFrame);
           setSnapGuideX(Math.round(timelinePadding + best.edge));
         } else {
           setSnapGuideX(null);
@@ -1561,7 +1564,7 @@ const TimelineClip: React.FC<
         // Prevent resizing below frame 0
         targetFrame = Math.max(0, targetFrame);
 
-        if (targetFrame !== currentStartFrame) {
+        if (targetFrame !== liveStartFrame) {
           // Use the new contiguous resize method - local state will update via useEffect
           resizeClip(clipId, "left", targetFrame);
         }
@@ -1594,6 +1597,7 @@ const TimelineClip: React.FC<
     timelinePadding,
     timelineWidth,
     getClipsForTimeline,
+    getClipById,
     setSnapGuideX,
     isModelRunning,
   ]);

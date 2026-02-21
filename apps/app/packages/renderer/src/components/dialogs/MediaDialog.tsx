@@ -492,11 +492,18 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
 
   // Get the single selected clip
   const selectedClip = clipOverride ?? getClipById(clipId);
+  const [rangeStart, rangeEnd] = selectionRange ?? [0, 1];
+  const rangeSpan = Math.max(1, rangeEnd - rangeStart);
+  const isSelectionPlaying =
+    typeof isPlayingExternal === "boolean" ? isPlayingExternal : isPlaying;
 
   // Scrubber logic
   const [isDragging, setIsDragging] = useState(false);
   const [dragProgress, setDragProgress] = useState<number | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const [isSelectionDragging, setIsSelectionDragging] = useState(false);
+  const [selectionDragProgress, setSelectionDragProgress] = useState<number | null>(null);
+  const selectionProgressBarRef = useRef<HTMLDivElement>(null);
 
   const handleScrubberMove = useCallback(
     (clientX: number) => {
@@ -513,6 +520,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
       const duration = Math.max(1, endFrame - startFrame);
 
       const rect = progressBarRef.current.getBoundingClientRect();
+      if (!rect.width) return;
       const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
       const newProgress = Math.max(0, Math.min(x / rect.width, 1));
 
@@ -524,6 +532,30 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
       setFocusFrame(newFrame);
     },
     [selectedClip, setFocusFrame],
+  );
+
+  const handleSelectionScrubberMove = useCallback(
+    (clientX: number) => {
+      if (
+        !selectionProgressBarRef.current ||
+        !timelineSelectorProps ||
+        timelineSelectorProps.mode !== "range"
+      )
+        return;
+
+      const rect = selectionProgressBarRef.current.getBoundingClientRect();
+      if (!rect.width) return;
+      const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+      const newProgress = Math.max(0, Math.min(x / rect.width, 1));
+
+      requestAnimationFrame(() => {
+        setSelectionDragProgress(newProgress);
+      });
+
+      const newFrame = Math.round(rangeStart + newProgress * rangeSpan);
+      setFocusFrame(Math.max(rangeStart, Math.min(rangeEnd, newFrame)));
+    },
+    [timelineSelectorProps, rangeStart, rangeEnd, rangeSpan, setFocusFrame],
   );
 
   const handleScrubberMouseMove = useCallback(
@@ -539,6 +571,19 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
     setDragProgress(null);
   }, []);
 
+  const handleSelectionScrubberMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!isSelectionDragging) return;
+      handleSelectionScrubberMove(e.clientX);
+    },
+    [isSelectionDragging, handleSelectionScrubberMove],
+  );
+
+  const handleSelectionScrubberMouseUp = useCallback(() => {
+    setIsSelectionDragging(false);
+    setSelectionDragProgress(null);
+  }, []);
+
   const handleProgressBarMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -547,6 +592,16 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
       handleScrubberMove(e.clientX);
     },
     [handleScrubberMove, isPlaying, pause],
+  );
+
+  const handleSelectionBarMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setIsSelectionDragging(true);
+      if (isSelectionPlaying && onPause) onPause();
+      handleSelectionScrubberMove(e.clientX);
+    },
+    [handleSelectionScrubberMove, isSelectionPlaying, onPause],
   );
 
   useEffect(() => {
@@ -559,6 +614,21 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
       };
     }
   }, [isDragging, handleScrubberMouseMove, handleScrubberMouseUp]);
+
+  useEffect(() => {
+    if (isSelectionDragging) {
+      document.addEventListener("mousemove", handleSelectionScrubberMouseMove);
+      document.addEventListener("mouseup", handleSelectionScrubberMouseUp);
+      return () => {
+        document.removeEventListener("mousemove", handleSelectionScrubberMouseMove);
+        document.removeEventListener("mouseup", handleSelectionScrubberMouseUp);
+      };
+    }
+  }, [
+    isSelectionDragging,
+    handleSelectionScrubberMouseMove,
+    handleSelectionScrubberMouseUp,
+  ]);
 
   const progress = useMemo(() => {
     if (isDragging && dragProgress !== null) return dragProgress;
@@ -574,17 +644,22 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
     return Math.max(0, Math.min(relativeFrame / duration, 1));
   }, [isDragging, dragProgress, selectedClip, focusFrame]);
 
-  const [rangeStart, rangeEnd] = selectionRange ?? [0, 1];
-  const rangeSpan = Math.max(1, rangeEnd - rangeStart);
   const selectionProgress = useMemo(() => {
+    if (isSelectionDragging && selectionDragProgress !== null) return selectionDragProgress;
     if (!selectedClip || timelineSelectorProps?.mode !== "range") return 0;
     const clampedFrame = Math.max(rangeStart, Math.min(rangeEnd, focusFrame));
     const localFrame = clampedFrame - rangeStart;
     return Math.max(0, Math.min(localFrame / rangeSpan, 1));
-  }, [selectedClip, focusFrame, rangeStart, rangeEnd, rangeSpan]);
-
-  const isSelectionPlaying =
-    typeof isPlayingExternal === "boolean" ? isPlayingExternal : isPlaying;
+  }, [
+    isSelectionDragging,
+    selectionDragProgress,
+    selectedClip,
+    timelineSelectorProps,
+    focusFrame,
+    rangeStart,
+    rangeEnd,
+    rangeSpan,
+  ]);
 
   const getApplicators = useCallback(
     (id: string, frameOverride?: number) => {
@@ -1272,8 +1347,9 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-4xl w-full h-[80vh] flex flex-col bg-background text-foreground p-0 gap-0 overflow-hidden dark font-inter border-brand-light/10">
-        <DialogHeader className="px-6 py-6 border-b border-brand-light/10 shrink-0 bg-brand-background">
+      <DialogContent overlayClassName="bg-black/60"
+      className="max-w-4xl w-full h-[80vh] flex flex-col bg-background text-foreground p-0 gap-0 overflow-hidden dark font-inter border-brand-light/10" closeIconClassName="h-4.5 w-4.5">
+        <DialogHeader className="px-6 py-6  shrink-0 bg-black">
           <DialogTitle className="text-start text-[13px] font-medium">
             {" "}
           </DialogTitle>
@@ -1615,10 +1691,10 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                 toRender.some((clip) => clip.type === "video") &&
                 !timelineSelectorProps && (
                   <div className=" pb-4 flex justify-center px-4 w-full ">
-                    <div className="bg-black/40 backdrop-blur-md rounded-md px-6 py-3 w-full flex items-center border border-white/10 shadow-sm">
+                    <div className="bg-black/40 backdrop-blur-md rounded-md px-6 py-3 w-full flex items-center  shadow-sm">
                       <div
                         ref={progressBarRef}
-                        className="relative w-full h-1 bg-white/20 rounded-full cursor-pointer group"
+                        className="relative w-full h-1.5 bg-white/20 rounded-full cursor-pointer group"
                         onMouseDown={handleProgressBarMouseDown}
                       >
                         <div
@@ -1626,7 +1702,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                           style={{ width: `${progress * 100}%` }}
                         />
                         <div
-                          className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-lg ${
+                          className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-[4px] shadow-lg ${
                             isDragging ? "cursor-grabbing" : "cursor-grab"
                           }`}
                           style={{ left: `calc(${progress * 100}% - 6px)` }}
@@ -1660,10 +1736,20 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                 )}
               </button>
               <div className="flex-1 flex flex-col gap-y-1">
-                <div className="relative w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
+                <div
+                  ref={selectionProgressBarRef}
+                  className="relative w-full h-1.5 bg-white/20 rounded-full cursor-pointer"
+                  onMouseDown={handleSelectionBarMouseDown}
+                >
                   <div
                     className="absolute inset-y-0 left-0 bg-brand-light rounded-full"
                     style={{ width: `${selectionProgress * 100}%` }}
+                  />
+                  <div
+                    className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg ${
+                      isSelectionDragging ? "cursor-grabbing" : "cursor-grab"
+                    }`}
+                    style={{ left: `calc(${selectionProgress * 100}% - 8px)` }}
                   />
                 </div>
               </div>
@@ -1704,7 +1790,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
                   <SelectTrigger className="w-[100px] h-7.5! bg-secondary/50 border-none text-[11px] font-medium rounded-[6px]">
                     <SelectValue placeholder="Select ratio" />
                   </SelectTrigger>
-                  <SelectContent className="bg-background text-foreground font-inter dark z-101!">
+                  <SelectContent className="bg-background text-foreground font-inter dark z-151!">
                     {ASPECT_RATIOS.map((ratio) => (
                       <SelectItem
                         key={ratio.value}
@@ -1725,14 +1811,14 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
               <Button
                 variant="ghost"
                 onClick={handleReset}
-                className="h-7 px-5 hover:bg-secondary/80 text-[11.5px]! font-medium bg-brand-light/10 rounded-[6px]"
+                className="h-[30px] px-5 hover:bg-secondary/80 text-[11.5px]! font-medium bg-brand-light/10 rounded-[5px]"
               >
                 Reset
               </Button>
             )}
             <Button
               onClick={canCrop ? handleConfirm : () => onClose()}
-              className="h-7 px-5 bg-brand-primary hover:bg-brand-primary/90 text-white text-[11.5px]! font-medium bg-brand-accent hover:bg-brand-accent-two-shade rounded-[6px]"
+              className="h-[30px] px-5  text-white text-[11.5px]! font-medium bg-linear-to-br from-brand-accent-light to-brand-accent-two-shade hover:bg-brand-accent-two-shade rounded-[5px]"
             >
               {canCrop ? "Confirm" : "Done"}
             </Button>

@@ -13,6 +13,10 @@ import {
     ADTS,
 } from "mediabunny";
 import { getUserDataPath as getUserDataPathPreload } from "@app/preload";
+import {
+    VideoDecodeFarmCoordinator,
+    type VideoDecoderAddAssetOptions,
+} from "./video-decode-farm";
 
 interface VideoFrameDecoderOptions {
     mediaInfo: MediaInfo;
@@ -244,7 +248,6 @@ export class VideoFrameDecoder {
             else if (fmt === ADTS) formatStr = "aac";
         }
 
-
         this.worker.postMessage({
             type: "configure",
             config: {
@@ -366,11 +369,17 @@ async function ensureUserDataPathLoaded(): Promise<void> {
 
 // Kick off userData resolution in the background; we don't block decoder usage
 // on this, and fall back to previous heuristics until it's available.
-void ensureUserDataPathLoaded();
+
+
 
 export class VideoDecoderManager {
-    private worker: Worker;
+    private worker: Worker | null = null;
+    private farm: VideoDecodeFarmCoordinator | null = null;
     private assets = new Map<string, VideoDecoderManagerAssetState>();
+    private _seekTotal = 0;
+    private _seekAccurate = 0;
+    private _seekFast = 0;
+    private _decoderDebugStats: any = null;
 
     private createAssetState(params: {
         asset: Asset;
@@ -407,27 +416,41 @@ export class VideoDecoderManager {
     }
 
     constructor() {
+       
+
         // IMPORTANT: keep this in the inline `new Worker(new URL(...))` form.
         // Vite's worker transform relies on recognizing this pattern; if we assign the URL
         // to a variable first, Vite may treat the `.worker.ts` file as a static asset and
         // ship it with a `.ts` extension (which then gets `video/mp2t` MIME via our protocol).
-        this.worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
+        const worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
             type: "module",
         });
+        this.worker = worker;
 
         // Make worker lifecycle issues extremely obvious in the renderer console.
-        this.worker.onerror = (err) => {
+        worker.onerror = (err) => {
             // eslint-disable-next-line no-console
             console.error("[VideoDecoderManager] worker error", err.message || err);
         };
 
-        this.worker.onmessageerror = (err) => {
+        worker.onmessageerror = (err) => {
             // eslint-disable-next-line no-console
             console.error("[VideoDecoderManager] worker message error", err);
         };
 
-        this.worker.onmessage = (e: MessageEvent) => {
+        worker.onmessage = (e: MessageEvent) => {
             const msg = e.data;
+
+            if (msg.type === "debug") {
+                if (msg.event === "diag-state") {
+                    this._decoderDebugStats = msg.payload;
+                }
+                if ((window as any).__apexVideoDecoderDebug === true) {
+                    // eslint-disable-next-line no-console
+                    console.debug("[VideoDecoderManager] worker debug", msg);
+                }
+                return;
+            }
 
             
             const assetId: string | undefined = msg.assetId;
@@ -444,7 +467,7 @@ export class VideoDecoderManager {
                 }
                 return;
             }
-
+            
             if (msg.type === "frame") {
                 // Iteration frames for this asset
                 if (client.activeIteration && msg.requestId === client.activeIteration.requestId) {
@@ -477,7 +500,7 @@ export class VideoDecoderManager {
                             msg.frame.close();
 
                             // Ack this frame to allow the worker to resume iteration
-                            this.worker.postMessage({
+                            worker.postMessage({
                                 type: "ack",
                                 assetId,
                                 requestId: msg.requestId,
@@ -571,7 +594,7 @@ export class VideoDecoderManager {
     /**
      * Register a new asset with the shared worker-backed decoder.
      */
-    public async addAsset(
+    public addAsset(
         asset: Asset,
         options: {
             mediaInfo: MediaInfo;
@@ -592,13 +615,13 @@ export class VideoDecoderManager {
              */
             logicalId?: string;
         },
-    ): Promise<void> {
-        // Ensure the Electron userData path is resolved before we configure the
-        // worker. On first call this awaits the preload IPC round-trip (fast);
-        // on subsequent calls it returns immediately from the cached value.
-        // Without this, workers on Windows may receive no userDataPath and fall
-        // back to URL heuristics that pick the wrong app:// host.
-        await ensureUserDataPathLoaded();
+    ): void {
+        if (this.farm) {
+            this.farm.addAsset(asset, options as VideoDecoderAddAssetOptions);
+            return;
+        }
+        if (!this.worker) return;
+
         const decoderId = options.logicalId ?? asset.id;
 
         // Normalize target dimensions (same logic as VideoFrameDecoder)
@@ -662,7 +685,6 @@ export class VideoDecoderManager {
             onReady: options.onReady,
         });
 
- 
         this.assets.set(decoderId, assetClient);
 
         // Send configure to the shared worker
@@ -689,7 +711,6 @@ export class VideoDecoderManager {
             config.userDataPath = cachedUserDataPath;
         }
 
-
         this.worker.postMessage({
             type: "configure",
             assetId: decoderId,
@@ -702,8 +723,12 @@ export class VideoDecoderManager {
      * Dispose a single asset and release any resources associated with it.
      */
     public disposeAsset(assetId: string): void {
+        if (this.farm) {
+            this.farm.disposeAsset(assetId);
+            return;
+        }
         const client = this.assets.get(assetId);
-        if (!client) return;
+        if (!client || !this.worker) return;
 
         // Cancel any active iteration promises
         if (client.activeIteration) {
@@ -724,6 +749,9 @@ export class VideoDecoderManager {
      * Returns true if an asset with the given id has already been registered.
      */
     public hasAsset(assetId: string): boolean {
+        if (this.farm) {
+            return this.farm.hasAsset(assetId);
+        }
         return this.assets.has(assetId);
     }
 
@@ -739,6 +767,10 @@ export class VideoDecoderManager {
             onReady?: () => void;
         },
     ): void {
+        if (this.farm) {
+            this.farm.updateAssetHandlers(assetId, handlers);
+            return;
+        }
         const client = this.assets.get(assetId);
         if (!client) return;
 
@@ -759,19 +791,16 @@ export class VideoDecoderManager {
     /**
      * Perform a seek for a specific asset.
      */
-    // Diagnostic counters — readable from DevTools console:
-    //   window.__apexSeekStats?.()
-    private _seekTotal = 0;
-    private _seekAccurate = 0;
-    private _seekFast = 0;
-
     public async seek(assetId: string, timestamp: number, forceAccurate: boolean = false): Promise<void> {
+        if (this.farm) {
+            return this.farm.seek(assetId, timestamp, forceAccurate);
+        }
         const client = this.assets.get(assetId);
-        if (!client) {
+        if (!client || !this.worker) {
             return;
         }
+        const worker = this.worker;
 
-        // Track seek stats for benchmark verification
         this._seekTotal++;
         if (forceAccurate) this._seekAccurate++;
         else this._seekFast++;
@@ -781,7 +810,7 @@ export class VideoDecoderManager {
         return new Promise<void>((resolve, reject) => {
             client.pendingSeeks.set(reqId, { resolve, reject });
 
-            this.worker.postMessage({
+            worker.postMessage({
                 type: "seek",
                 assetId,
                 timestamp,
@@ -791,13 +820,22 @@ export class VideoDecoderManager {
         });
     }
 
-    /** Returns seek diagnostic counters — call window.__apexSeekStats?.() in DevTools. */
-    public getSeekStats() {
+    public getSeekStats(): { total: number; accurate: number; fast: number } {
+        if (this.farm) {
+            return this.farm.getSeekStats();
+        }
         return {
             total: this._seekTotal,
             accurate: this._seekAccurate,
             fast: this._seekFast,
         };
+    }
+
+    public getDecoderDebugStats(): any {
+        if (this.farm) {
+            return this.farm.getDecoderDebugStats();
+        }
+        return this._decoderDebugStats;
     }
 
     /**
@@ -810,11 +848,15 @@ export class VideoDecoderManager {
         shouldDelay?: (timestamp: number) => Promise<void>,
         checkCancel?: () => boolean,
     ): Promise<void> {
+        if (this.farm) {
+            return this.farm.iterate(assetId, startTime, endTime, shouldDelay, checkCancel);
+        }
 
         const client = this.assets.get(assetId);
-        if (!client) {
+        if (!client || !this.worker) {
             return;
         }
+        const worker = this.worker;
 
         const reqId = ++client.currentRequestId;
 
@@ -828,7 +870,7 @@ export class VideoDecoderManager {
                 frameProcessingPromise: Promise.resolve(),
             };
 
-            this.worker.postMessage({
+            worker.postMessage({
                 type: "iterate",
                 assetId,
                 startTime,
@@ -842,6 +884,11 @@ export class VideoDecoderManager {
      * Dispose all assets and terminate the underlying worker.
      */
     public disposeAll(): void {
+        if (this.farm) {
+            this.farm.disposeAll();
+            return;
+        }
+        if (!this.worker) return;
         for (const id of this.assets.keys()) {
             this.disposeAsset(id);
         }
@@ -849,4 +896,3 @@ export class VideoDecoderManager {
         this.assets.clear();
     }
 }
-
