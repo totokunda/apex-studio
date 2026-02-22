@@ -147,7 +147,7 @@ async function decodeSerializedChunk(
   for (let attempt = 0; attempt < 2; attempt++) {
     await waitForDecodeQueue(decoder, MAX_DECODE_QUEUE_SIZE);
     try {
-      console.log("decodeSerializedChunk", toEncodedVideoChunk(packet));
+   
       decoder.decode(toEncodedVideoChunk(packet));
       return true;
     } catch (err: any) {
@@ -281,8 +281,6 @@ function onColorFrame(sessionId: SessionId, frame: VideoFrame) {
     closeFrameSafe(frame);
     return;
   }
-
-  console.log("onColorFrame", frame);
 
   const meta = state.colorMetaQueue.shift();
   if (!meta) {

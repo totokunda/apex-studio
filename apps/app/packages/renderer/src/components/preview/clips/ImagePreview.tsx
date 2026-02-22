@@ -11,11 +11,9 @@ import { getMediaInfo, getMediaInfoCached } from "@/lib/media/utils";
 import { useControlsStore } from "@/lib/control";
 import Konva from "konva";
 import { useViewportStore } from "@/lib/viewport";
-// (useClipStore already imported above)
-import { useWebGLFilters } from "@/components/preview/webgl-filters";
+import { CompositorShader } from "@/components/preview/webgl-filters";
 import { BaseClipApplicator } from "./apply/base";
 import { useClipStore } from "@/lib/clip";
-import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
 import SharedClipCanvasSurface, {
   getAspectFitSize,
@@ -53,9 +51,16 @@ const ImagePreview: React.FC<
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<Konva.Image>(null);
-  const { applyFilters } = useWebGLFilters();
+  const compositorRef = useRef<CompositorShader | null>(null);
+  if (!compositorRef.current) {
+    compositorRef.current = new CompositorShader();
+  }
   const clipsState = useClipStore((s) => s.clips);
   const tool = useViewportStore((s) => s.tool);
+  const toolRef = useRef(tool);
+  useEffect(() => {
+    toolRef.current = tool;
+  }, [tool]);
   const clipTransform = overrideClip
     ? overrideClip.transform
     : useClipStore((s) => s.getClipTransform(clipId));
@@ -225,13 +230,6 @@ const ImagePreview: React.FC<
     }
   }, [clip?.masks]);
 
-  const { applyMask } = useWebGLMask({
-    focusFrame: focusFrame,
-    masks: clip?.masks || [],
-    disabled: tool === "mask" && !inputMode,
-    clip: clip
-  });
-
   const selectedAssetId = useMemo(() => {
     return (
       // Only apply preprocessor outputs in-place when explicitly requested.
@@ -251,6 +249,8 @@ const ImagePreview: React.FC<
       canvasRef.current = document.createElement("canvas");
     }
     return () => {
+      compositorRef.current?.dispose();
+      compositorRef.current = null;
       canvasRef.current = null;
     };
   }, []);
@@ -293,6 +293,60 @@ const ImagePreview: React.FC<
     applicatorsRef.current = applicators;
   }, [applicators]);
 
+  // Filter params ref for compositor (avoids callback recreation)
+  const filterParamsRef = useRef({
+    brightness: clip?.brightness,
+    contrast: clip?.contrast,
+    hue: clip?.hue,
+    saturation: clip?.saturation,
+    blur: clip?.blur,
+    sharpness: clip?.sharpness,
+    noise: clip?.noise,
+    vignette: clip?.vignette,
+    colorTintColor: clip?.colorTintColor,
+    colorTintIntensity: clip?.colorTintIntensity,
+    scanLines: clip?.scanLines,
+    chromaticAberration: clip?.chromaticAberration,
+    interlace: clip?.interlace,
+    pixelate: clip?.pixelate,
+    jitter: clip?.jitter,
+  });
+  useEffect(() => {
+    filterParamsRef.current = {
+      brightness: clip?.brightness,
+      contrast: clip?.contrast,
+      hue: clip?.hue,
+      saturation: clip?.saturation,
+      blur: clip?.blur,
+      sharpness: clip?.sharpness,
+      noise: clip?.noise,
+      vignette: clip?.vignette,
+      colorTintColor: clip?.colorTintColor,
+      colorTintIntensity: clip?.colorTintIntensity,
+      scanLines: clip?.scanLines,
+      chromaticAberration: clip?.chromaticAberration,
+      interlace: clip?.interlace,
+      pixelate: clip?.pixelate,
+      jitter: clip?.jitter,
+    };
+  }, [
+    clip?.brightness,
+    clip?.contrast,
+    clip?.hue,
+    clip?.saturation,
+    clip?.blur,
+    clip?.sharpness,
+    clip?.noise,
+    clip?.vignette,
+    clip?.colorTintColor,
+    clip?.colorTintIntensity,
+    clip?.scanLines,
+    clip?.chromaticAberration,
+    clip?.interlace,
+    clip?.pixelate,
+    clip?.jitter,
+  ]);
+
   // Timeline-aware applicator signature (type + clipId + start-end)
   const applicatorsSignature = useMemo(() => {
     if (!applicators || applicators.length === 0) return "none";
@@ -330,12 +384,6 @@ const ImagePreview: React.FC<
     });
   }, [clipsState, focusFrame, applicatorsSignature]);
 
-
-  // Stabilize applyMask across focusFrame changes; we'll pass frame explicitly when drawing
-  const applyMaskRef = useRef<typeof applyMask | null>(applyMask);
-  useEffect(() => {
-    applyMaskRef.current = applyMask;
-  }, [applyMask]);
 
   const draw = useCallback(async () => {
     if (!isInFrame) return;
@@ -391,33 +439,34 @@ const ImagePreview: React.FC<
         canvas.height,
       );
 
-      // Apply mask to working canvas (may return same or different canvas)
-      // Pass the current focusFrame explicitly; do not depend on applyMask identity
-      let processedCanvas =
-        applyMaskRef.current?.(workingCanvas, focusFrame) ?? workingCanvas;
+      // Apply compositor pipeline: masks → blur → combined effects (same as VideoPreview)
+      // In input mode, always show masks; otherwise hide when mask tool is active (editing)
+      const compositor = compositorRef.current;
+      const masksToApply =
+        toolRef.current !== "mask" || inputMode ? clip?.masks ?? [] : [];
+      const compositorResult = compositor?.apply(workingCanvas, {
+        filterParams: filterParamsRef.current,
+        masks: masksToApply,
+        clip,
+        focusFrame,
+        useOriginalTransform: true,
+      });
 
-      // Apply WebGL filters and keep output in passthrough mode.
-      processedCanvas = applyFilters(
-        processedCanvas,
-        {
-          brightness: clip?.brightness,
-          contrast: clip?.contrast,
-          hue: clip?.hue,
-          saturation: clip?.saturation,
-          blur: clip?.blur,
-          sharpness: clip?.sharpness,
-          noise: clip?.noise,
-          vignette: clip?.vignette,
-          colorTintColor: clip?.colorTintColor,
-          colorTintIntensity: clip?.colorTintIntensity,
-          scanLines: clip?.scanLines,
-          chromaticAberration: clip?.chromaticAberration,
-          interlace: clip?.interlace,
-          pixelate: clip?.pixelate,
-          jitter: clip?.jitter,
-        },
-        { output: "passthrough" },
-      );
+      let processedCanvas = workingCanvas;
+      if (compositorResult && compositorResult !== workingCanvas) {
+        workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+        try {
+          workingCtx.drawImage(
+            compositorResult,
+            0,
+            0,
+            workingCanvas.width,
+            workingCanvas.height,
+          );
+        } catch {
+          /* ignore */
+        }
+      }
 
       // Ensure resources (e.g., CLUTs) are preloaded for applicators before applying
       const preloadTasks: Promise<void>[] = [];
@@ -435,15 +484,29 @@ const ImagePreview: React.FC<
         } catch {}
       }
 
-      // Apply applicators to canvas
-      let finalCanvas = processedCanvas;
+      // Apply applicators to canvas (same pattern as VideoPreview)
       for (const applicator of applicatorsRef.current || []) {
-        const result = applicator.apply(finalCanvas);
-        if (result) finalCanvas = result;
+        const result = applicator.apply(processedCanvas);
+        if (result && result !== processedCanvas) {
+          workingCtx.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
+          try {
+            workingCtx.drawImage(
+              result,
+              0,
+              0,
+              workingCanvas.width,
+              workingCanvas.height,
+            );
+          } catch {
+            /* ignore */
+          }
+          processedCanvas = workingCanvas;
+        }
       }
 
       // Draw final result to display canvas
-      ctx.drawImage(finalCanvas, 0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(processedCanvas, 0, 0, canvas.width, canvas.height);
 
       imageRef.current?.getLayer()?.batchDraw?.();
     } catch (e) {
@@ -470,12 +533,15 @@ const ImagePreview: React.FC<
     clip?.interlace,
     clip?.pixelate,
     clip?.jitter,
+    clip?.masks,
     masksSignature,
     applicatorsSignature,
     applicatorsActiveStore,
-    applyFilters,
     tool,
+    focusFrame,
+    inputMode,
     isInFrame,
+    getAssetById,
   ]);
 
   useEffect(() => {

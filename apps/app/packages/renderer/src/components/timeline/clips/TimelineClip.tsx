@@ -543,7 +543,7 @@ const TimelineClip: React.FC<
         mediaInfoRef.current ?? null,
         imageCanvas,
         timelineHeight,
-        thumbnailClipWidth.current,
+        clipWidth,
         maxTimelineWidth,
         timelineWidth,
         timelineDuration,
@@ -558,6 +558,8 @@ const TimelineClip: React.FC<
         exactVideoUpdateSeqRef,
         lastExactRequestKeyRef,
         setForceRerenderCounter,
+        false,
+        tool === "mask",
       );
     } else if (clipType === "shape") {
       generateTimelineThumbnailShape(clipType, imageCanvas, groupRef);

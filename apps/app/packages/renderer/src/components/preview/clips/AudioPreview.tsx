@@ -8,6 +8,48 @@ import { WrappedAudioBuffer } from "mediabunny";
 import type { BaseClipApplicator } from "./apply/base";
 import { useClipStore } from "@/lib/clip";
 
+type FrameRange = {
+  startFrame: number;
+  endFrame?: number;
+};
+
+const toFiniteFrame = (value: unknown): number | undefined => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return value;
+};
+
+const getFrameRangeFromPath = (path?: string): Partial<FrameRange> => {
+  if (!path) return {};
+  try {
+    const u = new URL(path);
+    const startRaw = u.searchParams.get("startFrame");
+    const endRaw = u.searchParams.get("endFrame");
+    const startFrame =
+      startRaw == null ? undefined : toFiniteFrame(Number(startRaw));
+    const endFrame = endRaw == null ? undefined : toFiniteFrame(Number(endRaw));
+    return { startFrame, endFrame };
+  } catch {
+    return {};
+  }
+};
+
+const resolveFrameRange = (
+  mediaInfo: MediaInfo | null,
+  assetPath?: string,
+): FrameRange => {
+  const fromPath = getFrameRangeFromPath(assetPath || mediaInfo?.path);
+  if (fromPath.startFrame !== undefined || fromPath.endFrame !== undefined) {
+    return {
+      startFrame: Math.max(0, fromPath.startFrame ?? 0),
+      endFrame: toFiniteFrame(fromPath.endFrame),
+    };
+  }
+  return {
+    startFrame: Math.max(0, toFiniteFrame(mediaInfo?.startFrame) ?? 0),
+    endFrame: toFiniteFrame(mediaInfo?.endFrame),
+  };
+};
+
 // Schedules audio playback for a clip in sync with the timeline. Renders nothing.
 const AudioPreview: React.FC<
   AudioClipProps & {
@@ -135,6 +177,23 @@ const AudioPreview: React.FC<
   const soundtouchInitCtxRef = useRef<AudioContext | null>(null);
   const lastConfiguredSpeedRef = useRef<number | null>(null);
   const asset = useMemo(() => getAssetById(assetId), [assetId]);
+  const getEffectiveSourceRange = useCallback(
+    () => resolveFrameRange(mediaInfoRef.current, asset?.path),
+    [asset?.path],
+  );
+  const withAssetRange = useCallback(
+    (info: MediaInfo): MediaInfo => {
+      const range = resolveFrameRange(info, asset?.path);
+      if (
+        info.startFrame === range.startFrame &&
+        info.endFrame === range.endFrame
+      ) {
+        return info;
+      }
+      return { ...info, startFrame: range.startFrame, endFrame: range.endFrame };
+    },
+    [asset?.path],
+  );
   useEffect(() => {
     const wasPlaying = prevIsPlayingRef.current;
     if (!wasPlaying && isPlaying && isInFrame) {
@@ -312,17 +371,21 @@ const AudioPreview: React.FC<
     let cancelled = false;
     (async () => {
       try {
-        const info = await getMediaInfo(asset?.path ?? "");
+        let info = getMediaInfoCached(assetId) || getMediaInfoCached(asset.path);
+        if (!info) {
+          info = await getMediaInfo(asset.path);
+        }
         if (!cancelled) {
-          mediaInfoRef.current = info;
+          const rangedInfo = withAssetRange(info);
+          mediaInfoRef.current = rangedInfo;
           // Preconfigure audio worker early so it's ready when playback starts
-          if (info?.audio) {
-            await preconfigureAudioWorker(asset.path, info);
+          if (rangedInfo?.audio) {
+            await preconfigureAudioWorker(asset.path, rangedInfo);
           }
         }
       } catch {}
     })();
-  }, [asset?.id, asset?.path]);
+  }, [asset?.id, asset?.path, assetId, withAssetRange]);
 
   // Pre-seek audio worker when scrubbing while paused for instant playback start
   useEffect(() => {
@@ -331,13 +394,29 @@ const AudioPreview: React.FC<
     
     // Calculate the media timestamp we would seek to
     const speedFactor = Math.max(0.1, speed);
-    const mediaStartOffset = mediaInfoRef.current?.startFrame || 0;
-    const mediaFrameIndex = Math.max(0, Math.floor(currentFrame * speedFactor)) + mediaStartOffset;
+    const sourceRange = getEffectiveSourceRange();
+    const sourceBaseOffset = (sourceRange.startFrame || 0) + (trimStart || 0);
+    const timelineLocalFrame = currentFrame - (trimStart || 0);
+    const mediaFrameIndex = Math.max(
+      0,
+      Math.floor(Math.max(0, timelineLocalFrame) * speedFactor + sourceBaseOffset),
+    );
     const timestamp = mediaFrameIndex / fps;
     
     // Fire off preseek (non-blocking)
-    void preseekAudioWorker(asset.path, timestamp, mediaInfoRef.current);
-  }, [isPlaying, asset, fps, currentFrame, speed, isInFrame]);
+    const rangedInfo = withAssetRange(mediaInfoRef.current);
+    void preseekAudioWorker(asset.path, timestamp, rangedInfo);
+  }, [
+    isPlaying,
+    asset,
+    fps,
+    currentFrame,
+    speed,
+    isInFrame,
+    getEffectiveSourceRange,
+    withAssetRange,
+    trimStart,
+  ]);
 
   useEffect(() => {
     const onPlaying = async (
@@ -538,13 +617,14 @@ const AudioPreview: React.FC<
   );
 
   const startRendering = useCallback(async () => {
+    const mediaInfo = mediaInfoRef.current;
     // Only play audio when clip is actually active (not during prebuffer period)
     if (
       !isInFrame ||
       !isPlaying ||
       !ctx ||
-      !mediaInfoRef.current ||
-      !mediaInfoRef.current.audio ||
+      !mediaInfo ||
+      !mediaInfo.audio ||
       !fps ||
       !Number.isFinite(currentFrame)
     ) {
@@ -576,27 +656,30 @@ const AudioPreview: React.FC<
     
     // Sample from the correct media frame based on speed
     const speedFactor = Math.max(0.1, speed);
-    const mediaStartOffset = mediaInfoRef.current?.startFrame || 0;
+    const sourceRange = getEffectiveSourceRange();
+    const sourceBaseOffset = (sourceRange.startFrame || 0) + (trimStart || 0);
+    const timelineLocalFrame = currentStartFrameRef.current - (trimStart || 0);
     const mediaFrameIndex =
-      Math.max(0, Math.floor(currentStartFrameRef.current * speedFactor)) +
-      mediaStartOffset;
+      Math.max(
+        0,
+        Math.floor(Math.max(0, timelineLocalFrame) * speedFactor + sourceBaseOffset),
+      );
     // IMPORTANT: mediaTimeAtStart uses the *signed* currentStartFrameRef to support
     // overlap prebuffering. When currentFrame is negative (playhead before clip start),
     // this pushes scheduled buffers into the future so audio starts exactly at the
     // clip boundary (no gap), without playing early.
     const mediaTimeAtStart =
-      (currentStartFrameRef.current * speedFactor + mediaStartOffset) / fps;
+      (timelineLocalFrame * speedFactor + sourceBaseOffset) / fps;
     // Extend audio beyond clip boundary for seamless transitions with adjacent clips
-    const endIndex = mediaInfoRef.current?.endFrame
-      ? mediaInfoRef.current.endFrame
-      : undefined;
+    const endIndex = sourceRange.endFrame;
     const asset = getAssetById(assetId);
     if (!asset) return;
+    const rangedInfo = withAssetRange(mediaInfo);
     
     // Start iterator and soundtouch setup in parallel
     const [iteratorResult, soundtouchNode] = await Promise.all([
       getAudioIterator(asset.path, {
-        mediaInfo: mediaInfoRef.current || undefined,
+        mediaInfo: rangedInfo,
         fps,
         startIndex: mediaFrameIndex,
         endIndex,
@@ -851,8 +934,11 @@ const AudioPreview: React.FC<
     fadeIn,
     fadeOut,
     speed,
+    getEffectiveSourceRange,
     ensureSoundtouchNode,
     configureSoundtouchForSpeed,
+    withAssetRange,
+    trimStart,
   ]);
 
   // Start or restart rendering when playback starts or media becomes ready

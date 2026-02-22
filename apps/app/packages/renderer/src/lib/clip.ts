@@ -2359,8 +2359,9 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
       //
       // - `trimStart` is the source-frame offset at the clip's start (in project frames).
       // - `trimEnd` is a <= 0 "give" value used by resize logic (negative when trimmed in).
-      // - The right clip must advance `trimStart` by the cut offset so it starts on the
-      //   same source frame the original clip had at `cutFrame`.
+      // - Timeline progression maps to source using `localTimelineFrames * speed`, so
+      //   the right clip must advance `trimStart` by `cutOffset * speed` to keep source
+      //   continuity at the cut.
       const oldStart = Math.max(0, Number(clip.startFrame ?? 0));
       const oldEnd = Math.max(oldStart + 1, Number(clip.endFrame ?? oldStart + 1));
       const safeOldTrimStart = isFinite(clip.trimStart ?? 0)
@@ -2369,7 +2370,13 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
       const safeOldTrimEnd = isFinite(clip.trimEnd ?? 0)
         ? Number(clip.trimEnd ?? 0)
         : 0;
+      const rawSpeed = Number((clip as any).speed ?? 1);
+      const safeSpeed = Math.max(
+        0.1,
+        Math.min(5, Number.isFinite(rawSpeed) ? rawSpeed : 1),
+      );
       const cutRel = Math.max(0, Math.min(oldEnd - oldStart, cutFrame - oldStart));
+      const cutSourceRel = Math.max(0, Math.round(cutRel * safeSpeed));
 
       // Left clip: same start/trimStart; end at cut; adjust trimEnd exactly like a right-edge resize.
       const newClip1: AnyClipProps = {
@@ -2385,7 +2392,7 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
         ...clip,
         clipId: newClipId2,
         startFrame: cutFrame,
-        trimStart: safeOldTrimStart + cutRel,
+        trimStart: safeOldTrimStart + cutSourceRel,
         trimEnd: safeOldTrimEnd,
       };
 
@@ -2437,8 +2444,16 @@ export const useClipStore = create<ClipStore>(((set, get) => ({
                   const baseStart = url.searchParams.get("startFrame")
                     ? Number(url.searchParams.get("startFrame"))
                     : 0;
-                  const skipFrames = Math.max(0, Math.round(cutRel - ps));
-                  const remaining = Math.max(1, Math.round(pe - cutRel));
+                  const preCutRel = Math.max(0, Math.round(cutRel - ps));
+                  const skipFrames = Math.max(
+                    0,
+                    Math.round(preCutRel * safeSpeed),
+                  );
+                  const remainingTimeline = Math.max(0, Math.round(pe - cutRel));
+                  const remaining = Math.max(
+                    1,
+                    Math.round(remainingTimeline * safeSpeed),
+                  );
                   const newStart = Math.max(0, Math.round(baseStart + skipFrames));
                   const newEnd = Math.max(newStart + 1, newStart + remaining);
                   url.searchParams.set("startFrame", String(newStart));

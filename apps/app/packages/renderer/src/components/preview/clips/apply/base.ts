@@ -1,5 +1,6 @@
 import { FilterClipProps } from "@/lib/types";
 import { useControlsStore } from "@/lib/control";
+import { WebGLHaldClut } from "../../webgl-filters/hald-clut";
 
 /**
  * Base class for all clip preview applications
@@ -58,6 +59,16 @@ export abstract class BaseClipApplicator<
 
   getIntensity(): number {
     return this.clip.intensity ?? 1;
+  }
+
+
+  public abstract getFilterPath(): string | null;
+  /**
+   * Get the hald clut instance
+   * @returns The hald clut instance
+   */
+  getHaldClutInstance(): WebGLHaldClut | null {
+    return null;
   }
 
   /**

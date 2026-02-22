@@ -247,6 +247,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
       console.error("WebGLHaldClut requires WebGL2 to preload CLUT textures");
       return;
     }
+
     const clutImage = await this.loadClutImage(clutImagePath);
 
     // Calculate Hald CLUT level from image dimensions
@@ -255,6 +256,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
     while (level * level * level < length) {
       level++;
     }
+    
     level = level * level; // ImageMagick squares the level
 
     // Create texture for this CLUT

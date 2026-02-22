@@ -13,10 +13,12 @@ import {
     ADTS,
 } from "mediabunny";
 import { getUserDataPath as getUserDataPathPreload } from "@app/preload";
-import {
-    VideoDecodeFarmCoordinator,
-    type VideoDecoderAddAssetOptions,
-} from "./video-decode-farm";
+
+function getVideoDecoderWorkerUrl(): URL {
+    // Load the Node-capable classic worker artifact so `require("node:fs")`
+    // works without Vite externalizing Node builtins.
+    return new URL("./video-decoder.worker.cjs", import.meta.url);
+}
 
 interface VideoFrameDecoderOptions {
     mediaInfo: MediaInfo;
@@ -70,13 +72,23 @@ export class VideoFrameDecoder {
             };
         });
 
-        this.worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
-            type: "module",
-        });
+        this.worker = new Worker(getVideoDecoderWorkerUrl());
 
         this.worker.onmessage = (e) => {
             const msg = e.data;
 
+            if (msg.type === "debug" && (msg.event === "decodeBenchmark" || msg.event === "iterateBenchmark")) {
+                const p = msg.payload ?? {};
+                const label =
+                    msg.event === "decodeBenchmark"
+                        ? p.fromCache
+                            ? `[decodeBenchmark] cache hit, ${p.totalMs?.toFixed(1)}ms`
+                            : `[decodeBenchmark] total=${p.totalMs?.toFixed(1)}ms keyPacket=${p.keyPacketMs?.toFixed(1)}ms decodeLoop=${p.decodeLoopMs?.toFixed(1)}ms packets=${p.packetsDecoded} target=${p.targetTimestamp?.toFixed(2)}s`
+                        : `[iterateBenchmark] total=${p.totalMs?.toFixed(1)}ms keyPacket=${p.keyPacketMs?.toFixed(1)}ms packets=${p.packetsDecoded} range=[${p.startTime?.toFixed(2)}-${p.endTime?.toFixed(2)}]s`;
+                // eslint-disable-next-line no-console
+                console.log(label, p);
+                return;
+            }
 
             if (msg.type === "frame") {
                 // Handle Iteration Frames
@@ -105,16 +117,6 @@ export class VideoFrameDecoder {
                             duration: msg.duration,
                         });
                         
-                        // We do NOT close the frame here if onFrameCallback consumes/closes it.
-                        // But looking at VideoPreview.tsx, it renders it to canvas.
-                        // `VideoFrame` needs to be closed. VideoPreview calls drawWrappedCanvas -> context.drawImage.
-                        // It doesn't close it explicitly? 
-                        // Wait, original VideoDecoder closed it: `frame.close()` at end of handler.
-                        // `VideoPreview` receives `wc` with `canvas: VideoFrame`.
-                        // `drawWrappedCanvas` does NOT close it.
-                        // So we MUST close it here.
-                        msg.frame.close();
-
                         // Send Ack to resume worker
                         this.worker.postMessage({ type: "ack", requestId: msg.requestId });
                     }).catch(err => {
@@ -279,6 +281,7 @@ export class VideoFrameDecoder {
 
     public async seek(timestamp: number, forceAccurate: boolean = false): Promise<void> {
         const reqId = ++this.currentRequestId;
+        
         this.worker.postMessage({
             type: "seek",
             timestamp,
@@ -348,38 +351,28 @@ interface VideoDecoderManagerAssetState {
 // incoming asset path already lives under the userData tree and prefer the
 // faster app://user-data host over app://apex-cache.
 let cachedUserDataPath: string | null = null;
-let userDataPathInitPromise: Promise<void> | null = null;
 
-async function ensureUserDataPathLoaded(): Promise<void> {
-    if (cachedUserDataPath || userDataPathInitPromise) {
-        return userDataPathInitPromise ?? Promise.resolve();
-    }
-    userDataPathInitPromise = (async () => {
-        try {
-            const res: any = await getUserDataPathPreload();
-            if (res?.success && res.data?.user_data) {
-                cachedUserDataPath = res.data.user_data;
-            }
-        } catch {
-            // Best-effort only; keep cachedUserDataPath as null on failure.
-        }
-    })();
-    return userDataPathInitPromise;
-}
 
 // Kick off userData resolution in the background; we don't block decoder usage
 // on this, and fall back to previous heuristics until it's available.
 
+const SEEK_DEBOUNCE_MS = 250;
 
+type SeekDebounceState = {
+    timer: ReturnType<typeof setTimeout>;
+    timestamp: number;
+    forceAccurate: boolean;
+    resolvers: Array<{ resolve: () => void; reject: (e: Error) => void }>;
+};
 
 export class VideoDecoderManager {
     private worker: Worker | null = null;
-    private farm: VideoDecodeFarmCoordinator | null = null;
     private assets = new Map<string, VideoDecoderManagerAssetState>();
     private _seekTotal = 0;
     private _seekAccurate = 0;
     private _seekFast = 0;
     private _decoderDebugStats: any = null;
+    private seekDebounceByAsset = new Map<string, SeekDebounceState>();
 
     private createAssetState(params: {
         asset: Asset;
@@ -417,14 +410,7 @@ export class VideoDecoderManager {
 
     constructor() {
        
-
-        // IMPORTANT: keep this in the inline `new Worker(new URL(...))` form.
-        // Vite's worker transform relies on recognizing this pattern; if we assign the URL
-        // to a variable first, Vite may treat the `.worker.ts` file as a static asset and
-        // ship it with a `.ts` extension (which then gets `video/mp2t` MIME via our protocol).
-        const worker = new Worker(new URL("./video-decoder.worker.ts", import.meta.url), {
-            type: "module",
-        });
+        const worker = new Worker(getVideoDecoderWorkerUrl());
         this.worker = worker;
 
         // Make worker lifecycle issues extremely obvious in the renderer console.
@@ -444,6 +430,18 @@ export class VideoDecoderManager {
             if (msg.type === "debug") {
                 if (msg.event === "diag-state") {
                     this._decoderDebugStats = msg.payload;
+                }
+                // Always log decode benchmarks for visibility
+                if (msg.event === "decodeBenchmark" || msg.event === "iterateBenchmark") {
+                    const p = msg.payload ?? {};
+                    const label =
+                        msg.event === "decodeBenchmark"
+                            ? p.fromCache
+                                ? `[decodeBenchmark] cache hit, ${p.totalMs?.toFixed(1)}ms`
+                                : `[decodeBenchmark] total=${p.totalMs?.toFixed(1)}ms keyPacket=${p.keyPacketMs?.toFixed(1)}ms decodeLoop=${p.decodeLoopMs?.toFixed(1)}ms packets=${p.packetsDecoded} target=${p.targetTimestamp?.toFixed(2)}s`
+                            : `[iterateBenchmark] total=${p.totalMs?.toFixed(1)}ms keyPacket=${p.keyPacketMs?.toFixed(1)}ms packets=${p.packetsDecoded} range=[${p.startTime?.toFixed(2)}-${p.endTime?.toFixed(2)}]s`;
+                    // eslint-disable-next-line no-console
+                    console.log(label, p);
                 }
                 if ((window as any).__apexVideoDecoderDebug === true) {
                     // eslint-disable-next-line no-console
@@ -616,10 +614,7 @@ export class VideoDecoderManager {
             logicalId?: string;
         },
     ): void {
-        if (this.farm) {
-            this.farm.addAsset(asset, options as VideoDecoderAddAssetOptions);
-            return;
-        }
+
         if (!this.worker) return;
 
         const decoderId = options.logicalId ?? asset.id;
@@ -723,10 +718,7 @@ export class VideoDecoderManager {
      * Dispose a single asset and release any resources associated with it.
      */
     public disposeAsset(assetId: string): void {
-        if (this.farm) {
-            this.farm.disposeAsset(assetId);
-            return;
-        }
+
         const client = this.assets.get(assetId);
         if (!client || !this.worker) return;
 
@@ -741,6 +733,16 @@ export class VideoDecoderManager {
         }
         client.pendingSeeks.clear();
 
+        // Cancel any debounced seek for this asset
+        const debounced = this.seekDebounceByAsset.get(assetId);
+        if (debounced) {
+            clearTimeout(debounced.timer);
+            for (const { reject } of debounced.resolvers) {
+                reject(new Error("Asset disposed"));
+            }
+            this.seekDebounceByAsset.delete(assetId);
+        }
+
         this.assets.delete(assetId);
         this.worker.postMessage({ type: "dispose", assetId });
     }
@@ -749,9 +751,6 @@ export class VideoDecoderManager {
      * Returns true if an asset with the given id has already been registered.
      */
     public hasAsset(assetId: string): boolean {
-        if (this.farm) {
-            return this.farm.hasAsset(assetId);
-        }
         return this.assets.has(assetId);
     }
 
@@ -767,10 +766,7 @@ export class VideoDecoderManager {
             onReady?: () => void;
         },
     ): void {
-        if (this.farm) {
-            this.farm.updateAssetHandlers(assetId, handlers);
-            return;
-        }
+
         const client = this.assets.get(assetId);
         if (!client) return;
 
@@ -790,40 +786,86 @@ export class VideoDecoderManager {
 
     /**
      * Perform a seek for a specific asset.
+     * Rapid seeks (both accurate and non-accurate) are debounced per asset to avoid
+     * decoder thrashing and "key frame required" errors from overlapping seeks.
      */
     public async seek(assetId: string, timestamp: number, forceAccurate: boolean = false): Promise<void> {
-        if (this.farm) {
-            return this.farm.seek(assetId, timestamp, forceAccurate);
-        }
+
         const client = this.assets.get(assetId);
         if (!client || !this.worker) {
             return;
         }
         const worker = this.worker;
 
-        this._seekTotal++;
-        if (forceAccurate) this._seekAccurate++;
-        else this._seekFast++;
+        const doSeek = (
+            ts: number,
+            accurate: boolean,
+            resolvers: Array<{ resolve: () => void; reject: (e: Error) => void }>,
+        ) => {
+            this._seekTotal++;
+            if (accurate) this._seekAccurate++;
+            else this._seekFast++;
 
-        const reqId = ++client.currentRequestId;
+            const reqId = ++client.currentRequestId;
+            const resolveAll = () => {
+                for (const r of resolvers) r.resolve();
+            };
+            const rejectAll = (e: Error) => {
+                for (const r of resolvers) r.reject(e);
+            };
 
-        return new Promise<void>((resolve, reject) => {
-            client.pendingSeeks.set(reqId, { resolve, reject });
+            client.pendingSeeks.set(reqId, { resolve: resolveAll, reject: rejectAll });
 
             worker.postMessage({
                 type: "seek",
                 assetId,
-                timestamp,
-                forceAccurate,
+                timestamp: ts,
+                forceAccurate: accurate,
                 requestId: reqId,
             });
+        };
+
+        let resolve!: () => void;
+        let reject!: (e: Error) => void;
+        const promise = new Promise<void>((res, rej) => {
+            resolve = res;
+            reject = rej;
         });
+
+        const runDebounced = () => {
+            const state = this.seekDebounceByAsset.get(assetId);
+            if (!state) return;
+            this.seekDebounceByAsset.delete(assetId);
+            if (!this.assets.has(assetId)) {
+                for (const { reject: r } of state.resolvers) r(new Error("Asset disposed"));
+                return;
+            }
+            const { timestamp: ts, forceAccurate: accurate, resolvers } = state;
+            doSeek(ts, accurate, resolvers);
+        };
+
+        const existing = this.seekDebounceByAsset.get(assetId);
+        if (existing) {
+            clearTimeout(existing.timer);
+            existing.timestamp = timestamp;
+            existing.forceAccurate = existing.forceAccurate || forceAccurate;
+            existing.resolvers.push({ resolve, reject });
+            existing.timer = setTimeout(runDebounced, SEEK_DEBOUNCE_MS);
+        } else {
+            doSeek(timestamp, forceAccurate, [{ resolve, reject }]);
+            this.seekDebounceByAsset.set(assetId, {
+                timer: setTimeout(() => this.seekDebounceByAsset.delete(assetId), SEEK_DEBOUNCE_MS),
+                timestamp,
+                forceAccurate,
+                resolvers: [],
+            });
+        }
+
+        return promise;
     }
 
     public getSeekStats(): { total: number; accurate: number; fast: number } {
-        if (this.farm) {
-            return this.farm.getSeekStats();
-        }
+
         return {
             total: this._seekTotal,
             accurate: this._seekAccurate,
@@ -832,9 +874,6 @@ export class VideoDecoderManager {
     }
 
     public getDecoderDebugStats(): any {
-        if (this.farm) {
-            return this.farm.getDecoderDebugStats();
-        }
         return this._decoderDebugStats;
     }
 
@@ -848,9 +887,7 @@ export class VideoDecoderManager {
         shouldDelay?: (timestamp: number) => Promise<void>,
         checkCancel?: () => boolean,
     ): Promise<void> {
-        if (this.farm) {
-            return this.farm.iterate(assetId, startTime, endTime, shouldDelay, checkCancel);
-        }
+
 
         const client = this.assets.get(assetId);
         if (!client || !this.worker) {
@@ -884,10 +921,7 @@ export class VideoDecoderManager {
      * Dispose all assets and terminate the underlying worker.
      */
     public disposeAll(): void {
-        if (this.farm) {
-            this.farm.disposeAll();
-            return;
-        }
+
         if (!this.worker) return;
         for (const id of this.assets.keys()) {
             this.disposeAsset(id);

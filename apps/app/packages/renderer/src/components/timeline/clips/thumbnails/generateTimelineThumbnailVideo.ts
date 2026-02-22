@@ -6,6 +6,7 @@ import { useControlsStore } from "@/lib/control";
 import { MediaInfo, VideoClipProps } from "@/lib/types";
 import { getClipWidth } from "@/lib/clip";
 import { useClipStore } from "@/lib/clip";
+import { CompositorShader } from "@/components/preview/webgl-filters";
 import {
   readTimelineThumbnailDiskCache,
   stableSerializeCacheKey,
@@ -15,6 +16,14 @@ import {
 const THUMBNAIL_TILE_SIZE = 36;
 const MAX_FALLBACK_CANVASES = 512;
 const videoThumbnailFallbackByClipId = new Map<string, HTMLCanvasElement>();
+let videoThumbnailCompositor: CompositorShader | null = null;
+
+const getVideoThumbnailCompositor = (): CompositorShader => {
+  if (!videoThumbnailCompositor) {
+    videoThumbnailCompositor = new CompositorShader();
+  }
+  return videoThumbnailCompositor;
+};
 
 const cloneCanvas = (source: HTMLCanvasElement): HTMLCanvasElement | null => {
   const width = Math.max(1, Math.floor(source.width || 0));
@@ -66,6 +75,57 @@ const getVideoFilterState = (clip: VideoClipProps) => ({
   jitter: clip?.jitter,
 });
 
+const applyVideoThumbnailEffects = (
+  sourceCanvas: HTMLCanvasElement,
+  maskFrame: number,
+  filters: ReturnType<typeof getVideoFilterState>,
+  maskRenderingDisabled: boolean,
+  applyMask: (
+    canvas: HTMLCanvasElement,
+    frameIndex?: number,
+  ) => HTMLCanvasElement,
+  applyFilters: (canvas: HTMLCanvasElement, filters: any) => void,
+): HTMLCanvasElement => {
+  const width = Math.max(1, sourceCanvas.width || 1);
+  const height = Math.max(1, sourceCanvas.height || 1);
+
+  const working = document.createElement("canvas");
+  working.width = width;
+  working.height = height;
+  const workingCtx = working.getContext("2d");
+  if (!workingCtx) return sourceCanvas;
+  workingCtx.drawImage(sourceCanvas, 0, 0, width, height);
+
+  try {
+    const compositor = getVideoThumbnailCompositor();
+    const effectsResult = compositor.apply(working, {
+      filterParams: filters,
+      // Effects first; mask applied after compositor for thumbnail parity.
+      masks: [],
+    });
+
+    if (effectsResult && effectsResult !== working) {
+      workingCtx.clearRect(0, 0, width, height);
+      workingCtx.drawImage(effectsResult, 0, 0, width, height);
+    }
+
+    if (maskRenderingDisabled) return working;
+
+    const masked = applyMask(working, maskFrame);
+    if (!masked || masked === working) return working;
+
+    const finalCanvas = cloneCanvas(masked);
+    return finalCanvas || masked;
+  } catch {
+    // Fallback order also: effects first, mask second.
+    applyFilters(working, filters);
+    if (maskRenderingDisabled) return working;
+    const masked = applyMask(working, maskFrame);
+    const fallback = cloneCanvas(masked);
+    return fallback || masked;
+  }
+};
+
 const getMaskSignature = (clip: VideoClipProps) =>
   (clip?.masks ?? []).map((mask) => ({
     id: mask.id,
@@ -108,6 +168,7 @@ export const generateTimelineThumbnailVideo = async (
   lastExactRequestKeyRef: React.MutableRefObject<string | null>,
   setForceRerenderCounter: React.Dispatch<React.SetStateAction<number>>,
   noShift: boolean = false,
+  maskRenderingDisabled: boolean = false,
 ) => {
   if (clipType !== "video") return;
   let tClipWidth = Math.min(thumbnailClipWidth, maxTimelineWidth);
@@ -274,6 +335,7 @@ export const generateTimelineThumbnailVideo = async (
   const clipVisualSignature = stableSerializeCacheKey({
     filters,
     masks: maskSignature,
+    maskRenderingDisabled,
     transform: currentClip?.transform,
     originalTransform: currentClip?.originalTransform,
     resizeSide,
@@ -347,6 +409,8 @@ export const generateTimelineThumbnailVideo = async (
     key: diskCacheKey,
     sourceSignature,
   });
+
+
   if (diskCached) {
     ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
     drawFittedCanvas(
@@ -415,7 +479,14 @@ export const generateTimelineThumbnailVideo = async (
       const sample = nearest[i];
       const inputCanvas = (sample?.canvas as HTMLCanvasElement | undefined) ?? null;
       const canvasToTile = inputCanvas
-        ? applyMask(inputCanvas, Math.round(frameIndices[i] * fpsAdjustment))
+        ? applyVideoThumbnailEffects(
+            inputCanvas,
+            Math.round(frameIndices[i] * fpsAdjustment),
+            filters,
+            maskRenderingDisabled,
+            applyMask,
+            applyFilters,
+          )
         : null;
       if (canvasToTile) lastCanvasToTile = canvasToTile;
       const anyCanvas = (canvasToTile as any) ?? null;
@@ -441,7 +512,7 @@ export const generateTimelineThumbnailVideo = async (
           continue; // this tile is fully truncated away
         }
       }
-
+   
       const remaining = targetWidth - x;
       if (remaining <= 0) break;
       const drawWidth = Math.min(availableSrcWidth, remaining);
@@ -507,8 +578,6 @@ export const generateTimelineThumbnailVideo = async (
       seedCtx.drawImage(imageCanvas, 0, 0);
     }
 
-    // Apply WebGL filters to video thumbnails
-    applyFilters(imageCanvas, filters);
     if (lastCanvasToTile || hasCachedSamples || fallbackCanvas) {
       rememberVideoFallback(currentClipId, imageCanvas);
     }
@@ -553,13 +622,12 @@ export const generateTimelineThumbnailVideo = async (
           if (mySeq !== exactVideoUpdateSeqRef.current) return;
           ctx2.clearRect(0, 0, targetWidth2, targetHeight2);
           ctx2.drawImage(workingCanvas, 0, 0);
-          // Apply filters on each present, but throttle calls to keep perf OK.
-          applyFilters(imageCanvas, filters);
           groupRef.current?.getLayer()?.batchDraw();
         };
 
         // Approximate left-side truncation during streaming using expected tile widths
         let x2 = overHang;
+
         let skipRemaining2 = 0;
         if (resizeSide === "left" && clipType === "video") {
           const expectedTileWidth = Math.max(1, Math.floor(thumbnailWidth));
@@ -586,20 +654,28 @@ export const generateTimelineThumbnailVideo = async (
             ((sample?.canvas as HTMLCanvasElement | undefined) ??
               (fallbackWrapped?.canvas as HTMLCanvasElement | undefined)) ??
             null;
-          decoded[pos] = inputCanvas;
-
           // If we don't have a tile yet, still advance layout to keep the stream moving.
           let canvasToTile: HTMLCanvasElement | null = null;
           let tileWidth = Math.max(1, Math.floor(thumbnailWidth));
           let tileHeight = targetHeight2;
           if (inputCanvas) {
-            canvasToTile = applyMask(inputCanvas, Math.round(fi * fpsAdjustment));
+            canvasToTile = applyVideoThumbnailEffects(
+              inputCanvas,
+              Math.round(fi * fpsAdjustment),
+              filters,
+              maskRenderingDisabled,
+              applyMask,
+              applyFilters,
+            );
+            decoded[pos] = canvasToTile;
             const anyCanvas = canvasToTile as any;
             tileWidth = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
             tileHeight = Math.max(
               1,
               anyCanvas.height || anyCanvas.naturalHeight || 1,
             );
+          } else {
+            decoded[pos] = null;
           }
 
           const sourceHeight = Math.min(tileHeight, targetHeight2);
@@ -616,7 +692,7 @@ export const generateTimelineThumbnailVideo = async (
               continue; // fully truncated away
             }
           }
-
+      
           const remaining2 = targetWidth2 - x2;
           if (remaining2 <= 0) break;
           const drawWidth2 = Math.min(availableSrcWidth2, remaining2);
@@ -656,11 +732,9 @@ export const generateTimelineThumbnailVideo = async (
         if (resizeSide === "left" && clipType === "video") {
           let total = 0;
           for (let i = 0; i < frameIndices.length; i++) {
-            const fi = frameIndices[i]!;
             const c = decoded[i];
             if (c) {
-              const masked = applyMask(c, Math.round(fi * fpsAdjustment));
-              const anyCanvas = masked as any;
+              const anyCanvas = c as any;
               total += Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
             } else {
               total += Math.max(1, Math.floor(thumbnailWidth));
@@ -671,14 +745,26 @@ export const generateTimelineThumbnailVideo = async (
         }
 
         for (let i = 0; i < frameIndices.length && xFinal < targetWidth2; i++) {
-          const fi = frameIndices[i]!;
           // Prefer decoded sample; fall back to nearest cached if missing.
-          const c = decoded[i] ?? ((nearest[i]?.canvas as HTMLCanvasElement | undefined) ?? null);
+          const fallbackCanvasTile =
+            (nearest[i]?.canvas as HTMLCanvasElement | undefined) ?? null;
+          const c =
+            decoded[i] ??
+            (fallbackCanvasTile
+              ? applyVideoThumbnailEffects(
+                  fallbackCanvasTile,
+                  Math.round(frameIndices[i]! * fpsAdjustment),
+                  filters,
+                  maskRenderingDisabled,
+                  applyMask,
+                  applyFilters,
+                )
+              : null);
           let tileCanvas: HTMLCanvasElement | null = null;
           let tileW = Math.max(1, Math.floor(thumbnailWidth));
           let tileH = targetHeight2;
           if (c) {
-            tileCanvas = applyMask(c, Math.round(fi * fpsAdjustment));
+            tileCanvas = c;
             const anyCanvas = tileCanvas as any;
             tileW = Math.max(1, anyCanvas.width || anyCanvas.naturalWidth || 1);
             tileH = Math.max(1, anyCanvas.height || anyCanvas.naturalHeight || 1);
@@ -723,8 +809,7 @@ export const generateTimelineThumbnailVideo = async (
           for (let i = decoded.length - 1; i >= 0; i--) {
             const c = decoded[i];
             if (c) {
-              const fi = frameIndices[i]!;
-              last = applyMask(c, Math.round(fi * fpsAdjustment));
+              last = c;
               break;
             }
           }
@@ -741,6 +826,7 @@ export const generateTimelineThumbnailVideo = async (
             const sourceH = Math.min(tileH, targetHeight2);
             let guard = 0;
             while (xFinal < targetWidth2 && guard++ < 2048) {
+              
               const remaining = targetWidth2 - xFinal;
               const drawW = Math.min(tileW, remaining);
               if (drawW <= 0) break;

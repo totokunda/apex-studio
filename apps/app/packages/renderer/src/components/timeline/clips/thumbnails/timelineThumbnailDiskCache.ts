@@ -406,7 +406,7 @@ export function writeTimelineThumbnailDiskCacheInBackground(
     const sourceHash = sha256sum(params.sourceSignature);
     const prevEntry = manifest.entries[keyHash];
 
-    const webp = await canvasToBlob(snapshot, "image/webp", 0.62);
+    const webp = await canvasToBlob(snapshot, "image/webp", 0.5);
     const blob = webp ?? (await canvasToBlob(snapshot, "image/png"));
     if (!blob) return;
     const bytes = new Uint8Array(await blob.arrayBuffer());

@@ -1,7 +1,95 @@
 import { generateTimelineSamples } from "@/lib/media/timeline";
 import { MediaInfo, ImageClipProps } from "@/lib/types";
 import { useClipStore } from "@/lib/clip";
+import { CompositorShader } from "@/components/preview/webgl-filters";
 const THUMBNAIL_TILE_SIZE = 36;
+
+let imageThumbnailCompositor: CompositorShader | null = null;
+
+const getImageThumbnailCompositor = (): CompositorShader => {
+  if (!imageThumbnailCompositor) {
+    imageThumbnailCompositor = new CompositorShader();
+  }
+  return imageThumbnailCompositor;
+};
+
+const getImageFilterState = (clip: ImageClipProps) => ({
+  brightness: clip?.brightness,
+  contrast: clip?.contrast,
+  hue: clip?.hue,
+  saturation: clip?.saturation,
+  blur: clip?.blur,
+  sharpness: clip?.sharpness,
+  noise: clip?.noise,
+  vignette: clip?.vignette,
+  colorTintColor: clip?.colorTintColor,
+  colorTintIntensity: clip?.colorTintIntensity,
+  scanLines: clip?.scanLines,
+  chromaticAberration: clip?.chromaticAberration,
+  interlace: clip?.interlace,
+  pixelate: clip?.pixelate,
+  jitter: clip?.jitter,
+});
+
+const applyImageThumbnailEffects = (
+  sourceCanvas: HTMLCanvasElement,
+  clip: ImageClipProps,
+  maskFrame: number,
+  applyMask: (
+    canvas: HTMLCanvasElement,
+    frameIndex?: number,
+  ) => HTMLCanvasElement,
+  applyFilters: (canvas: HTMLCanvasElement, filters: any) => void,
+): HTMLCanvasElement => {
+  const width = Math.max(1, sourceCanvas.width || 1);
+  const height = Math.max(1, sourceCanvas.height || 1);
+  const filters = getImageFilterState(clip);
+
+  const working = document.createElement("canvas");
+  working.width = width;
+  working.height = height;
+  const workingCtx = working.getContext("2d");
+  if (!workingCtx) return sourceCanvas;
+  workingCtx.drawImage(sourceCanvas, 0, 0, width, height);
+
+  try {
+    const compositor = getImageThumbnailCompositor();
+    const effectsResult = compositor.apply(working, {
+      filterParams: filters,
+      // Effects first; mask is applied after compositor below.
+      masks: [],
+    });
+
+    if (effectsResult && effectsResult !== working) {
+      workingCtx.clearRect(0, 0, width, height);
+      workingCtx.drawImage(effectsResult, 0, 0, width, height);
+    }
+
+    const masked = applyMask(working, maskFrame);
+    if (!masked || masked === working) return working;
+
+    const finalCanvas = document.createElement("canvas");
+    finalCanvas.width = Math.max(1, (masked as any).width || width);
+    finalCanvas.height = Math.max(1, (masked as any).height || height);
+    const finalCtx = finalCanvas.getContext("2d");
+    if (!finalCtx) return masked;
+    finalCtx.drawImage(masked, 0, 0, finalCanvas.width, finalCanvas.height);
+    return finalCanvas;
+  } catch {
+    // Fallback order must also be effects first, mask second.
+    applyFilters(working, filters);
+    const masked = applyMask(working, maskFrame);
+    if (!masked || masked === working) return working;
+
+    const fallback = document.createElement("canvas");
+    fallback.width = Math.max(1, (masked as any).width || width);
+    fallback.height = Math.max(1, (masked as any).height || height);
+    const fallbackCtx = fallback.getContext("2d");
+    if (!fallbackCtx) return masked;
+    fallbackCtx.drawImage(masked, 0, 0, fallback.width, fallback.height);
+    return fallback;
+  }
+};
 
 export const generateTimelineThumbnailImage = async (
   clipType: string,
@@ -48,7 +136,14 @@ export const generateTimelineThumbnailImage = async (
 
   if (samples?.[0]?.canvas) {
     const inputCanvas = samples?.[0]?.canvas as HTMLCanvasElement;
-    const canvasToTile = applyMask(inputCanvas);
+    const maskFrame = Math.max(0, Math.round(currentClip?.startFrame ?? 0));
+    const canvasToTile = applyImageThumbnailEffects(
+      inputCanvas,
+      currentClip,
+      maskFrame,
+      applyMask,
+      applyFilters,
+    );
     const ctx = imageCanvas.getContext("2d");
     if (ctx) {
       const targetWidth = Math.max(1, imageCanvas.width);
@@ -89,25 +184,6 @@ export const generateTimelineThumbnailImage = async (
         x += drawWidth;
       }
 
-      // Apply WebGL filters to image thumbnails
-      const imgClip = currentClip as ImageClipProps;
-      applyFilters(imageCanvas, {
-        brightness: imgClip?.brightness,
-        contrast: imgClip?.contrast,
-        hue: imgClip?.hue,
-        saturation: imgClip?.saturation,
-        blur: imgClip?.blur,
-        sharpness: imgClip?.sharpness,
-        noise: imgClip?.noise,
-        vignette: imgClip?.vignette,
-        colorTintColor: imgClip?.colorTintColor,
-        colorTintIntensity: imgClip?.colorTintIntensity,
-        scanLines: imgClip?.scanLines,
-        chromaticAberration: imgClip?.chromaticAberration,
-        interlace: imgClip?.interlace,
-        pixelate: imgClip?.pixelate,
-        jitter: imgClip?.jitter,
-      });
     }
   }
   groupRef.current?.getLayer()?.batchDraw();

@@ -644,6 +644,7 @@ const TimelineClip: React.FC<
         lastExactRequestKeyRef,
         setForceRerenderCounter,
         true,
+        tool === "mask",
       );
     } else if (clipType === "shape") {
       generateTimelineThumbnailShape(clipType, imageCanvas, groupRef);

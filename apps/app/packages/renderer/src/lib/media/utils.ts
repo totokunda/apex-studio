@@ -53,7 +53,53 @@ export const getMediaInfoCached = (
   if (path && isUUID(path)) {
     // get from assets 
     const asset = useClipStore.getState().getAssetById(path);
-    return mediaCache.getMedia(asset?.path ?? "")!;
+    const assetPath = asset?.path;
+    if (!assetPath) return undefined;
+
+    if (mediaCache.isMediaCached(assetPath)) {
+      return mediaCache.getMedia(assetPath)!;
+    }
+
+    // When the lookup key is assetId, the exact path variant (with start/end query params)
+    // may not be cached yet even if the base media path is. Rehydrate a scoped MediaInfo.
+    try {
+      const u = new URL(assetPath);
+      const hasStart = u.searchParams.has("startFrame");
+      const hasEnd = u.searchParams.has("endFrame");
+      if (hasStart || hasEnd) {
+        const noHash = getUrlWithoutHashSuffix(assetPath);
+        const basePath = getUrlWithoutSearchParams(noHash);
+        const baseInfo =
+          mediaCache.getMedia(basePath) ||
+          (basePath.startsWith("app://user-data/")
+            ? mediaCache.getMedia(convertUserDataPathToLocalPath(basePath))
+            : undefined);
+        if (baseInfo) {
+          const startNum = hasStart
+            ? Number(u.searchParams.get("startFrame"))
+            : undefined;
+          const endNum = hasEnd ? Number(u.searchParams.get("endFrame")) : undefined;
+          const startFrame = Number.isFinite(startNum) ? startNum : undefined;
+          const endFrame = Number.isFinite(endNum) ? endNum : undefined;
+          const scopedInfo: MediaInfo = {
+            ...baseInfo,
+            path: assetPath,
+            startFrame,
+            endFrame,
+          };
+          mediaCache.setMedia(assetPath, scopedInfo);
+          return scopedInfo;
+        }
+      }
+    } catch {}
+
+    if (assetPath.startsWith("app://user-data/")) {
+      const localPath = convertUserDataPathToLocalPath(assetPath);
+      if (mediaCache.isMediaCached(localPath)) {
+        return mediaCache.getMedia(localPath)!;
+      }
+    }
+    return undefined;
   }
 
   if (path && path.startsWith("app://user-data/")) {

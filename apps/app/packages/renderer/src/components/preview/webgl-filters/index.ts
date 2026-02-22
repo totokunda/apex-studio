@@ -1,3 +1,8 @@
+export {
+  CompositorShader,
+  type CompositorOptions,
+  type ClutEntry,
+} from "./compositor";
 export { WebGLFilterEngine } from "./WebGLFilterEngine";
 export { WebGLFilterBase } from "./WebGLFilterBase";
 export { WebGLBlur } from "./blur";

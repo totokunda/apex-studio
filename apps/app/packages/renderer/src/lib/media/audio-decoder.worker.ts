@@ -1,10 +1,11 @@
 import {
   EncodedPacketSink,
   Input,
-  UrlSource,
+  StreamSource,
   ALL_FORMATS,
   AudioSample,
 } from "mediabunny";
+import * as nodeFs from "node:fs/promises";
 
 // Minimal asset shape expected from the main thread
 type WorkerAsset = {
@@ -79,12 +80,21 @@ export type AudioWorkerResponse =
 function fileURLToPathInWorker(raw: string): string {
   try {
     const u = new URL(raw);
+
     if (u.protocol === "file:" || u.protocol === "app:") {
-      return decodeURIComponent(u.pathname.replace(/^\/+/, ""));
+      const decoded = decodeURIComponent(u.pathname);
+      // Windows file URL path: /C:/path -> C:/path
+      if (/^\/[A-Za-z]:\//.test(decoded)) {
+        return decoded.slice(1);
+      }
+      return decoded;
     }
-    return decodeURIComponent((u.pathname || "").replace(/^\/+/, ""));
+
+    // For unsupported URL schemes, preserve the original value.
+    return raw;
   } catch {
-    return raw.replace(/^\/+/, "");
+    // Not a URL, assume this is already a local filesystem path.
+    return raw;
   }
 }
 
@@ -167,6 +177,46 @@ function createAudioDecoder(
   });
   state.decoder = decoder;
   return decoder;
+}
+
+function createNodeFileSource(filePath: string): StreamSource {
+  let fileHandle: Awaited<ReturnType<typeof nodeFs.open>> | null = null;
+  let knownSize: number | null = null;
+
+  return new StreamSource({
+    getSize: async () => {
+      if (!fileHandle) {
+        fileHandle = await nodeFs.open(filePath, "r");
+      }
+      if (knownSize == null) {
+        const stats = await fileHandle.stat();
+        knownSize = Number(stats.size);
+      }
+      return knownSize;
+    },
+    read: async (start, end) => {
+      if (!fileHandle) {
+        fileHandle = await nodeFs.open(filePath, "r");
+      }
+      const length = Math.max(0, end - start);
+      const buffer = new Uint8Array(length);
+      if (length === 0) return buffer;
+      const readResult = await fileHandle.read(buffer, 0, length, start);
+      if (readResult.bytesRead === length) return buffer;
+      return buffer.subarray(0, readResult.bytesRead);
+    },
+    dispose: async () => {
+      if (!fileHandle) return;
+      try {
+        await fileHandle.close();
+      } catch {
+        // ignore close errors in worker teardown
+      } finally {
+        fileHandle = null;
+      }
+    },
+    prefetchProfile: "fileSystem",
+  });
 }
 
 // Message listener
@@ -263,41 +313,11 @@ async function handleConfigure(
 
   // Setup Input
   let input: Input | null = null;
-  let filePath: string | null = null;
-  let primarySourceDir: "user-data" | "apex-cache" = "user-data";
-  let secondarySourceDir: "user-data" | "apex-cache" = "apex-cache";
-  filePath = fileURLToPathInWorker(cfg.asset.path);
-
-  const hasUserDataPrefix =
-    typeof cfg.userDataPath === "string" &&
-    cfg.userDataPath.length > 0 &&
-    filePath.includes(cfg.userDataPath?.replace(/^\/+/, ""));
-
-  if (!hasUserDataPrefix && filePath.includes("engine_results")) {
-    primarySourceDir = "apex-cache";
-    secondarySourceDir = "user-data";
+  const filePath = fileURLToPathInWorker(cfg.asset.path);
+  if (!filePath) {
+    throw new Error("Missing file path for audio source");
   }
-
-  try {
-    const url = new URL(`app://${primarySourceDir}/${filePath}`);
-    if (cfg.folderUuid && primarySourceDir === "apex-cache") {
-      url.searchParams.set("folderUuid", cfg.folderUuid);
-    }
-    input = new Input({ formats, source: new UrlSource(url) });
-  } catch {
-    try {
-      if (!filePath) {
-        throw new Error("Missing file path for secondary source");
-      }
-      const url = new URL(`app://${secondarySourceDir}/${filePath}`);
-      if (cfg.folderUuid && secondarySourceDir === "apex-cache") {
-        url.searchParams.set("folderUuid", cfg.folderUuid);
-      }
-      input = new Input({ formats, source: new UrlSource(url) });
-    } catch {
-      throw new Error("Failed to create input");
-    }
-  }
+  input = new Input({ formats, source: createNodeFileSource(filePath) });
 
   state.input = input;
 
@@ -337,7 +357,7 @@ async function handlePreseek(
 
   try {
     // Pre-fetch the key packet for this timestamp
-    const keyPacket = await state.sink.getKeyPacket(timestamp);
+    const keyPacket = await state.sink.getKeyPacket(timestamp, { verifyKeyPackets: true});
     state.cachedSeekTimestamp = timestamp;
     state.cachedKeyPacket = keyPacket;
   } catch (e) {
@@ -434,7 +454,7 @@ async function handleIterate(
       state.cachedSeekTimestamp = null;
     } else {
       // No cache hit, do the seek
-      keyPacket = await state.sink.getKeyPacket(startTime);
+      keyPacket = await state.sink.getKeyPacket(startTime, { verifyKeyPackets: true});
     }
     const packets = state.sink.packets(keyPacket || undefined);
 

@@ -2,14 +2,16 @@ import {
   EncodedPacketSink,
   EncodedPacket,
   Input,
-  UrlSource,
+  StreamSource,
   ALL_FORMATS,
   InputTrack
 } from "mediabunny";
 import { mergeAlphaIntoColor } from "./merge-alpha";
+import * as nodeFs from "node:fs/promises";
 // Minimal asset shape expected from the main thread. This mirrors the core
 // fields of the renderer-side `Asset` type but is kept local to the worker
 // for decoupling and to avoid importing renderer modules here.
+
 type WorkerAsset = {
   id: string;
   type: "video" | "image" | "audio";
@@ -82,6 +84,13 @@ export type WorkerResponse =
       payload?: any;
     };
 
+
+
+export function assert(x: unknown): asserts x {
+	if (!x) {
+		throw new Error('Assertion failed.');
+	}
+}
 // Worker-local helper: turn a file/app URL into a plain path string without
 // relying on Node.js utilities. This stays compatible with browser/Electron
 // worker contexts.
@@ -89,31 +98,24 @@ function fileURLToPathInWorker(raw: string): string {
   try {
     const u = new URL(raw);
 
-    // For file:// or app:// URLs, use the pathname and strip leading slashes.
+    // For file:// or app:// URLs, convert URL path to a local filesystem path.
     if (u.protocol === "file:" || u.protocol === "app:") {
-      return decodeURIComponent(u.pathname.replace(/^\/+/, ""));
+      const decoded = decodeURIComponent(u.pathname);
+      // Windows file URL path: /C:/path -> C:/path
+      if (/^\/[A-Za-z]:\//.test(decoded)) {
+        return decoded.slice(1);
+      }
+      return decoded;
     }
 
-    // For other URL schemes, just normalize the pathname.
-    return decodeURIComponent((u.pathname || "").replace(/^\/+/, ""));
+    // For unsupported URL schemes, fall back to input string.
+    return raw;
   } catch {
-    // Not a URL – assume it's already a path; just normalize leading slashes.
-    return raw.replace(/^\/+/, "");
+    // Not a URL – assume it's already a local filesystem path.
+    return raw;
   }
 }
 
-// Best-effort helper to quickly detect a 404 for an app:// URL before we hand
-// it off to mediabunny. If the HEAD request itself fails (e.g. protocol does
-// not support HEAD), we treat it as "unknown" and *do not* block source
-// creation – only an explicit 404 status will cause us to skip this URL.
-async function isAppUrlDefinitely404(url: URL): Promise<boolean> {
-  try {
-    const res = await fetch(url.toString(), { method: "HEAD" });
-    return res.status === 404;
-  } catch {
-    return false;
-  }
-}
 
 // State
 type AssetState = {
@@ -201,7 +203,6 @@ function getDecoderState(decoder: VideoDecoder | null): string {
   return (decoder.state as string) || "unknown";
 }
 
-
 function getOrCreatePacketSink(assetId: string, videoTrack: InputTrack): EncodedPacketSink {
   let sink = packetSinks.get(assetId);
   if (!sink) {
@@ -209,6 +210,46 @@ function getOrCreatePacketSink(assetId: string, videoTrack: InputTrack): Encoded
     packetSinks.set(assetId, sink);
   }
   return sink;
+}
+
+function createNodeFileSource(filePath: string): StreamSource {
+  let fileHandle: any = null;
+  let knownSize: number | null = null;
+
+  return new StreamSource({
+    getSize: async () => {
+      if (!fileHandle) {
+        fileHandle = await nodeFs.open(filePath, "r");
+      }
+      if (knownSize == null) {
+        const stats = await fileHandle.stat();
+        knownSize = Number(stats.size);
+      }
+      return knownSize;
+    },
+    read: async (start, end) => {
+      if (!fileHandle) {
+        fileHandle = await nodeFs.open(filePath, "r");
+      }
+      const length = Math.max(0, end - start);
+      const buffer = new Uint8Array(length);
+      if (length === 0) return buffer;
+      const readResult = await fileHandle.read(buffer, 0, length, start);
+      if (readResult.bytesRead === length) return buffer;
+      return buffer.subarray(0, readResult.bytesRead);
+    },
+    dispose: async () => {
+      if (!fileHandle) return;
+      try {
+        await fileHandle.close();
+      } catch {
+        // ignore close errors in worker teardown
+      } finally {
+        fileHandle = null;
+      }
+    },
+    prefetchProfile: "fileSystem",
+  });
 }
 
 function emitDiagnostics(event: string, assetId?: string, requestId?: number) {
@@ -493,7 +534,7 @@ function dispatchDecodedFrame(assetId: string, frame: VideoFrame) {
     if (frameTime >= state.seekTargetTimestamp - 0.04) {
       state.seekDone = true;
       postFrame(assetId, frame, state.currentRequestId);
-      console.log("dispatchDecodedFrame", assetId, frame);
+
       state.seekTargetTimestamp = null;
       if (state.pendingSeekFrame) {
         state.pendingSeekFrame.close();
@@ -705,28 +746,54 @@ async function getVerifiedKeyPacket(
   }
 }
 
+
+
+
 async function getNextKeyPacketSafe(
   state: AssetState,
   packet: EncodedPacket,
 ): Promise<EncodedPacket | null> {
   if (!state.sink) return null;
   try {
-    return await state.sink.getNextKeyPacket(packet, {
+    let nextPacket = await state.sink.getNextKeyPacket(packet, {
       verifyKeyPackets: true,
     });
+
+    if (!nextPacket) {
+      const fallbackPacket = await state.sink.getKeyPacket(packet.timestamp, {
+        verifyKeyPackets: true,
+      });
+      nextPacket = fallbackPacket ?? null;
+    }
+
+    return nextPacket;
   } catch {
     return null;
   }
 }
 
+async function flushDecoderIfNeeded(
+  decoder: VideoDecoder | null,
+): Promise<void> {
+  if (!decoder || (decoder.state as string) !== "configured") return;
+  if (decoder.decodeQueueSize === 0) return;
+  try {
+    await decoder.flush();
+  } catch {
+    // Ignore - decoder may have closed or errored; reset will handle it
+  }
+}
+
 function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean {
   if (!state.config) return false;
+
   const decoder = ensureDecoderInstance(state, assetId);
   if (!decoder) return false;
 
   try {
     decoder.reset();
   } catch {
+
     // ignore
   }
 
@@ -763,6 +830,7 @@ async function decodePacketSafe(
   packet: EncodedPacket,
   requestId: number,
 ): Promise<boolean> {
+  
   if (!state.decoder || (state.decoder.state as string) === "closed") {
     return false;
   }
@@ -773,11 +841,12 @@ async function decodePacketSafe(
     if (!state.decoder || (state.decoder.state as string) === "closed") {
       return false;
     }
-
+    
     try {
       state.decoder.decode(packet.toEncodedVideoChunk());
       break;
     } catch (e: any) {
+
       if (isQuotaExceededError(e)) {
         await waitForDecodeQueue(state.decoder, 2);
         continue;
@@ -803,7 +872,6 @@ async function decodePacketSafe(
 
   return true;
 }
-
 
 // Message Listener
 self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
@@ -892,54 +960,12 @@ async function handleConfigure(
   // Interpret the asset path as a URL-like string that mediabunny knows how
   // to open (e.g. file://, app://, http://).
   let input: Input | null = null;
-  let filePath: string | null = null;
-  let primarySourceDir: "user-data" | "apex-cache" = "user-data";
-  let secondarySourceDir: "user-data" | "apex-cache" = "apex-cache";
-  filePath = fileURLToPathInWorker(cfg.asset.path);
 
-  const hasUserDataPrefix =
-    typeof cfg.userDataPath === "string" &&
-    cfg.userDataPath.length > 0 &&
-    filePath.includes(cfg.userDataPath?.replace(/^\/+/, ""))
+  const localFilePath = fileURLToPathInWorker(cfg.asset.path);
+  
+  input = new Input({ formats, source: createNodeFileSource(localFilePath) });
 
-  // If the incoming asset path is explicitly rooted under Electron's userData
-  // directory, prefer serving via app://user-data regardless of engine_results
-  // naming. Otherwise, preserve the existing heuristic that favors apex-cache
-  // for engine_results outputs and user-data for everything else.
-  if (!hasUserDataPrefix && filePath.includes("engine_results")) {
-    primarySourceDir = "apex-cache";
-    secondarySourceDir = "user-data";
-  }
-  try {
-    const url = new URL(`app://${primarySourceDir}/${filePath}`);
-    if (cfg.folderUuid && primarySourceDir === "apex-cache") {
-      url.searchParams.set("folderUuid", cfg.folderUuid);
-    }
-    // Skip this URL up-front if we *know* it returns a 404; otherwise fall
-    // back to the previous behavior and let mediabunny attempt to open it.
-    const is404 = await isAppUrlDefinitely404(url);
-    if (is404) {
-      throw new Error("Primary app:// URL returned 404");
-    }
-    input = new Input({ formats, source: new UrlSource(url) });
-  } catch (e) {
-    try {
-      if (!filePath) {
-        throw new Error("Missing file path for secondary source");
-      }
-      const url = new URL(`app://${secondarySourceDir}/${filePath}`);
-      if (cfg.folderUuid && secondarySourceDir === "apex-cache") {
-        url.searchParams.set("folderUuid", cfg.folderUuid);
-      }
-      const is404 = await isAppUrlDefinitely404(url);
-      if (is404) {
-        throw new Error("Secondary app:// URL returned 404");
-      }
-      input = new Input({ formats, source: new UrlSource(url) });
-    } catch (e) {
-      throw new Error("Failed to create input");
-    }
-  }
+ 
   state.input = input;
 
   const videoTrack = await state.input.getPrimaryVideoTrack();
@@ -993,6 +1019,7 @@ async function handleConfigure(
     requestId,
     assetId: id,
   });
+
 }
 
 async function handleSeek(
@@ -1003,12 +1030,13 @@ async function handleSeek(
 ) {
 
   const id = assetId;
- 
+
   if (!id) return;
   const state = assetStates.get(id);
   if (!state || !state.sink || !state.config) return;
   ensureDecoderInstance(state, id);
   if (!state.decoder) return;
+
 
   // Cancel any active iteration handler to prevent hijacking seek output
   state.customOutputHandler = null;
@@ -1027,6 +1055,7 @@ async function handleSeek(
     state.pendingSeekFrame = null;
   }
 
+  const benchmarkStart = performance.now();
   const now = performance.now();
   const timeSinceLast = now - state.lastSeekTime;
   const dist = Math.abs(timestamp - (state.lastSeekTimestamp || 0));
@@ -1039,6 +1068,24 @@ async function handleSeek(
   const cached = findCachedFrame(state, timestamp);
 
   if (cached) {
+    const cacheHitMs = performance.now() - benchmarkStart;
+    try {
+      postMessage({
+        type: "debug",
+        scope: "video-decoder-worker",
+        event: "decodeBenchmark",
+        assetId: id,
+        requestId,
+        payload: {
+          fromCache: true,
+          totalMs: cacheHitMs,
+          packetsDecoded: 0,
+          targetTimestamp: timestamp,
+        },
+      } satisfies WorkerResponse);
+    } catch {
+      /* best-effort */
+    }
     postFrame(id, cached, requestId);
     // @ts-ignore
     postMessage({
@@ -1053,6 +1100,9 @@ async function handleSeek(
   state.seekDone = false;
   state.showingPreview = false;
 
+  await flushDecoderIfNeeded(state.decoder);
+  await flushDecoderIfNeeded(state.alphaDecoder);
+
   // IMPORTANT:
   // After VideoDecoder.reset()/configure() (and sometimes after flush()), WebCodecs
   // requires the *next* decode() call to be a key frame. If we ask mediabunny for
@@ -1060,7 +1110,10 @@ async function handleSeek(
   // packet (especially during rapid scrubbing), which triggers:
   //   DataError: A key frame is required after configure() or flush().
   // So we always verify key packets for seeks.
+  const keyPacketStart = performance.now();
   const initialPacket = await getVerifiedKeyPacket(state, timestamp);
+  const keyPacketMs = performance.now() - keyPacketStart;
+
   if (!initialPacket) {
     // @ts-ignore
     postMessage({
@@ -1080,18 +1133,19 @@ async function handleSeek(
   let currentPacket: EncodedPacket | null = initialPacket;
   let resyncAttempts = 0;
   let previewArmed = isFastScrubbing;
-
-
-  console.log("seek", timestamp, forceAccurate, requestId, id);
+  let packetsDecoded = 0;
+  const decodeLoopStart = performance.now();
 
   while (
     currentPacket &&
     state.currentRequestId === requestId &&
     resyncAttempts <= MAX_RESYNC_ATTEMPTS
   ) {
+    await flushDecoderIfNeeded(state.decoder);
+    await flushDecoderIfNeeded(state.alphaDecoder);
+
     if (!resetAndConfigureDecoders(state, id)) break;
 
-  
 
     const decodedKey = await decodePacketSafe(
       state,
@@ -1099,8 +1153,15 @@ async function handleSeek(
       currentPacket,
       requestId,
     );
+    if (decodedKey) packetsDecoded++;
+
     if (!decodedKey) {
-      currentPacket = await getNextKeyPacketSafe(state, currentPacket);
+      const nextPacket = await getNextKeyPacketSafe(state, currentPacket);
+      if (nextPacket) {
+        currentPacket = nextPacket;
+      } else {
+        break;
+      }
       resyncAttempts++;
       continue;
     }
@@ -1113,25 +1174,40 @@ async function handleSeek(
     }
 
     let resyncPacket: EncodedPacket | null = null;
+
     try {
+
       const packets = state.sink.packets(currentPacket);
       await packets.next(); // skip start packet (already decoded)
+
       for await (const packet of packets) {
-        if (state.currentRequestId !== requestId) break;
+        if (state.currentRequestId !== requestId) {
+
+          break;
+        }
+
         if (!state.decoder || (state.decoder.state as string) === "closed") {
           resyncPacket = await getNextKeyPacketSafe(state, packet);
           break;
         }
-        if (packet.timestamp > timestamp + 0.1) break;
+
+        if (packet.timestamp > timestamp + 0.1) {
+          break;
+        }
 
         const decoded = await decodePacketSafe(state, id, packet, requestId);
+        if (decoded) packetsDecoded++;
+
         if (!decoded) {
           resyncPacket = await getNextKeyPacketSafe(state, packet);
           break;
         }
 
-        if (state.seekDone) break;
+        if (state.seekDone) {
+          break;
+        }
       }
+
     } catch (e) {
       console.warn("Seek packet iteration failed", e);
     }
@@ -1144,19 +1220,28 @@ async function handleSeek(
     resyncAttempts++;
   }
 
-  if (forceAccurate) {
+  if (forceAccurate && state.currentRequestId === requestId) {
     if (state.decoder && (state.decoder.state as string) !== "closed") {
       try {
         await state.decoder.flush();
-      } catch {
-        // ignore
+      } catch (e: unknown) {
+        const msg = String(e instanceof Error ? e.message : e);
+        if (!/aborted|reset/i.test(msg)) {
+          console.warn("flush failed", e);
+        }
       }
     }
-    if (state.alphaDecoder && (state.alphaDecoder.state as string) !== "closed") {
+    if (
+      state.alphaDecoder &&
+      (state.alphaDecoder.state as string) !== "closed"
+    ) {
       try {
         await state.alphaDecoder.flush();
-      } catch {
-        // ignore
+      } catch (e: unknown) {
+        const msg = String(e instanceof Error ? e.message : e);
+        if (!/aborted|reset/i.test(msg)) {
+          console.warn("flush failed", e);
+        }
       }
     }
   }
@@ -1171,6 +1256,29 @@ async function handleSeek(
     // can treat it as `never` in some worker configs.
     state.pendingSeekFrame.close();
     state.pendingSeekFrame = null;
+  }
+
+  const totalMs = performance.now() - benchmarkStart;
+  const decodeLoopMs = performance.now() - decodeLoopStart;
+  try {
+    postMessage({
+      type: "debug",
+      scope: "video-decoder-worker",
+      event: "decodeBenchmark",
+      assetId: id,
+      requestId,
+      payload: {
+        fromCache: false,
+        totalMs,
+        keyPacketMs,
+        decodeLoopMs,
+        packetsDecoded,
+        targetTimestamp: timestamp,
+        resyncAttempts,
+      },
+    } satisfies WorkerResponse);
+  } catch {
+    /* best-effort */
   }
 
   // @ts-ignore
@@ -1195,15 +1303,16 @@ async function handleIterate(
     ensureDecoderInstance(state, id);
     if (!state.decoder) return;
 
-    console.log("handleIterate", startTime, endTime, requestId, id);
-
+    const benchmarkStart = performance.now();
     state.currentRequestId = requestId;
     resetAlphaMergeQueues(state);
 
     // Same keyframe requirement as seek: after reset/configure, the first decode
     // must be a key frame. Verify key packets to avoid intermittent DataError
     // during iteration starts.
+    const keyPacketStart = performance.now();
     const initialPacket = await getVerifiedKeyPacket(state, startTime);
+    const keyPacketMs = performance.now() - keyPacketStart;
     if (!initialPacket) {
         // @ts-ignore
         postMessage({
@@ -1254,12 +1363,16 @@ async function handleIterate(
     try {
         let currentPacket: EncodedPacket | null = initialPacket;
         let resyncAttempts = 0;
+        let packetsDecoded = 0;
 
         while (
           currentPacket &&
           state.currentRequestId === requestId &&
           resyncAttempts <= MAX_RESYNC_ATTEMPTS
         ) {
+          await flushDecoderIfNeeded(state.decoder);
+          await flushDecoderIfNeeded(state.alphaDecoder);
+
           if (!resetAndConfigureDecoders(state, id)) break;
 
           const decodedKey = await decodePacketSafe(
@@ -1268,6 +1381,7 @@ async function handleIterate(
             currentPacket,
             requestId,
           );
+          if (decodedKey) packetsDecoded++;
           if (!decodedKey) {
             currentPacket = await getNextKeyPacketSafe(state, currentPacket);
             resyncAttempts++;
@@ -1295,6 +1409,7 @@ async function handleIterate(
               }
 
               const decoded = await decodePacketSafe(state, id, packet, requestId);
+              if (decoded) packetsDecoded++;
               if (!decoded) {
                 resyncPacket = await getNextKeyPacketSafe(state, packet);
                 break;
@@ -1310,6 +1425,27 @@ async function handleIterate(
 
           currentPacket = resyncPacket;
           resyncAttempts++;
+        }
+
+        const totalMs = performance.now() - benchmarkStart;
+        try {
+          postMessage({
+            type: "debug",
+            scope: "video-decoder-worker",
+            event: "iterateBenchmark",
+            assetId: id,
+            requestId,
+            payload: {
+              totalMs,
+              keyPacketMs,
+              packetsDecoded,
+              startTime,
+              endTime,
+              resyncAttempts,
+            },
+          } satisfies WorkerResponse);
+        } catch {
+          /* best-effort */
         }
 
         if (state.decoder && (state.decoder.state as string) !== "closed") {

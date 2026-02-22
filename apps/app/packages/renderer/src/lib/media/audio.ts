@@ -48,16 +48,17 @@ type WorkerState = {
   >;
 };
 
+function getAudioDecoderWorkerUrl(): URL {
+  return new URL("./audio-decoder.worker.cjs", import.meta.url);
+}
+
 function getOrCreateAudioWorker(assetId: string): WorkerState {
   const existing = audioWorkers.get(assetId);
   if (existing) {
     return existing;
   }
 
-  const worker = new Worker(
-    new URL("./audio-decoder.worker.ts", import.meta.url),
-    { type: "module" },
-  );
+  const worker = new Worker(getAudioDecoderWorkerUrl());
 
   const state: WorkerState = {
     worker,

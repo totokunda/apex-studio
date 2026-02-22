@@ -27,6 +27,10 @@ export class FilterPreview extends BaseClipApplicator<FilterClipProps> {
     this.haldClutInstance = haldClutInstance;
   }
 
+  getHaldClutInstance(): WebGLHaldClut | null {
+    return this.haldClutInstance;
+  }
+
   setStrength(strength: number) {
     this.strength = strength;
   }
@@ -59,6 +63,8 @@ export class FilterPreview extends BaseClipApplicator<FilterClipProps> {
       console.warn("[FilterPreview] Failed to preload CLUT", filterPath, e);
     }
   }
+
+
 
   /**
    * Applies the filter to the provided canvas if the current frame is within the clip's range
