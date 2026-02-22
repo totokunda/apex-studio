@@ -906,7 +906,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
 
   const startGeneration = useCallback(async () => {
-    setIsPreparingGeneration(true);
+    // Note: setIsPreparingGeneration(true) is now called in handleGenerate for immediate feedback
     try {
       // Always read the latest clip from the store so newly-changed offload settings
       // (and other model settings) are included in the engine request.
@@ -953,26 +953,34 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   ]);
 
   const handleGenerate = useCallback(async () => {
+    // Set preparing state immediately for instant visual feedback
     setIsPreparingGeneration(true);
-    let manifest: any = manifestData || (clip as any)?.manifest;
-    if (hasModel && manifestId) {
-      try {
-        const refreshed = await refreshManifest(manifestId, queryClient, false);
-        if (refreshed) manifest = refreshed;
-      } catch {
-        // Fallback to cached manifest on refresh errors.
+    
+    try {
+      let manifest: any = manifestData || (clip as any)?.manifest;
+      if (hasModel && manifestId) {
+        try {
+          const refreshed = await refreshManifest(manifestId, queryClient, false);
+          if (refreshed) manifest = refreshed;
+        } catch {
+          // Fallback to cached manifest on refresh errors.
+        }
       }
-    }
 
-    if (hasModel && !isModelDownloaded) {
-      const pending = collectPendingModelDownloads(manifest);
-      if (pending.length > 0) {
-        setPendingModelDownloads(pending);
-        setShowDownloadConfirm(true);
-        return;
+      if (hasModel && !isModelDownloaded) {
+        const pending = collectPendingModelDownloads(manifest);
+        if (pending.length > 0) {
+          setPendingModelDownloads(pending);
+          setShowDownloadConfirm(true);
+          setIsPreparingGeneration(false); // Clear state before showing download dialog
+          return;
+        }
       }
+      await startGeneration();
+    } catch (error) {
+      setIsPreparingGeneration(false); // Clear state on error
+      throw error;
     }
-    await startGeneration();
   }, [hasModel, isModelDownloaded, manifestData, clip, manifestId, queryClient, collectPendingModelDownloads, startGeneration]);
 
   const isModelRunning =
