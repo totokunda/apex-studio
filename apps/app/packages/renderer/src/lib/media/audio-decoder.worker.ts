@@ -110,6 +110,8 @@ type AssetState = {
   // Cached pre-seek position to speed up iteration start
   cachedSeekTimestamp: number | null;
   cachedKeyPacket: any | null;
+  // Only use cached key packet after at least one successful iteration (avoids "Packet was not created from this track")
+  hasSuccessfullyIterated: boolean;
 };
 
 const assetStates = new Map<string, AssetState>();
@@ -143,6 +145,7 @@ function getOrCreateState(assetId: string): AssetState {
       iterationResume: null,
       cachedSeekTimestamp: null,
       cachedKeyPacket: null,
+      hasSuccessfullyIterated: false,
     };
     assetStates.set(assetId, state);
   }
@@ -308,6 +311,7 @@ async function handleConfigure(
   // A cached EncodedPacket is only valid for the exact track/sink that created it.
   state.cachedSeekTimestamp = null;
   state.cachedKeyPacket = null;
+  state.hasSuccessfullyIterated = false;
 
   let formats = ALL_FORMATS;
 
@@ -440,10 +444,15 @@ async function handleIterate(
 
   decoder.configure(state.config);
 
+  // Track whether iteration completed without error (for cache validity)
+  let iterationSucceeded = false;
+
   try {
-    // Use cached key packet if available and close to our start time (within 0.5s)
+    // Use cached key packet only after at least one successful iteration.
+    // On first use, the cache may be stale (different track instance) causing "Packet was not created from this track".
     let keyPacket: any;
     if (
+      state.hasSuccessfullyIterated &&
       state.cachedKeyPacket &&
       state.cachedSeekTimestamp !== null &&
       Math.abs(state.cachedSeekTimestamp - startTime) < 0.5
@@ -453,7 +462,7 @@ async function handleIterate(
       state.cachedKeyPacket = null;
       state.cachedSeekTimestamp = null;
     } else {
-      // No cache hit, do the seek
+      // No cache hit or first iteration, do the seek
       keyPacket = await state.sink.getKeyPacket(startTime, { verifyKeyPackets: true});
     }
     const packets = state.sink.packets(keyPacket || undefined);
@@ -484,9 +493,13 @@ async function handleIterate(
     if (decoder.state !== "closed") {
       await decoder.flush();
     }
+    iterationSucceeded = true;
   } catch (e) {
     console.warn("Audio iteration failed", e);
   } finally {
+    if (iterationSucceeded) {
+      state.hasSuccessfullyIterated = true;
+    }
     if (decoder.state !== "closed") {
       decoder.close();
     }
@@ -520,6 +533,7 @@ function dispose(assetId?: string) {
     // Clear any cached packets; they may belong to a previous track instance.
     state.cachedSeekTimestamp = null;
     state.cachedKeyPacket = null;
+    state.hasSuccessfullyIterated = false;
     return;
   }
 

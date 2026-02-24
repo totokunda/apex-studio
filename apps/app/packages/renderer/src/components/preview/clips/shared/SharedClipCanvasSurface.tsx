@@ -99,7 +99,6 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
   clipTransform,
   canvasRef,
   imageRef,
-  imageSource,
   overlap,
   inputMode = false,
   isInFrame = true,

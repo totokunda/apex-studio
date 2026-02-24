@@ -20,7 +20,6 @@ import {
   inferExternalFolderFromPath,
 } from "@/lib/externalAssets";
 import type { ManifestGroup, ManifestGroupVariant, ManifestDocument } from "@/lib/manifest";
-import { formatBytes } from "@/lib/components-download/format";
 
 interface ModelPageProps {
   manifestId: string;
@@ -274,24 +273,6 @@ const ModelPage: React.FC<ModelPageProps> = ({
   }, [demoPath]);
 
   const components = manifest?.spec?.components || [];
-  const knownComponentBytes = components.reduce((total, component) => {
-    const modelPath = component?.model_path;
-    if (!modelPath) return total;
-    const items = Array.isArray(modelPath) ? modelPath : [{ path: modelPath }];
-    const itemBytes = items.reduce((sum, item) => {
-      if (!item || typeof item !== "object") return sum;
-      const size = (item as any).file_size;
-      if (typeof size === "number" && Number.isFinite(size) && size > 0) return sum + size;
-      return sum;
-    }, 0);
-    return total + itemBytes;
-  }, 0);
-  const knownLoraBytes = (manifest?.spec?.loras || []).reduce((total, lora) => {
-    const size = lora?.file_size;
-    if (typeof size === "number" && Number.isFinite(size) && size > 0) return total + size;
-    return total;
-  }, 0);
-  const knownTotalBytes = knownComponentBytes + knownLoraBytes;
 
   const addClip = useClipStore((state) => state.addClip);
   

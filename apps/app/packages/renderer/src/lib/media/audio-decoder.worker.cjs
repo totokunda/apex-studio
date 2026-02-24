@@ -70,7 +70,8 @@
         iterationInFlight: 0,
         iterationResume: null,
         cachedSeekTimestamp: null,
-        cachedKeyPacket: null
+        cachedKeyPacket: null,
+        hasSuccessfullyIterated: false
       };
       assetStates.set(assetId, state);
     }
@@ -207,6 +208,7 @@
     const state = getOrCreateState(id);
     state.cachedSeekTimestamp = null;
     state.cachedKeyPacket = null;
+    state.hasSuccessfullyIterated = false;
     let formats = import_mediabunny.ALL_FORMATS;
     let input = null;
     const filePath = fileURLToPathInWorker(cfg.asset.path);
@@ -292,9 +294,10 @@
       sample.close();
     });
     decoder.configure(state.config);
+    let iterationSucceeded = false;
     try {
       let keyPacket;
-      if (state.cachedKeyPacket && state.cachedSeekTimestamp !== null && Math.abs(state.cachedSeekTimestamp - startTime) < 0.5) {
+      if (state.hasSuccessfullyIterated && state.cachedKeyPacket && state.cachedSeekTimestamp !== null && Math.abs(state.cachedSeekTimestamp - startTime) < 0.5) {
         keyPacket = state.cachedKeyPacket;
         state.cachedKeyPacket = null;
         state.cachedSeekTimestamp = null;
@@ -320,9 +323,13 @@
       if (decoder.state !== "closed") {
         await decoder.flush();
       }
+      iterationSucceeded = true;
     } catch (e) {
       console.warn("Audio iteration failed", e);
     } finally {
+      if (iterationSucceeded) {
+        state.hasSuccessfullyIterated = true;
+      }
       if (decoder.state !== "closed") {
         decoder.close();
       }
@@ -351,6 +358,7 @@
       state.iterationResume = null;
       state.cachedSeekTimestamp = null;
       state.cachedKeyPacket = null;
+      state.hasSuccessfullyIterated = false;
       return;
     }
     for (const [id] of assetStates) {

@@ -554,7 +554,7 @@ export async function exportSequence(
       })
     : null;
 
-  if (canUsePersistentCache && exportHash && false) {
+  if (canUsePersistentCache && exportHash) {
     checkCancelled();
     const cachedPath = await exportCacheGet(exportHash);
     if (cachedPath) {

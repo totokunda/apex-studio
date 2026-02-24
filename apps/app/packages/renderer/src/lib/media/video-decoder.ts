@@ -12,7 +12,6 @@ import {
     FLAC,
     ADTS,
 } from "mediabunny";
-import { getUserDataPath as getUserDataPathPreload } from "@app/preload";
 
 function getVideoDecoderWorkerUrl(): URL {
     // Load the Node-capable classic worker artifact so `require("node:fs")`
