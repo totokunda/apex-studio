@@ -1,6 +1,5 @@
 import { getNodeMajorVersion } from "@app/electron-versions";
 import { spawn } from "child_process";
-import { copyFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import electronPath from "electron";
@@ -31,24 +30,8 @@ export default /**
     emptyOutDir: true,
     reportCompressedSize: false,
   },
-  plugins: [copyDecodeWorker(), handleHotReload()],
+  plugins: [handleHotReload()],
 });
-
-/** Copy decode-worker-thread.js to dist so the worker_thread can load it. */
-function copyDecodeWorker() {
-  return {
-    name: "@app/main-copy-decode-worker",
-    writeBundle(_, bundle) {
-      const outDir = join(__dirname, "dist");
-      const workerSrc = join(__dirname, "src", "modules", "decode-worker-thread.cjs");
-      const workerDest = join(outDir, "decode-worker-thread.cjs");
-      if (existsSync(workerSrc)) {
-        mkdirSync(outDir, { recursive: true });
-        copyFileSync(workerSrc, workerDest);
-      }
-    },
-  };
-}
 
 /**
  * Implement Electron app reload when some file was changed

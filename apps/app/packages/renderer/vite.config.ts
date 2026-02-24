@@ -10,7 +10,6 @@ import { nodePolyfills } from "vite-plugin-node-polyfills";
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   plugins: [
-    copyNativeDecoderWorker(),
     copyDecodeWorker(),
     react(),
     tailwindcss(),
@@ -62,19 +61,6 @@ export default defineConfig(({ mode }) => ({
   },
 }));
 
-function copyNativeDecoderWorker() {
-  return {
-    name: "@app/renderer-copy-native-decoder-worker",
-    writeBundle() {
-      const root = path.dirname(fileURLToPath(import.meta.url));
-      const workerSrc = path.join(root, "src", "lib", "native-decoder", "nativeDecoder.worker.cjs");
-      const workerDest = path.join(root, "dist", "assets", "nativeDecoder.worker.cjs");
-      if (!fs.existsSync(workerSrc)) return;
-      fs.mkdirSync(path.dirname(workerDest), { recursive: true });
-      fs.copyFileSync(workerSrc, workerDest);
-    },
-  };
-}
 
 function copyDecodeWorker() {
   return {
