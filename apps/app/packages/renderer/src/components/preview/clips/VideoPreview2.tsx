@@ -19,9 +19,6 @@ import { BaseClipApplicator } from "./apply/base";
 import _ from "lodash";
 import { useWebGLMask } from "../mask/useWebGLMask";
 import { useInputControlsStore } from "@/lib/inputControl";
-import { useVideoDecoderManager } from "@/lib/media/VideoDecoderManagerContext";
-import { useProjectsStore } from "@/lib/projects";
-import { generatePosterCanvas } from "@/lib/media/timeline";
 import { sanitizeCornerRadius } from "@/lib/konva/sanitizeCornerRadius";
 // (prefetch helper removed by request; timeline-driven rendering only)
 

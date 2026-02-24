@@ -44,6 +44,21 @@ const rangesOverlap = (aStart: number, aEnd: number, bStart: number, bEnd: numbe
 
 const extractResultPath = (job: any): string | undefined => {
   const meta = (job?.latest?.metadata || {}) as any;
+  
+  // Priority 1: preview_url (often the canonical frontend-facing URL)
+  const previewUrl = meta?.preview_url || meta?.previewUrl;
+  if (typeof previewUrl === "string" && previewUrl.length > 0) {
+    // Convert /files/engine_results/... to absolute path
+    if (previewUrl.startsWith("/files/engine_results/")) {
+      return previewUrl.replace("/files/engine_results/", "/home/ext_diviade_gmail_com/apex-diffusion/cache/engine_results/");
+    }
+    if (previewUrl.startsWith("/files/preprocessor_results/")) {
+      return previewUrl.replace("/files/preprocessor_results/", "/home/ext_diviade_gmail_com/apex-diffusion/cache/preprocessor_results/");
+    }
+    return previewUrl;
+  }
+  
+  // Priority 2: Standard path fields
   const direct =
     meta?.output_path ||
     meta?.outputPath ||
@@ -204,12 +219,30 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
             await connectJobWebSocket(jobId);
 
             const unsubUpdate = subscribeToJobUpdates(jobId, (data) => {
+              // DEBUG: Log all incoming metadata
+              console.log(`[ENGINE-SYNC] Job ${jobId} update:`, {
+                status: (data as any).status,
+                progress: (data as any).progress,
+                message: (data as any).message,
+                metadata: (data as any).metadata,
+              });
+
               setJobsById((prev) => {
                 const job = prev[jobId];
                 if (!job) return prev;
 
                 const now = Date.now();
                 const latest = (job.latest || {}) as any;
+                const incomingMetadata = ((data as any).metadata as any) || {};
+                const mergedMetadata = { ...latest.metadata, ...incomingMetadata };
+                
+                // DEBUG: Log metadata merge
+                console.log(`[ENGINE-SYNC] Job ${jobId} metadata merge:`, {
+                  previous: latest.metadata,
+                  incoming: incomingMetadata,
+                  merged: mergedMetadata,
+                });
+
                 const newLatest = {
                   ...latest,
                   progress:
@@ -218,10 +251,10 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
                       : latest.progress,
                   message: (data as any).message || (data as any).step || latest.message,
                   status: (data as any).status || latest.status,
-                  metadata: { ...latest.metadata, ...(((data as any).metadata as any) || {}) },
+                  metadata: mergedMetadata,
                 };
 
-                return {
+                const updatedJob = {
                   ...prev,
                   [jobId]: {
                     ...(job as any),
@@ -235,6 +268,12 @@ export function useEngineJobClipSync<TJob extends JobLike>(params: {
                     updatedAt: now,
                   },
                 };
+
+                // DEBUG: Log the result path extraction
+                const resultPath = extractResultPath(updatedJob[jobId]);
+                console.log(`[ENGINE-SYNC] Job ${jobId} extracted result path:`, resultPath);
+
+                return updatedJob;
               });
             });
 
