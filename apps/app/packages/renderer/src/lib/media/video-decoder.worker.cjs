@@ -29,10 +29,10 @@
     mod
   ));
 
-  // src/lib/media/video-decoder.worker.ts
+  // packages/renderer/src/lib/media/video-decoder.worker.ts
   var import_mediabunny = __require("mediabunny");
 
-  // src/lib/media/merge-alpha.ts
+  // packages/renderer/src/lib/media/merge-alpha.ts
   var VERT_SRC = `#version 300 es
 in vec2 a_pos;
 out vec2 v_uv;
@@ -169,7 +169,7 @@ void main() {
     });
   }
 
-  // src/lib/media/video-decoder.worker.ts
+  // packages/renderer/src/lib/media/video-decoder.worker.ts
   var nodeFs = __toESM(__require("node:fs/promises"), 1);
   function assert(x) {
     if (!x) {

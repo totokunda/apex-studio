@@ -48,7 +48,7 @@
     "publish": "node scripts/build-app.js --publish",
     "publish:draft": "node scripts/build-app.js --publish --draft",
     "test": "npx playwright test ./tests/e2e.spec.ts",
-    "start": "node packages/dev-mode.js",
+    "start": "node packages/renderer/scripts/build-video-decoder-worker.mjs && node packages/dev-mode.js",
     "postinstall": "electron-builder install-app-deps",
     "typecheck": "npm run typecheck -ws --if-present"
   },
