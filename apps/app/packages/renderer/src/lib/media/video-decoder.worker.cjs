@@ -171,6 +171,7 @@ void main() {
 
   // packages/renderer/src/lib/media/video-decoder.worker.ts
   var nodeFs = __toESM(__require("node:fs/promises"), 1);
+  var import_node_fs = __require("node:fs");
   function assert(x) {
     if (!x) {
       throw new Error("Assertion failed.");
@@ -669,6 +670,14 @@ void main() {
     } catch {
     }
   }
+  async function isAppUrlDefinitely404(url) {
+    try {
+      const res = await fetch(url.toString(), { method: "HEAD" });
+      return res.status === 404;
+    } catch {
+      return false;
+    }
+  }
   function resetAndConfigureDecoders(state, assetId) {
     if (!state.config) return false;
     const decoder = ensureDecoderInstance(state, assetId);
@@ -804,7 +813,47 @@ void main() {
     let formats = import_mediabunny.ALL_FORMATS;
     let input = null;
     const localFilePath = fileURLToPathInWorker(cfg.asset.path);
-    input = new import_mediabunny.Input({ formats, source: createNodeFileSource(localFilePath) });
+    if (!(0, import_node_fs.existsSync)(localFilePath)) {
+      let filePath = null;
+      let primarySourceDir = "user-data";
+      let secondarySourceDir = "apex-cache";
+      filePath = fileURLToPathInWorker(cfg.asset.path);
+      const hasUserDataPrefix = typeof cfg.userDataPath === "string" && cfg.userDataPath.length > 0 && filePath.includes(cfg.userDataPath?.replace(/^\/+/, ""));
+      if (!hasUserDataPrefix && filePath.includes("engine_results")) {
+        primarySourceDir = "apex-cache";
+        secondarySourceDir = "user-data";
+      }
+      try {
+        const url = new URL(`app://${primarySourceDir}/${filePath}`);
+        if (cfg.folderUuid && primarySourceDir === "apex-cache") {
+          url.searchParams.set("folderUuid", cfg.folderUuid);
+        }
+        const is404 = await isAppUrlDefinitely404(url);
+        if (is404) {
+          throw new Error("Primary app:// URL returned 404");
+        }
+        input = new import_mediabunny.Input({ formats, source: new import_mediabunny.UrlSource(url) });
+      } catch (e) {
+        try {
+          if (!filePath) {
+            throw new Error("Missing file path for secondary source");
+          }
+          const url = new URL(`app://${secondarySourceDir}/${filePath}`);
+          if (cfg.folderUuid && secondarySourceDir === "apex-cache") {
+            url.searchParams.set("folderUuid", cfg.folderUuid);
+          }
+          const is404 = await isAppUrlDefinitely404(url);
+          if (is404) {
+            throw new Error("Secondary app:// URL returned 404");
+          }
+          input = new import_mediabunny.Input({ formats, source: new import_mediabunny.UrlSource(url) });
+        } catch (e2) {
+          throw new Error("Failed to create input");
+        }
+      }
+    } else {
+      input = new import_mediabunny.Input({ formats, source: createNodeFileSource(localFilePath) });
+    }
     state.input = input;
     const videoTrack = await state.input.getPrimaryVideoTrack();
     if (!videoTrack) throw new Error("No video track found in worker");

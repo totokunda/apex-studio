@@ -840,12 +840,12 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
     gcTime: Infinity,
   });
 
-  const manifestsData = useLegacyManifestListEndpoint ? manifestsQuery.data : undefined;
+  let manifestsData: ManifestDocument[] | undefined;
   const groupsData = useGroupedManifestEndpoint ? groupsQuery.data : undefined;
   const modelTypesData = modelTypesQuery.data;
 
   useEffect(() => {
-    if (Array.isArray(manifestsData) && manifestsData.length > 0) {
+    if (manifestsData && manifestsData.length > 0) {
       lastGoodManifestsRef.current = manifestsData;
     }
   }, [manifestsData]);

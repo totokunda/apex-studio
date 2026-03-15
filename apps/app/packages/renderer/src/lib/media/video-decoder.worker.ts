@@ -4,10 +4,12 @@ import {
   Input,
   StreamSource,
   ALL_FORMATS,
-  InputTrack
+  InputTrack,
+  UrlSource
 } from "mediabunny";
 import { mergeAlphaIntoColor } from "./merge-alpha";
 import * as nodeFs from "node:fs/promises";
+import { existsSync } from "node:fs";
 // Minimal asset shape expected from the main thread. This mirrors the core
 // fields of the renderer-side `Asset` type but is kept local to the worker
 // for decoupling and to avoid importing renderer modules here.
@@ -784,6 +786,16 @@ async function flushDecoderIfNeeded(
   }
 }
 
+async function isAppUrlDefinitely404(url: URL): Promise<boolean> {
+  try {
+    const res = await fetch(url.toString(), { method: "HEAD" });
+    return res.status === 404;
+  } catch {
+    return false;
+  }
+}
+
+
 function resetAndConfigureDecoders(state: AssetState, assetId: string): boolean {
   if (!state.config) return false;
 
@@ -962,10 +974,62 @@ async function handleConfigure(
   let input: Input | null = null;
 
   const localFilePath = fileURLToPathInWorker(cfg.asset.path);
-  
-  input = new Input({ formats, source: createNodeFileSource(localFilePath) });
 
- 
+  // we check if the file exists 
+  if (!existsSync(localFilePath)) {
+
+  let filePath: string | null = null;
+  let primarySourceDir: "user-data" | "apex-cache" = "user-data";
+  let secondarySourceDir: "user-data" | "apex-cache" = "apex-cache";
+  filePath = fileURLToPathInWorker(cfg.asset.path);
+
+  const hasUserDataPrefix =
+    typeof cfg.userDataPath === "string" &&
+    cfg.userDataPath.length > 0 &&
+    filePath.includes(cfg.userDataPath?.replace(/^\/+/, ""))
+
+  // If the incoming asset path is explicitly rooted under Electron's userData
+  // directory, prefer serving via app://user-data regardless of engine_results
+  // naming. Otherwise, preserve the existing heuristic that favors apex-cache
+  // for engine_results outputs and user-data for everything else.
+  if (!hasUserDataPrefix && filePath.includes("engine_results")) {
+    primarySourceDir = "apex-cache";
+    secondarySourceDir = "user-data";
+  }
+  try {
+    const url = new URL(`app://${primarySourceDir}/${filePath}`);
+    if (cfg.folderUuid && primarySourceDir === "apex-cache") {
+      url.searchParams.set("folderUuid", cfg.folderUuid);
+    }
+    // Skip this URL up-front if we *know* it returns a 404; otherwise fall
+    // back to the previous behavior and let mediabunny attempt to open it.
+    const is404 = await isAppUrlDefinitely404(url);
+    if (is404) {
+      throw new Error("Primary app:// URL returned 404");
+    }
+    input = new Input({ formats, source: new UrlSource(url) });
+  } catch (e) {
+    try {
+      if (!filePath) {
+        throw new Error("Missing file path for secondary source");
+      }
+      const url = new URL(`app://${secondarySourceDir}/${filePath}`);
+      if (cfg.folderUuid && secondarySourceDir === "apex-cache") {
+        url.searchParams.set("folderUuid", cfg.folderUuid);
+      }
+      const is404 = await isAppUrlDefinitely404(url);
+      if (is404) {
+        throw new Error("Secondary app:// URL returned 404");
+      }
+      input = new Input({ formats, source: new UrlSource(url) });
+    } catch (e) {
+      throw new Error("Failed to create input");
+    }
+  }
+  } else {
+      input = new Input({ formats, source: createNodeFileSource(localFilePath) });
+  }
+
   state.input = input;
 
   const videoTrack = await state.input.getPrimaryVideoTrack();
