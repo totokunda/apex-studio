@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from tqdm import tqdm
 
 import yaml
 from loguru import logger
@@ -17,6 +18,7 @@ from src.manifest.paths import (
 )
 from src.mixins.download_mixin import DownloadMixin
 from src.utils.defaults import get_components_path
+from src.manifest.db import  setup_manifest_db
 
 
 SOURCE_VERSION = "v0.1.0"
@@ -762,6 +764,7 @@ def run_startup_manifest_migration() -> Dict[str, Any]:
         "legacy_materialized": legacy_materialized,
     }
     _write_state_file(stats)
+    
     return stats
 
 
@@ -773,3 +776,7 @@ def run_startup_manifest_migration_safe() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Startup manifest migration failed: {e}")
         return {"error": str(e)}
+
+    finally:
+        setup_manifest_db()
+        

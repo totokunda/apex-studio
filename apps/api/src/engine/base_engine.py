@@ -263,6 +263,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
     auto_apply_loras: bool = True
     auto_memory_management: bool = True
     disable_text_encoder_cache: bool = False
+    
     # Debug-only: when enabled, the ComponentMemoryManager attributes CUDA peak
     # allocator usage to each top-level component forward() and logs a summary
     # at the end of each engine.run(...).
@@ -2690,6 +2691,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 model_download_profile=model_download_profile,
                 hardware_profile=hardware_profile,
             )
+            
             if isinstance(selected_item, dict):
                 selected_source_val = selected_item.get("path")
                 if isinstance(selected_source_val, str) and selected_source_val.strip():
@@ -2706,6 +2708,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                     components_path,
                     progress_callback=_emit_download_progress,
                 )
+                self.downloaded_paths.append(selected_source)
             if not local_path:
                 continue
 

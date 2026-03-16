@@ -28,6 +28,7 @@ from src.utils.cache import empty_cache
 from src.utils.warm_pool import EngineWarmPool, stable_hash_dict
 from src.api.preprocessor_registry import get_preprocessor_info
 from src.mixins.download_mixin import DownloadMixin
+from src.manifest.db import get_manifest_db 
 from src.utils.defaults import (
     get_components_path,
     get_lora_path,
@@ -1470,6 +1471,7 @@ def download_unified(
     logger.info(
         f"Downloading {item_type} {source} for job {job_id} with manifest {manifest_id} and lora name {lora_name}"
     )
+    
 
     def send_progress(
         progress: Optional[float],
@@ -1621,6 +1623,7 @@ def download_unified(
                 tracker = DownloadProgressTracker(
                     job_id, _lora_download_progress_adapter
                 )
+                
                 lora_item = lora_manager.resolve(
                     source,
                     prefer_name=lora_name,
@@ -1758,6 +1761,7 @@ def download_unified(
                 except Exception:
                     pass
                 # Explicitly mark the end of the download phase at 75%
+                
                 try:
                     send_progress(
                         0.75,
@@ -1851,6 +1855,11 @@ def download_unified(
                 }
                 try:
                     invalidate_manifest_caches()
+                    db = get_manifest_db()
+                    if manifest_id is not None:
+                        db.refresh_manifest(manifest_id)
+                    
+                    db.refresh_manifests_by_path(str(source))
                 except Exception:
                     pass
                 if verified is not None:
@@ -2058,8 +2067,16 @@ def download_unified(
         if norm_type in {"component", "lora"}:
             try:
                 invalidate_manifest_caches()
-            except Exception:
-                pass
+                db = get_manifest_db()
+     
+                if manifest_id is not None:
+                    db.refresh_manifest(manifest_id)
+                for path in paths:    
+                    db.refresh_manifests_by_path(str(path))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                logger.error(f"Error refreshing manifests by path {path}: {e}")
         return {
             "job_id": job_id,
             "status": "error" if has_error else "complete",
@@ -2164,6 +2181,10 @@ def download_components(
         final_status = "error" if has_error else "complete"
         try:
             invalidate_manifest_caches()
+            db = get_manifest_db()
+            for path in paths:
+                db.refresh_manifests_by_path(str(path))
+            # no choice but to reset the manifest database after a components download
         except Exception:
             pass
         send_progress(
@@ -2497,7 +2518,7 @@ def _run_engine_from_manifest_impl(
     """Execute a manifest YAML with provided inputs and persist result to disk."""
     _require_tracked_job_or_fail(job_id, allowed_types={"engine"}, ws_bridge=ws_bridge)
     _apply_memory_env_from_store()
-
+    manifest_db = ManifestDB()
     def send_progress(
         progress: float | None, message: str, metadata: Optional[Dict] = None
     ):
@@ -2687,6 +2708,7 @@ def _run_engine_from_manifest_impl(
                 progress_text = (
                     f" ({' | '.join(progress_bits)})" if progress_bits else ""
                 )
+                
                 if label_str:
                     msg = f"Downloading model weights: {label_str}{progress_text}"
                 else:
@@ -3294,6 +3316,15 @@ def _run_engine_from_manifest_impl(
             except Exception:
                 pass
 
+            if engine is not None:
+                db = get_manifest_db()
+                manifest_id = config.get("id")
+                
+                if manifest_id is not None:
+                    db.refresh_manifest(manifest_id)
+                    
+                for path in getattr(engine, "downloaded_paths", []):
+                    db.refresh_manifests_by_path(str(path))
             if (
                 force_cold_cleanup
                 or (not engine_pooled)
@@ -3303,6 +3334,7 @@ def _run_engine_from_manifest_impl(
                     engine.offload_engine()
                 except Exception:
                     pass
+                
             engine = None
             raw = None
             config = None
@@ -3315,6 +3347,7 @@ def _run_engine_from_manifest_impl(
             # Engine initialization may have downloaded model/config assets; always
             # bump manifest cache buster so UI readiness reflects current disk state.
             invalidate_manifest_caches()
+ 
         except Exception:
             pass
         _aggressive_ram_cleanup(
@@ -3322,7 +3355,6 @@ def _run_engine_from_manifest_impl(
             or _warm_weights_disabled()
             or bool(force_cold_cleanup)
         )
-
 
 @ray.remote
 def run_engine_from_manifest(
@@ -3334,6 +3366,7 @@ def run_engine_from_manifest(
     folder_uuid: Optional[str] = None,
 ) -> Dict[str, Any]:
     _require_tracked_job_or_fail(job_id, allowed_types={"engine"}, ws_bridge=ws_bridge)
+    
     return _run_engine_from_manifest_impl(
         manifest_path,
         job_id,

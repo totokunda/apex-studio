@@ -5,14 +5,11 @@ import glob
 import json
 import math
 import os
-import types
-import warnings
 from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
-import torch.cuda.amp as amp
-import torch.nn as nn
+import torch.amp as amp
 import torch.nn.functional as F
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders.single_file_model import FromOriginalModelMixin
@@ -305,7 +302,7 @@ def sinusoidal_embedding_1d(dim, position):
     return x
 
 
-@amp.autocast(enabled=False)
+
 def rope_params(max_seq_len, dim, theta=10000):
     assert dim % 2 == 0
     freqs = torch.outer(
@@ -316,8 +313,7 @@ def rope_params(max_seq_len, dim, theta=10000):
     return freqs
 
 
-# modified from https://github.com/thu-ml/RIFLEx/blob/main/riflex_utils.py
-@amp.autocast(enabled=False)
+
 def get_1d_rotary_pos_embed_riflex(
     pos: Union[np.ndarray, int],
     dim: int,
@@ -397,7 +393,7 @@ def get_resize_crop_region_for_grid(src, tgt_width, tgt_height):
     return (crop_top, crop_left), (crop_top + resize_height, crop_left + resize_width)
 
 
-@amp.autocast(enabled=False)
+
 @torch.compiler.disable()
 def rope_apply(x, grid_sizes, freqs):
     n, c = x.size(2), x.size(3) // 2

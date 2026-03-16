@@ -27,6 +27,7 @@ from src.utils.compute import (
     validate_compute_requirements,
 )
 from src.utils.defaults import get_components_path, get_config_path, get_lora_path
+from src.manifest.db import get_manifest_db
 import traceback
 
 router = APIRouter(prefix="/manifest", tags=["manifest"])
@@ -38,6 +39,7 @@ LOCAL_MANIFEST_BASE_PATH = local_manifest_base_path()
 MANIFEST_CACHE_BUSTER_FILE = LOCAL_MANIFEST_BASE_PATH / ".cache_buster"
 GROUPS_MIN_VERSION = (0, 1, 2)
 GROUPS_MIN_VERSION_STR = "0.1.2"
+MODEL_TYPES = []
 
 
 def resolve_manifest_path_for_read(relative_path: str) -> Path:
@@ -117,6 +119,7 @@ def _normalize_subengine_relative_path(yaml_path: str) -> Optional[str]:
 
 def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
     """Load a manifest by relative path and enrich it with runtime info."""
+    
     file_path = resolve_manifest_path_for_read(relative_path)
     content = load_yaml_content(file_path)
 
@@ -185,6 +188,7 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
         # Start with any components already defined on the parent manifest
         _add_components(spec.get("components") or [])
         _add_loras(spec.get("loras") or [])
+
         # Then merge in components from each sub-engine manifest
         for sub in sub_engines:
             if not isinstance(sub, dict):
@@ -229,6 +233,8 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
     if "spec" not in content:
         content["spec"] = {}
     content["spec"]["attention_types_detail"] = attention_options
+    
+    
 
     # Expand any external scheduler catalogs into scheduler_options so UI clients
     # can reference schedulers by name without embedding large lists in each model manifest.
@@ -244,6 +250,8 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
         metadata = content.get("metadata", {}) if isinstance(content, dict) else {}
     except Exception:
         pass
+    
+    
 
     # Enrich LoRA entries
     #
@@ -371,6 +379,7 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
                 config_path, get_components_path()
             )
             if is_downloaded:
+                component['remote_config_path'] = config_path
                 component["config_path"] = is_downloaded
 
         if component.get("type") == "scheduler":
@@ -397,6 +406,8 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
                 is_component_downloaded = False
 
             component["scheduler_options"] = options
+            
+            
 
         normalized_model_paths = _normalize_path_items(component.get("model_path"))
         component["model_path"] = normalized_model_paths
@@ -407,12 +418,15 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
             )
             if is_downloaded is not None:
                 model_path["is_downloaded"] = True
+                model_path["remote_path"] = model_path.get("path")
                 model_path["path"] = is_downloaded
                 any_path_downloaded = True
             else:
                 model_path["is_downloaded"] = False
 
             component["model_path"][index] = model_path
+            
+
 
         normalized_extra_paths = _normalize_path_items(component.get("extra_model_paths"))
         component["extra_model_paths"] = normalized_extra_paths
@@ -425,6 +439,7 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
             is_downloaded = DownloadMixin.is_downloaded(path, get_components_path())
             if is_downloaded is not None:
                 out_model_path["is_downloaded"] = True
+                out_model_path["remote_path"] = path
                 out_model_path["path"] = is_downloaded
                 any_extra_path_downloaded = True
             else:
@@ -432,6 +447,7 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
                 out_model_path["path"] = path
 
             component["extra_model_paths"][index] = out_model_path
+            
 
         normalized_legacy_weights = _normalize_path_items(component.get("weights"))
         if normalized_legacy_weights:
@@ -443,12 +459,15 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
             )
             if is_downloaded is not None:
                 weight_entry["is_downloaded"] = True
+                weight_entry["remote_path"] = weight_entry.get("path")
                 weight_entry["path"] = is_downloaded
                 any_legacy_weight_downloaded = True
             else:
                 weight_entry["is_downloaded"] = False
 
             component["weights"][index] = weight_entry
+            
+
 
         if (not any_path_downloaded and len(normalized_model_paths) > 0) or (
             not any_extra_path_downloaded
@@ -531,12 +550,18 @@ def _load_and_enrich_manifest(relative_path: str) -> Dict[Any, Any]:
 def get_manifest(manifest_id: str):
     """Get the actual YAML content of a specific manifest by name."""
     # Resolve manifest path via cached id->path index to avoid full list load
-    id_index = _get_manifest_id_index()
+    id_index = get_manifest_db().get_manifest_path_index()
     relative_path = id_index.get(manifest_id)
+    
+
     if not relative_path:
-        raise HTTPException(
-            status_code=404, detail=f"Manifest not found: {manifest_id}"
-        )
+        # check if manifest_id is actually the path 
+        if Path(manifest_id).exists():
+            return _load_and_enrich_manifest(str(Path(manifest_id).resolve()))
+        else:
+            raise HTTPException(
+                status_code=404, detail=f"Manifest not found: {manifest_id}"
+            )
     # Load and enrich only the requested manifest
     return _load_and_enrich_manifest(relative_path)
 
@@ -677,15 +702,18 @@ def _get_all_manifest_files_uncached() -> List[Dict[str, Any]]:
     Uses parallel threads to load and enrich manifests concurrently for faster startup.
     """
     # Phase 1: Collect all candidate YAML paths (fast filesystem walk, no parsing)
+    import time as t
+    start = t.time()
     candidate_paths = _collect_manifest_relative_paths(include_shared=False)
-
+    end = t.time()
+    print(f"Collected candidate paths in {end - start} seconds")
     if not candidate_paths:
         return []
 
     # Phase 2: Load and enrich all manifests in parallel
     manifests: List[Dict[str, Any]] = []
     max_workers = min(len(candidate_paths), os.cpu_count() or 4, 16)
-
+    start = t.time()
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_to_path = {
             pool.submit(_load_and_enrich_manifest, rp): rp
@@ -694,6 +722,8 @@ def _get_all_manifest_files_uncached() -> List[Dict[str, Any]]:
         for future in as_completed(future_to_path):
             try:
                 enriched = future.result()
+                end = t.time()
+                print(f"Loaded and enriched manifest in {end - start} seconds")
             except Exception:
                 continue
 
@@ -910,6 +940,7 @@ def _attention_backend_sort_key(name: str) -> tuple[int, str]:
 
 def _build_attention_options(
     allowed: Optional[List[str]] = None,
+    ignore_fingerprint: bool = True,
 ) -> List[Dict[str, str]]:
     """
     Build a list of attention backend options from the attention registry, each
@@ -928,7 +959,7 @@ def _build_attention_options(
     label_map, description_map = _attention_label_description_maps()
 
     # "Installed" or runtime-available attention backends
-    available_keys = set(verify_attention_backends())
+    available_keys = set(verify_attention_backends(ignore_fingerprint=ignore_fingerprint))
 
     if allowed is not None:
         allowed_set = {a for a in allowed if isinstance(a, str)}
@@ -958,6 +989,9 @@ def _build_attention_options(
 
 def _list_model_types_sync() -> List[ModelTypeInfo]:
     """Blocking implementation for list_model_types()."""
+    global MODEL_TYPES
+    if MODEL_TYPES:
+        return MODEL_TYPES
     if not MANIFEST_BASE_PATH.exists() and not LOCAL_MANIFEST_BASE_PATH.exists():
         return []
 
@@ -1030,8 +1064,9 @@ def _list_model_types_sync() -> List[ModelTypeInfo]:
             description = f"Models in the '{label}' category."
 
         results.append(ModelTypeInfo(key=key, label=label, description=description))
-
-    return results
+    
+    MODEL_TYPES = results
+    return MODEL_TYPES
 
 
 @router.get("/types", response_model=List[ModelTypeInfo])
@@ -1039,11 +1074,10 @@ async def list_model_types() -> List[ModelTypeInfo]:
     """Async wrapper for list_model_types; runs blocking work off the event loop."""
     return await _run_blocking(_list_model_types_sync)
 
-
 @router.get("/categories", response_model=List[ModelCategoryInfo])
 async def list_model_categories() -> List[ModelCategoryInfo]:
     """List distinct metadata.categories values across manifests with label and description."""
-    return await list_model_types()
+    return await _run_blocking(_list_model_types_sync)
 
 
 def _get_system_compute_info_sync():
@@ -1063,85 +1097,16 @@ async def get_manifest_version():
     return await _run_blocking(_manifest_version_info_sync)
 
 
-def _list_all_manifests_sync(include_incompatible: bool = False):
-    """Blocking implementation for list_all_manifests()."""
-    try:
-        if include_incompatible:
-            # Collect candidate paths, then load all manifests in parallel
-            candidate_paths = _collect_manifest_relative_paths(include_shared=False)
-
-            if not candidate_paths:
-                return []
-
-            manifests: List[Dict[str, Any]] = []
-            max_workers = min(len(candidate_paths), os.cpu_count() or 4, 16)
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                future_to_path = {
-                    pool.submit(_load_and_enrich_manifest, rp): rp
-                    for rp in candidate_paths
-                }
-                for future in as_completed(future_to_path):
-                    try:
-                        enriched = future.result()
-                        manifests.append(enriched)
-                    except Exception:
-                        continue
-            return _dedupe_manifests_by_id(manifests)
-        # Use the normal filtered list (already parallelized)
-        return get_all_manifest_files()
-    except Exception as e:
-        logger.error(f"Error listing manifests: {e}")
-        raise HTTPException(status_code=500, detail=f"Error listing manifests: {e}")
-
-
 @router.get("/list")
 async def list_all_manifests(include_incompatible: bool = False):
     """List all available manifests (async; runs blocking work off the event loop)."""
-    return await _run_blocking(_list_all_manifests_sync, include_incompatible)
-
-
-def _list_manifests_by_model_sync(model: str, include_incompatible: bool = False):
-    if include_incompatible:
-        manifests = _list_all_manifests_sync(include_incompatible=True)
-    else:
-        manifests = get_all_manifest_files()
-    filtered = [m for m in manifests if m.get("model") == model]
-    if not filtered:
-        raise HTTPException(
-            status_code=404, detail=f"No manifests found for model: {model}"
-        )
-    return filtered
+    return get_manifest_db().get_all_manifests()
 
 
 @router.get("/list/model/{model}")
 async def list_manifests_by_model(model: str, include_incompatible: bool = False):
     """List all manifest names for a specific model (async)."""
-    return await _run_blocking(
-        _list_manifests_by_model_sync, model, include_incompatible
-    )
-
-
-def _list_manifests_by_model_type_sync(
-    model_type: str, include_incompatible: bool = False
-):
-    if include_incompatible:
-        manifests = _list_all_manifests_sync(include_incompatible=True)
-    else:
-        manifests = get_all_manifest_files()
-    filtered: List[Dict[str, Any]] = []
-    for m in manifests:
-        mt = m.get("model_type")
-        if isinstance(mt, list):
-            if model_type in mt:
-                filtered.append(m)
-        else:
-            if mt == model_type:
-                filtered.append(m)
-    if not filtered:
-        raise HTTPException(
-            status_code=404, detail=f"No manifests found for model_type: {model_type}"
-        )
-    return filtered
+    return get_manifest_db().get_manifests_by_model(model)
 
 
 @router.get("/list/type/{model_type}")
@@ -1149,34 +1114,7 @@ async def list_manifests_by_model_type(
     model_type: str, include_incompatible: bool = False
 ):
     """List all manifest names for a specific model type (async)."""
-    return await _run_blocking(
-        _list_manifests_by_model_type_sync, model_type, include_incompatible
-    )
-
-
-def _list_manifests_by_model_and_type_sync(
-    model: str, model_type: str, include_incompatible: bool = False
-):
-    if include_incompatible:
-        manifests = _list_all_manifests_sync(include_incompatible=True)
-    else:
-        manifests = get_all_manifest_files()
-    filtered: List[Dict[str, Any]] = []
-    for m in manifests:
-        model_match = m.get("model") == model
-        mt = m.get("model_type")
-        if isinstance(mt, list):
-            type_match = model_type in mt
-        else:
-            type_match = mt == model_type
-        if model_match and type_match:
-            filtered.append(m)
-    if not filtered:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No manifests found for model: {model} and model_type: {model_type}",
-        )
-    return filtered
+    return get_manifest_db().get_manifests_by_type(model_type)
 
 
 @router.get("/list/model/{model}/model_type/{model_type}")
@@ -1184,13 +1122,9 @@ async def list_manifests_by_model_and_type(
     model: str, model_type: str, include_incompatible: bool = False
 ):
     """List all manifest names for a specific model and model type combination (async)."""
-    return await _run_blocking(
-        _list_manifests_by_model_and_type_sync, model, model_type, include_incompatible
-    )
-
+    return get_manifest_db().get_manifests_by_model_and_type(model, model_type)
 
 # ----------------------------- Model Groups ----------------------------- #
-
 
 def _resolve_version_prefix(relative_path: str) -> str:
     """
@@ -1224,65 +1158,6 @@ def _normalize_group_content(content: Dict[str, Any], relative_path: str) -> Dic
     content["full_path"] = relative_path
     return content
 
-
-def _load_group_manifest(relative_path: str) -> Dict[str, Any]:
-    """Load a group manifest YAML, resolve variant manifest_refs, and normalize
-    top-level convenience fields.
-
-    NOTE: When called from _get_all_group_files_sync, variant resolution is
-    handled externally in a single shared thread pool for better performance.
-    This function only resolves variants itself when called standalone (e.g.
-    from _get_group_by_id_sync).
-    """
-    file_path = resolve_manifest_path_for_read(relative_path)
-    content = load_yaml_content(file_path)
-
-    if not isinstance(content, dict) or content.get("kind") != "ModelGroup":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Not a valid ModelGroup manifest: {relative_path}",
-        )
-
-    _normalize_group_content(content, relative_path)
-
-    # Resolve each variant's manifest_ref into a full enriched manifest document.
-    version_prefix = _resolve_version_prefix(relative_path)
-    variants = content.get("variants")
-    if isinstance(variants, list):
-        variant_tasks: List[tuple[int, str, str]] = []
-        for idx, variant in enumerate(variants):
-            if not isinstance(variant, dict):
-                continue
-            manifest_ref = variant.get("manifest_ref")
-            if not isinstance(manifest_ref, str) or not manifest_ref.strip():
-                continue
-            ref_relative = (
-                f"{version_prefix}/{manifest_ref}.yml"
-                if version_prefix
-                else f"{manifest_ref}.yml"
-            )
-            variant_tasks.append((idx, manifest_ref, ref_relative))
-
-        if variant_tasks:
-            max_workers = min(len(variant_tasks), os.cpu_count() or 4, 16)
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                future_to_info = {
-                    pool.submit(_load_and_enrich_manifest, ref_rel): (vi, mref)
-                    for vi, mref, ref_rel in variant_tasks
-                }
-                for future in as_completed(future_to_info):
-                    vi, mref = future_to_info[future]
-                    try:
-                        enriched = future.result()
-                        variants[vi]["manifest"] = enriched
-                    except (HTTPException, Exception) as exc:
-                        logger.warning(
-                            f"Failed to resolve manifest_ref '{mref}' "
-                            f"for group '{content.get('id')}': {exc}"
-                        )
-                        variants[vi]["manifest"] = None
-
-    return content
 
 
 def _get_all_group_files_sync() -> List[Dict[str, Any]]:
@@ -1431,42 +1306,33 @@ def invalidate_manifest_caches() -> None:
     bump_manifest_cache_buster()
 
 
-def _get_group_by_id_sync(group_id: str) -> Dict[str, Any]:
-    """Find and return a single group manifest by its metadata id."""
-    groups = get_all_group_files()
-    for g in groups:
-        if g.get("id") == group_id:
-            return g
-    raise HTTPException(status_code=404, detail=f"Group not found: {group_id}")
-
 
 @router.get("/groups")
 async def list_manifest_groups():
     """List all ModelGroup manifests."""
-    return await _run_blocking(get_all_group_files)
+    return get_manifest_db().get_groups()
 
 
 @router.get("/groups/{group_id}")
 async def get_manifest_group(group_id: str):
     """Get a specific ModelGroup by its metadata.id."""
-    return await _run_blocking(_get_group_by_id_sync, group_id)
+    return get_manifest_db().get_group(group_id)
 
 
 @router.get("/group")
 async def list_manifest_group_alias():
     """Backward-compatible alias for listing ModelGroup manifests."""
-    return await _run_blocking(get_all_group_files)
+    return get_manifest_db().get_groups()
 
 
 @router.get("/group/{group_id}")
 async def get_manifest_group_alias(group_id: str):
     """Backward-compatible alias for fetching one ModelGroup by id."""
-    return await _run_blocking(_get_group_by_id_sync, group_id)
-
+    return get_manifest_db().get_group(group_id)
 
 @router.get("/{manifest_id}")
 async def get_manifest_by_id(manifest_id: str) -> Dict[Any, Any]:
-    return await _run_blocking(get_manifest, manifest_id)
+    return get_manifest_db().get_manifest(manifest_id)
 
 
 @router.get("/{manifest_id}/part")
@@ -1479,7 +1345,7 @@ async def get_manifest_part(manifest_id: str, path: Optional[str] = None):
       - path=spec.components.0.model_path
     Supports numeric tokens to index into lists.
     """
-    doc = await _run_blocking(get_manifest, manifest_id)
+    doc = get_manifest_db().get_manifest(manifest_id)
     if not path:
         return doc
     value: Any = doc
@@ -1622,6 +1488,7 @@ def _update_lora_scale_sync(req: UpdateLoraScaleRequest) -> Dict[str, Any]:
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
         invalidate_manifest_caches()
+        get_manifest_db().refresh_manifest(req.manifest_id)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -1719,6 +1586,7 @@ def _update_lora_name_sync(req: UpdateLoraNameRequest) -> Dict[str, Any]:
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
         invalidate_manifest_caches()
+        get_manifest_db().refresh_manifest(req.manifest_id)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -1825,6 +1693,7 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
         invalidate_manifest_caches()
+        
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -1852,6 +1721,8 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
             # Best-effort; ignore filesystem errors
             removed_local = False
 
+    get_manifest_db().refresh_manifest(req.manifest_id)
+    
     return {
         "success": True,
         "manifest_id": req.manifest_id,
@@ -2045,6 +1916,7 @@ def _validate_and_register_custom_model_path_sync(
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
         invalidate_manifest_caches()
+        get_manifest_db().refresh_manifest(req.manifest_id)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -2175,6 +2047,7 @@ def _delete_custom_model_path_sync(req: DeleteCustomModelPathRequest) -> Dict[st
     try:
         yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False))
         invalidate_manifest_caches()
+        get_manifest_db().refresh_manifest(req.manifest_id)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to write updated manifest: {e}"
@@ -2204,6 +2077,8 @@ def _delete_custom_model_path_sync(req: DeleteCustomModelPathRequest) -> Dict[st
                             removed_local = True
         except Exception:
             removed_local = False
+
+    get_manifest_db().refresh_manifest(req.manifest_id)
 
     return {
         "success": True,

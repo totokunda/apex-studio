@@ -289,7 +289,9 @@ class LoraManager(DownloadMixin):
             self.save_dir,
             progress_callback=progress_callback,
         )
+        
         paths = self._collect_lora_files(local_path)
+        
         try:
             if (
                 not paths

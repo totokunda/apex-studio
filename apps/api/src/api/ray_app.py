@@ -107,7 +107,6 @@ def _init_ray_once() -> None:
     init_kwargs = dict(
         address=settings.ray_address,
         ignore_reinit_error=True,
-        num_cpus=os.cpu_count(),
         include_dashboard=include_dashboard,
         _node_ip_address=node_ip,
         _metrics_export_port=0,  # Disable metrics agent
@@ -129,7 +128,8 @@ def _init_ray_once() -> None:
             )
         )
 
-    ray.init(**init_kwargs)
+    ray.init()
+    print("Ray initialized")
     _install_shutdown_handler()
     logger.info(f"Ray initialized with {ray.available_resources()}")
     if include_dashboard:
@@ -173,7 +173,9 @@ def _ensure_ray_ready() -> None:
                     _ray_init_error = None
                     _ray_init_cond.notify_all()
                     return
-            except Exception:
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
                 pass
 
             # not_started -> we become the initializer
@@ -184,6 +186,8 @@ def _ensure_ray_ready() -> None:
         try:
             _init_ray_once()
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             with _ray_init_cond:
                 _ray_init_state = "failed"
                 _ray_init_error = e

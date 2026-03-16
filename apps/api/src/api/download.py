@@ -11,6 +11,8 @@ from loguru import logger
 import traceback
 from pathlib import Path
 
+from src.manifest.db import get_manifest_db
+
 from .ws_manager import get_ray_ws_bridge
 from .job_store import submit_tracked_job, job_store as unified_job_store
 from .ray_tasks import download_unified
@@ -21,7 +23,6 @@ from .ray_resources import get_ray_resources
 from .ray_resources import get_best_gpu
 from .engine_resource_guard import maybe_release_warm_engine_for_non_engine_request
 from .manifest import invalidate_manifest_caches
-
 router = APIRouter(prefix="/download", tags=["download"])
 
 # In-memory mapping of request keys -> most recently created job_id.
@@ -687,6 +688,8 @@ def delete_downloaded_path(request: DeleteRequest):
 
         try:
             invalidate_manifest_caches()
+            db = get_manifest_db()
+            db.refresh_manifests_by_path(str(target_resolved))
         except Exception:
             pass
 

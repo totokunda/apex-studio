@@ -6,7 +6,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from logging import Logger
 from loguru import logger
 import hashlib
-from typing import Dict, Any
+from typing import Dict, Any, List
 import traceback
 from typing import Tuple
 import shutil
@@ -93,6 +93,7 @@ def _int_env(name: str, default: int) -> int:
 
 class DownloadMixin:
     logger: Logger = logger
+    downloaded_paths: List[str] = []
 
     @staticmethod
     def _stable_url_key(url: str) -> str:
@@ -531,21 +532,36 @@ class DownloadMixin:
         if is_downloaded_path:
             return is_downloaded_path
         elif "drive.google.com" in model_path:
-            return self._download_from_google_drive(
+            downloaded_path = self._download_from_google_drive(
                 model_path, save_path, progress_callback
             )
+            if downloaded_path:
+                self.downloaded_paths.append(downloaded_path)
+            return downloaded_path
         elif model_path.startswith("gs://"):
-            return self._download_from_gcs(model_path, save_path, progress_callback)
+            downloaded_path = self._download_from_gcs(model_path, save_path, progress_callback)
+            if downloaded_path:
+                self.downloaded_paths.append(downloaded_path)
+            return downloaded_path
         elif model_path.startswith("s3://"):
-            return self._download_from_s3(model_path, save_path, progress_callback)
+            downloaded_path = self._download_from_s3(model_path, save_path, progress_callback)
+            if downloaded_path:
+                self.downloaded_paths.append(downloaded_path)
+            return downloaded_path
         elif "blob.core.windows.net" in model_path:
-            return self._download_from_azure(model_path, save_path, progress_callback)
+            downloaded_path = self._download_from_azure(model_path, save_path, progress_callback)
+            if downloaded_path:
+                self.downloaded_paths.append(downloaded_path)
+            return downloaded_path
         elif self._is_huggingface_repo(model_path):
-            return self._download_from_huggingface(
+            downloaded_path = self._download_from_huggingface(
                 model_path, save_path, progress_callback
             )
         elif self._is_url(model_path):
-            return self._download_from_url(model_path, save_path, progress_callback)
+            downloaded_path = self._download_from_url(model_path, save_path, progress_callback)
+            if downloaded_path:
+                self.downloaded_paths.append(downloaded_path)
+            return downloaded_path
         else:
             if hasattr(self, "logger"):
                 self.logger.info(f"Skipping download for local path: {model_path}")

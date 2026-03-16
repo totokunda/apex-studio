@@ -16,6 +16,11 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 os.environ["PYTORCH_MPS_PREFER_METAL"] = "1"
 os.environ["PYTORCH_MPS_FAST_MATH"] = "1"
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 from pathlib import Path
 import typer
 import torch
@@ -188,6 +193,7 @@ def _run(
         return proc.pid
     else:
         # Run in foreground
+
         proc = subprocess.Popen(cmd, cwd=str(cwd) if cwd else None)
         try:
             proc.wait()
@@ -263,7 +269,7 @@ def start(
     if _is_frozen():
         _run([sys.executable, "serve"], cwd=cwd, daemon=daemon, log_path=log_path)
         return
-    
+     
 
     # Procfile only contains `api:` in our project, so we can run it directly.
     cmd = _proc_cmd_from_procfile(procfile_path, name="api")

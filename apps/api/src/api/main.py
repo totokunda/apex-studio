@@ -29,6 +29,7 @@ from src.utils.defaults import (
     get_preprocessor_results_path,
     get_postprocessor_results_path,
 )
+
 from src.manifest.startup_migration import run_startup_manifest_migration_safe
 import errno
 
@@ -112,6 +113,7 @@ async def _start_background_services() -> None:
     """
     global _ray_ready, _ray_start_error
     try:
+        print("Starting background services")
         get_ray_app()
 
         # Initialize the Ray websocket bridge

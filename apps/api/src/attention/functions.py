@@ -1685,20 +1685,20 @@ def efficient_dot_product_attention(
             + (min(query_chunk_size, num_q), num_heads, q_features),
         )
 
-        if mask is None:
+        if attn_mask is None:
             mask_chunk = None
-        elif mask.shape[-2] == 1:
-            mask_chunk = mask
-        elif mask.shape[-2] == num_q:
+        elif attn_mask.shape[-2] == 1:
+            mask_chunk = attn_mask
+        elif attn_mask.shape[-2] == num_q:
             mask_chunk = dynamic_slice(
-                mask,
-                tuple([0] * (mask.ndim - 3)) + (0, chunk_idx, 0),
-                tuple(mask.shape[:-3])
-                + (mask.shape[-3], min(query_chunk_size, num_q), mask.shape[-1]),
+                attn_mask,
+                tuple([0] * (attn_mask.ndim - 3)) + (0, chunk_idx, 0),
+                tuple(attn_mask.shape[:-3])
+                + (attn_mask.shape[-3], min(query_chunk_size, num_q), attn_mask.shape[-1]),
             )
         else:
             raise TypeError(
-                f"mask.shape[-2] == {mask.shape[-2]} must broadcast with query.shape[-3] == {num_q}"
+                f"attn_mask.shape[-2] == {attn_mask.shape[-2]} must broadcast with query.shape[-3] == {num_q}"
             )
 
         if bias is None:
@@ -1798,7 +1798,7 @@ def _attention_env_fingerprint() -> dict:
     }
 
 
-def _load_attention_cache() -> dict | None:
+def _load_attention_cache(ignore_fingerprint: bool = False) -> dict | None:
     """
     Cache format (v1):
       {
@@ -1835,7 +1835,7 @@ def _load_attention_cache() -> dict | None:
     if not isinstance(fp, dict):
         return None
 
-    if fp != _attention_env_fingerprint():
+    if fp != _attention_env_fingerprint() and not ignore_fingerprint:
         logger.info(
             "Attention backend cache fingerprint mismatch; re-verifying backends."
         )
@@ -2068,6 +2068,8 @@ def _verify_backend_worker(backend_name: str, queue: multiprocessing.Queue):
                     torch.mps.synchronize()
                 success = True
             except Exception:
+                import traceback
+                traceback.print_exc()
                 pass
 
         # 2. Try Varlen
@@ -2105,6 +2107,7 @@ AttentionVerifyProgressCallback = Callable[[dict[str, Any]], None]
 
 def verify_attention_backends_detailed(
     force_refresh: bool = False,
+    ignore_fingerprint: bool = False,
     progress_callback: AttentionVerifyProgressCallback | None = None,
 ) -> dict[str, Any]:
     """
@@ -2125,7 +2128,7 @@ def verify_attention_backends_detailed(
 
     # 0. If we already have in-memory results and we're not refreshing, use them.
     if _WORKING_ATTENTIONS is not None and not force_refresh:
-        cache = _load_attention_cache() or {}
+        cache = _load_attention_cache(ignore_fingerprint=ignore_fingerprint) or {}
         failed = cache.get("failed", [])
         if not isinstance(failed, list) or not all(isinstance(x, str) for x in failed):
             failed = []
@@ -2144,7 +2147,7 @@ def verify_attention_backends_detailed(
         return {"working": list(_WORKING_ATTENTIONS), "failed": list(failed), "from_cache": True}
 
     # 1. Try loading from cache (unless forced refresh).
-    cache = _load_attention_cache()
+    cache = _load_attention_cache(ignore_fingerprint=ignore_fingerprint)    
     if cache is not None and not force_refresh:
         working = cache["working"]
         failed = cache.get("failed", [])
@@ -2182,8 +2185,8 @@ def verify_attention_backends_detailed(
     ctx = multiprocessing.get_context("spawn")
 
     # On Windows with spawn context, each subprocess must re-initialize PyTorch + CUDA.
-    first_backend_timeout = 15  # seconds - covers CUDA initialization
-    subsequent_timeout = 10  # seconds - still generous for torch imports
+    first_backend_timeout = 25  # seconds - covers CUDA initialization
+    subsequent_timeout = 15  # seconds - still generous for torch imports
 
     total = len(names)
     for idx, name in enumerate(names):
@@ -2193,8 +2196,8 @@ def verify_attention_backends_detailed(
         queue = ctx.Queue()
         p = ctx.Process(target=_verify_backend_worker, args=(name, queue))
         p.start()
-
         timeout = first_backend_timeout if idx == 0 else subsequent_timeout
+        
         try:
             result = queue.get(timeout=timeout)
             p.join()
@@ -2251,13 +2254,12 @@ def verify_attention_backends_detailed(
     emit({"phase": "done", "working": list(working), "failed": list(failed)})
     return {"working": list(working), "failed": list(failed), "from_cache": False}
 
-
-def verify_attention_backends(force_refresh: bool = False) -> List[str]:
+def verify_attention_backends(force_refresh: bool = False, ignore_fingerprint: bool = False) -> List[str]:
     """
     Verify attention backends.
     1. Check if cached results exist.
     2. If not, run verification for each backend in a SEPARATE process.
     3. Save results to cache.
     """
-    res = verify_attention_backends_detailed(force_refresh=force_refresh)
+    res = verify_attention_backends_detailed(force_refresh=force_refresh, ignore_fingerprint=ignore_fingerprint)
     return list(res.get("working") or [])
