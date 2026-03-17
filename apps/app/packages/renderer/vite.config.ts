@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => ({
     tsconfigPaths(),
     // Provide path, url for native decoder loading (Electron renderer with nodeIntegration)
     nodePolyfills({
-      include: ["path"],
+      include: ["path", "crypto"],
       globals: { process: true },
     }),
   ],

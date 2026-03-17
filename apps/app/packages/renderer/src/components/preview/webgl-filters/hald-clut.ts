@@ -6,14 +6,14 @@
  */
 
 import { WebGLFilterBase } from "./WebGLFilterBase";
-import { readFileBuffer } from "@app/preload";
 import * as twgl from "twgl.js";
+import { readFileBuffer as defaultReadFileBuffer } from "@app/preload";
 
 // Cache for loaded CLUT images
-const clutImageCache = new Map<string, HTMLImageElement>();
+const clutImageCache = new Map<string, HTMLImageElement | ImageBitmap>();
 
 // Track loading promises to avoid duplicate requests
-const loadingPromises = new Map<string, Promise<HTMLImageElement>>();
+const loadingPromises = new Map<string, Promise<HTMLImageElement | ImageBitmap>>();
 
 export class WebGLHaldClut extends WebGLFilterBase {
   private program: WebGLProgram | null = null;
@@ -23,10 +23,11 @@ export class WebGLHaldClut extends WebGLFilterBase {
   private loadedClutPaths: Set<string> = new Set();
   private contextLost = false;
 
-  constructor() {
+  constructor(readonly readFileBuffer: ((path: string) => Promise<Buffer<ArrayBufferLike>>) | null = null) {
     // Request dedicated WebGL2 context from base class
     super("webgl2", "preview-webgl-filter-hald");
     this.initShaders();
+    this.readFileBuffer = readFileBuffer ?? defaultReadFileBuffer;
   }
 
   protected onContextLost(): void {
@@ -178,7 +179,7 @@ export class WebGLHaldClut extends WebGLFilterBase {
     }
   }
 
-  private async loadClutImage(imagePath: string): Promise<HTMLImageElement> {
+  private async loadClutImage(imagePath: string): Promise<HTMLImageElement | ImageBitmap> {
     // Check cache first
     if (clutImageCache.has(imagePath)) {
       return clutImageCache.get(imagePath)!;
@@ -192,24 +193,27 @@ export class WebGLHaldClut extends WebGLFilterBase {
     // Load the image using the same pattern as fetchImage
     const loadPromise = (async () => {
       try {
-        // Read file buffer using Electron's secure method
-        const buffer = await readFileBuffer(imagePath);
+        const buffer = await this.readFileBuffer?.(imagePath) ?? defaultReadFileBuffer(imagePath);
         const blob = new Blob([buffer as unknown as ArrayBuffer]);
-        const url = URL.createObjectURL(blob);
-
-        const img = new Image();
-        img.decoding = "async";
-        img.src = url;
-
-        await img.decode();
-
-        // Clean up the object URL after loading
-        URL.revokeObjectURL(url);
-
-        clutImageCache.set(imagePath, img);
-        loadingPromises.delete(imagePath);
-
-        return img;
+        
+        // Use createImageBitmap in worker (Image is undefined), Image in main thread
+        if (typeof Image !== "undefined") {
+          const url = URL.createObjectURL(blob);
+          const img = new Image();
+          img.decoding = "async";
+          img.src = url;
+          await img.decode();
+          URL.revokeObjectURL(url);
+          clutImageCache.set(imagePath, img);
+          loadingPromises.delete(imagePath);
+          return img;
+        } else {
+          // Worker context: use createImageBitmap
+          const bitmap = await createImageBitmap(blob);
+          clutImageCache.set(imagePath, bitmap);
+          loadingPromises.delete(imagePath);
+          return bitmap;
+        }
       } catch (error) {
         loadingPromises.delete(imagePath);
         console.error("Failed to load CLUT image:", { imagePath, error });

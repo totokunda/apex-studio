@@ -24,7 +24,7 @@ import { KonvaEventObject } from "konva/lib/Node";
 import { BASE_LONG_SIDE, DEFAULT_FPS } from "@/lib/settings";
 
 import _ from "lodash";
-import VideoPreview from "./clips/VideoPreview";
+import VideoPreview from "./clips/VideoPreview2";
 import AudioPreview from "./clips/AudioPreview";
 import ImagePreview from "./clips/ImagePreview";
 import ShapePreview from "./clips/ShapePreview";

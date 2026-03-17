@@ -791,7 +791,6 @@ const VideoPreview: React.FC<
 
       if (!canvas) return;
 
-
       const info = mediaInfo.current;
       const clipFps =
         info?.stats.video?.averagePacketRate || fpsRef.current || DEFAULT_FPS;
@@ -802,7 +801,6 @@ const VideoPreview: React.FC<
       const pendingSeek = pendingSeekTargetRef.current;
 
       const resumeGate = resumeGateFrameRef.current;
-
 
       skipDrawRef.current = false;
 
@@ -836,6 +834,7 @@ const VideoPreview: React.FC<
       if (!originalFrameRef.current) {
         originalFrameRef.current = document.createElement("canvas");
       }
+
       if (
         originalFrameRef.current.width !== canvas.width ||
         originalFrameRef.current.height !== canvas.height
@@ -845,6 +844,7 @@ const VideoPreview: React.FC<
       }
 
       const origCtx = originalFrameRef.current.getContext("2d");
+
       if (origCtx) {
         origCtx.clearRect(0, 0, canvas.width, canvas.height);
         origCtx.drawImage(canvas, 0, 0);

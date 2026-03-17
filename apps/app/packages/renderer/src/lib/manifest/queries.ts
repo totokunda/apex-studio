@@ -147,8 +147,6 @@ export async function prefetchModelMenuQueries(
       queryFn: () => fetchManifestsAndPrimeCache(queryClient),
     });
 
-    console.log("prefetchModelMenuQueries done");
-
   } catch (error) {
     console.error("prefetchModelMenuQueries error", error);
   }

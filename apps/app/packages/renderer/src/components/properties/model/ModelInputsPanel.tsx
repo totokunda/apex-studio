@@ -281,7 +281,7 @@ export const ModelInputsPanel: React.FC<{
             </div>
           )}
 
-          {panel.layout.rows.map((row) => {
+          {panel.layout.rows.map((row, idx) => {
             // Determine if we should override layout for small panels:
             // If each item's computed width would be too small, stack items vertically.
             const estimatedPerItem = panelSize / row.length - rowSub;
@@ -291,7 +291,7 @@ export const ModelInputsPanel: React.FC<{
               : estimatedPerItem;
             return (
               <div
-                key={row.join("-")}
+                key={`${idx}-${row.join("-")}`}
                 style={{
                   display: "flex",
                   flexDirection: shouldStackRowItems ? "column" : "row",

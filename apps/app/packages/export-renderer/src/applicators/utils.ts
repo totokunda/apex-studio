@@ -1,6 +1,7 @@
 import type { WebGLHaldClut } from "../../../renderer/src/components/preview/webgl-filters/hald-clut";
 import type { BaseClipApplicator } from "../../../renderer/src/components/preview/clips/apply/base";
 import { FilterPreview } from "../../../renderer/src/components/preview/clips/apply/filter";
+
 import type {
   AnyClipProps,
   ClipType,

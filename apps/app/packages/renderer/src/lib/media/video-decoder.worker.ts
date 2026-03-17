@@ -382,10 +382,6 @@ function resetAlphaMergeQueues(state: AssetState) {
   state.pendingColorFramesByTimestamp.clear();
 }
 
-
-
-
-
 function createAlphaFrameHandler(assetId: string) {
   return (alphaFrame: VideoFrame) => {
     const state = assetStates.get(assetId);
@@ -583,7 +579,6 @@ async function cacheKeyPackets(state: AssetState) {
 
 // Handler factory – binds an assetId so multiple assets can run concurrently.
 const createFrameHandler = (assetId: string) => (frame: VideoFrame) => {
-
 
   const state = assetStates.get(assetId);
   if (!state) {

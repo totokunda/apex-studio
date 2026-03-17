@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { WebGLHaldClut } from "./hald-clut";
+import { readFileBuffer } from "@app/preload";
 
 // Module-level singleton instance
 let haldClutInstance: WebGLHaldClut | null = null;
@@ -24,7 +25,7 @@ export function useWebGLHaldClut() {
     // Initialize instance on first mount
     if (!isInitializedRef.current) {
       if (!haldClutInstance) {
-        haldClutInstance = new WebGLHaldClut();
+        haldClutInstance = new WebGLHaldClut(readFileBuffer);
       }
       // Always set instance to ensure component has the latest reference
       setInstance(haldClutInstance);

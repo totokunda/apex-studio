@@ -38,7 +38,7 @@ import type { Preprocessor } from '@/lib/preprocessor/api';
 import { validatePreprocessorFrames } from '@/lib/preprocessorHelpers';
 import { runEngine, cancelEngine, useEngineJobActions, useEngineJob } from '@/lib/engine/api';
 import { ManifestComponent, ManifestComponentModelPathItem, LoraType, getSelectedItems, ManifestDocument, SelectedItem } from '@/lib/manifest/api';
-import { selectPreferredModelPathItem } from '@/lib/manifest/model-variant-selection';
+
 import ModelComponentsProperties from '../properties/model/ModelComponentsProperties'
 import OffloadProperties from '../properties/OffloadProperties'
 import { v4 as uuidv4 } from 'uuid';

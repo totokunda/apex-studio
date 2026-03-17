@@ -8,7 +8,7 @@ export interface WebGLContextListener {
 }
 
 export interface WebGLSharedContextHandle {
-  readonly canvas: HTMLCanvasElement;
+  readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   getContext(): WebGLRenderingContext | WebGL2RenderingContext | null;
   ensureContext(): WebGLRenderingContext | WebGL2RenderingContext | null;
   subscribe(listener: WebGLContextListener): () => void;
@@ -17,7 +17,7 @@ export interface WebGLSharedContextHandle {
 
 interface ContextRecord {
   key: string;
-  canvas: HTMLCanvasElement;
+  canvas: HTMLCanvasElement | OffscreenCanvas;
   contextType: WebGLContextType;
   attributes?: WebGLContextAttributes;
   gl: WebGLRenderingContext | WebGL2RenderingContext | null;
@@ -41,7 +41,7 @@ class WebGLContextHandleImpl implements WebGLSharedContextHandle {
     private readonly record: ContextRecord,
   ) {}
 
-  get canvas(): HTMLCanvasElement {
+  get canvas(): HTMLCanvasElement | OffscreenCanvas {
     return this.record.canvas;
   }
 
@@ -90,7 +90,7 @@ export class WebGLContextManager {
   ): WebGLSharedContextHandle {
     let record = this.contexts.get(key);
     if (!record) {
-      const canvas = document.createElement("canvas");
+      const canvas = typeof document !== "undefined" ? document.createElement("canvas"): new OffscreenCanvas(256, 256);
       const contextType = options.contextType ?? "webgl";
       const attributes = options.attributes;
 
@@ -144,7 +144,7 @@ export class WebGLContextManager {
   }
 
   private static createContext(
-    canvas: HTMLCanvasElement,
+    canvas: HTMLCanvasElement | OffscreenCanvas,
     type: WebGLContextType,
     attributes?: WebGLContextAttributes,
   ): WebGLRenderingContext | WebGL2RenderingContext | null {
