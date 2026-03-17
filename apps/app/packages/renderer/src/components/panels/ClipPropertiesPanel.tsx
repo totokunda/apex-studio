@@ -305,8 +305,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   }, [clip?.type]);
 
   const hasModel = useMemo(() => {
-    if (clip?.type === 'model') return true;
-    return false;
+    return clip?.type === 'model';
   }, [clip?.type]);
 
   // Engine job tracking is started explicitly when a run begins; bind UI strictly to this clip's active job.
@@ -833,7 +832,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           return;
         }
       }
-      //await startGeneration();
+      await startGeneration();
     } catch (error) {
       setIsPreparingGeneration(false); // Clear state on error
       throw error;
@@ -919,7 +918,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
             {(hasModel) && <TabsTrigger value="model-inputs" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Inputs</TabsTrigger>}
             {(hasModel) && isModelRunning && <TabsTrigger value="model-progress" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5  whitespace-nowrap">Progress</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-architecture" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Architecture</TabsTrigger>}
-            {(hasModel) && isModelDownloaded && <TabsTrigger value="model-offload" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Offload</TabsTrigger>}
+            {(hasModel) && <TabsTrigger value="model-offload" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Offload</TabsTrigger>}
             {(hasModel) && <TabsTrigger value="model-lora" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">LoRA</TabsTrigger>}
             {(hasModel) && !isModelRunning && <TabsTrigger value="model-generation" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Generations</TabsTrigger>}
             {(hasLine) && <TabsTrigger value="line" className="text-brand-light text-[11px] h-9 shrink-0 px-4.5 whitespace-nowrap">Line</TabsTrigger>}
@@ -999,7 +998,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
           {(hasModel) && <TabsContent value="model-architecture" className="min-w-0 m-0"> 
             <ModelComponentsProperties clipId={clipId} />
           </TabsContent>}
-          {(hasModel) && isModelDownloaded && <TabsContent value="model-offload" className="min-w-0 m-0">
+          {(hasModel)  && <TabsContent value="model-offload" className="min-w-0 m-0">
             <OffloadProperties clipId={clipId} />
           </TabsContent>}
             {(hasFrameInterpolate) && <TabsContent value="enhance" className="min-w-0 m-0">

@@ -225,7 +225,7 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
     | ModelClipProps
     | undefined;
 
-  if (!clip || clip.type !== "model") return null;
+  if (!clip) return null;
 
   const manifestId = String(clip.manifest?.metadata?.id || "");
   const { data: manifest } = useManifestQuery(manifestId);
@@ -397,8 +397,7 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
       void setOffloadDefaultsForManifest(manifestId, next as any).catch(() => undefined);
     }
   }, [clipId, manifestId]);
-
-  if (!components.length) return null;
+  
 
   return (
     <div>
