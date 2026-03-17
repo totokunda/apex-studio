@@ -2518,7 +2518,7 @@ def _run_engine_from_manifest_impl(
     """Execute a manifest YAML with provided inputs and persist result to disk."""
     _require_tracked_job_or_fail(job_id, allowed_types={"engine"}, ws_bridge=ws_bridge)
     _apply_memory_env_from_store()
-    manifest_db = ManifestDB()
+
     def send_progress(
         progress: float | None, message: str, metadata: Optional[Dict] = None
     ):
@@ -3087,6 +3087,7 @@ def _run_engine_from_manifest_impl(
                 f"Saving audio video output at step {idx} with "
                 f"video_shape={video_shape} audio_shape={audio_shape}"
             )
+            
             if is_ovi_model:
                 save_func = save_video_ovi
             else:
@@ -3097,6 +3098,7 @@ def _run_engine_from_manifest_impl(
                 filename_prefix=f"preview_{idx:04d}" if not is_result else "result",
                 job_dir=job_dir,
             )
+            
             logger.info(f"Preview saved to {result_path} with media type {media_type}")
             try:
                 # Construct preview URL for frontend access
@@ -3277,7 +3279,7 @@ def _run_engine_from_manifest_impl(
 
     except Exception as e:
         tb = traceback.format_exc()
-        logger.error(tb, "traceback")
+        traceback.print_exc()
         try:
             send_progress(
                 0.0,
@@ -3294,6 +3296,20 @@ def _run_engine_from_manifest_impl(
             pass
         return {"job_id": job_id, "status": "error", "error": str(e), "traceback": tb}
     finally:
+        
+        if engine is not None:
+            db = get_manifest_db()
+            manifest_id = config.get("id")
+            logger.info(f"Manifest ID: {manifest_id}")
+            
+            if manifest_id is not None:
+                db.refresh_manifest(manifest_id)
+ 
+            
+            logger.info(f"Downloaded paths: {getattr(engine, 'downloaded_paths', [])}")
+                
+            for path in getattr(engine, "downloaded_paths", []):
+                db.refresh_manifests_by_path(str(path))
         # Ensure we aggressively release references.
         # If the engine is pooled, do NOT clear torch caches (keeps it warm).
         # If not pooled, do best-effort offload + cache clearing.
@@ -3316,15 +3332,7 @@ def _run_engine_from_manifest_impl(
             except Exception:
                 pass
 
-            if engine is not None:
-                db = get_manifest_db()
-                manifest_id = config.get("id")
-                
-                if manifest_id is not None:
-                    db.refresh_manifest(manifest_id)
-                    
-                for path in getattr(engine, "downloaded_paths", []):
-                    db.refresh_manifests_by_path(str(path))
+            
             if (
                 force_cold_cleanup
                 or (not engine_pooled)

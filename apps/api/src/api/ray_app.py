@@ -109,6 +109,7 @@ def _init_ray_once() -> None:
         ignore_reinit_error=True,
         include_dashboard=include_dashboard,
         _node_ip_address=node_ip,
+        log_to_driver=True,
         _metrics_export_port=0,  # Disable metrics agent
         _system_config={
             "automatic_object_spilling_enabled": True,
@@ -128,7 +129,9 @@ def _init_ray_once() -> None:
             )
         )
 
-    ray.init()
+    ray.init(
+        **init_kwargs,
+    )
     print("Ray initialized")
     _install_shutdown_handler()
     logger.info(f"Ray initialized with {ray.available_resources()}")

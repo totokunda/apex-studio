@@ -243,6 +243,7 @@ def trigger_run(request: RunRequest):
     If download_if_needed is True and the model is not available,
     it will be downloaded first.
     """
+    
 
     # Validate preprocessor exists via YAML registry
     try:

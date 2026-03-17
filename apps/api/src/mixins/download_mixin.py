@@ -536,34 +536,34 @@ class DownloadMixin:
                 model_path, save_path, progress_callback
             )
             if downloaded_path:
-                self.downloaded_paths.append(downloaded_path)
+                self.downloaded_paths.append(model_path)
             return downloaded_path
         elif model_path.startswith("gs://"):
             downloaded_path = self._download_from_gcs(model_path, save_path, progress_callback)
             if downloaded_path:
-                self.downloaded_paths.append(downloaded_path)
+                self.downloaded_paths.append(model_path)
             return downloaded_path
         elif model_path.startswith("s3://"):
             downloaded_path = self._download_from_s3(model_path, save_path, progress_callback)
             if downloaded_path:
-                self.downloaded_paths.append(downloaded_path)
+                self.downloaded_paths.append(model_path)
             return downloaded_path
         elif "blob.core.windows.net" in model_path:
             downloaded_path = self._download_from_azure(model_path, save_path, progress_callback)
             if downloaded_path:
-                self.downloaded_paths.append(downloaded_path)
+                self.downloaded_paths.append(model_path)
             return downloaded_path
         elif self._is_huggingface_repo(model_path):
             downloaded_path = self._download_from_huggingface(
                 model_path, save_path, progress_callback
             )
             if downloaded_path:
-                self.downloaded_paths.append(downloaded_path)
+                self.downloaded_paths.append(model_path)
             return downloaded_path
         elif self._is_url(model_path):
             downloaded_path = self._download_from_url(model_path, save_path, progress_callback)
             if downloaded_path:
-                self.downloaded_paths.append(downloaded_path)
+                self.downloaded_paths.append(model_path)
             return downloaded_path
         else:
             if hasattr(self, "logger"):
