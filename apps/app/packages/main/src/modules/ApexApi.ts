@@ -977,13 +977,22 @@ export class ApexApi implements AppModule {
           component_index: Number(request.component_index),
           path: String(request.path || ""),
         };
-        return this.makeRequest<any>(
+        return this.makeRequest(
           "DELETE",
           "/manifest/custom-model-path",
           body,
         );
       },
     );
+
+    ipcMain.handle(
+      "manifest:selected-items", 
+      async (_event, request: {
+        manifest_id: string;
+      }) => {
+        return this.makeRequest("GET", `/manifest/${encodeURIComponent(request.manifest_id)}/selected-items`);
+      },
+    )
 
     // Update a single LoRA entry's scale inside a manifest YAML
     ipcMain.handle(

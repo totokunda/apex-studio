@@ -1139,7 +1139,6 @@ const LoraSection: React.FC<{
       ? lora.file_size
       : null;
 
-
   useEffect(() => {
     if (isDownloading || !jobId) {
       setStartDownloading(false);
@@ -1215,6 +1214,7 @@ const LoraSection: React.FC<{
             await deleteDownload({
               path: path as string,
               item_type: "lora",
+              
             }); 
             await Promise.all([
               refreshManifestPart(manifestId, `spec.loras.${loraIndex}`, queryClient),

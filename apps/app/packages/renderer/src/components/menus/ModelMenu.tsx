@@ -783,21 +783,6 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
   const lastGoodManifestsRef = useRef<ManifestDocument[] | null>(null);
   const lastGoodModelTypesRef = useRef<ModelTypeInfo[] | null>(null);
 
-  const manifestVersionGateQuery = useQuery<boolean>({
-    queryKey: ["manifestSupportsGroups"],
-    queryFn: fetchSupportsManifestGroups,
-    placeholderData: (prev) => prev,
-    retry: false,
-    refetchOnWindowFocus: false,
-    staleTime: 300_000,
-    gcTime: Infinity,
-  });
-
-  const versionResolved = manifestVersionGateQuery.isFetched;
-  const useGroupedManifestEndpoint =
-    versionResolved && manifestVersionGateQuery.data === true;
-  const useLegacyManifestListEndpoint =
-    versionResolved && manifestVersionGateQuery.data === false;
 
   // Group manifests are the primary source, but only when the version gate
   // confirms the backend supports group APIs.
@@ -808,10 +793,8 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
       queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]),
     placeholderData: (prev) => prev,
     retry: true,
-    refetchOnWindowFocus: false,
-    staleTime: Infinity,
-    gcTime: Infinity,
-    enabled: useGroupedManifestEndpoint,
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
   });
 
   // Legacy flat manifest list is only used when the version endpoint is
@@ -823,10 +806,8 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
       queryClient.getQueryData<ManifestDocument[]>(["manifest"]),
     placeholderData: (prev) => prev,
     retry: true,
-    refetchOnWindowFocus: false,
-    staleTime: Infinity,
-    gcTime: Infinity,
-    enabled: useLegacyManifestListEndpoint,
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
   });
 
   const modelTypesQuery = useQuery<ModelTypeInfo[]>({
@@ -835,13 +816,10 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
     initialData: () => queryClient.getQueryData<ModelTypeInfo[]>(["modelTypes"]),
     placeholderData: (prev) => prev,
     retry: true,
-    refetchOnWindowFocus: false,
-    staleTime: Infinity,
-    gcTime: Infinity,
   });
 
   let manifestsData: ManifestDocument[] | undefined;
-  const groupsData = useGroupedManifestEndpoint ? groupsQuery.data : undefined;
+  const groupsData = groupsQuery.data;
   const modelTypesData = modelTypesQuery.data;
 
   useEffect(() => {
@@ -858,7 +836,7 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
 
   // Backend is unavailable when we are on the legacy path and the list call fails.
   const backendUnavailable =
-    useLegacyManifestListEndpoint && manifestsQuery.isFetched && manifestsQuery.isError;
+    manifestsQuery.isFetched && manifestsQuery.isError;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -886,7 +864,6 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
   // Groups are the only source when the version gate enables grouped manifests.
   // The flat manifest list is used only on the legacy path.
   const manifests: ManifestDocument[] = useMemo(() => {
-    if (useGroupedManifestEndpoint) {
       const groupManifests: ManifestDocument[] = [];
       const seenIds = new Set<string>();
 
@@ -908,28 +885,9 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
         }
       }
 
-      return groupManifests;
-    }
-
-    if (useLegacyManifestListEndpoint) {
-      if (Array.isArray(manifestsData) && manifestsData.length > 0) return manifestsData;
-      if (
-        (manifestsQuery.isFetching || manifestsQuery.isError) &&
-        lastGoodManifestsRef.current
-      ) {
-        return lastGoodManifestsRef.current;
-      }
-      return manifestsData ?? lastGoodManifestsRef.current ?? [];
-    }
-
-    return [];
+    return groupManifests;
   }, [
-    useGroupedManifestEndpoint,
-    useLegacyManifestListEndpoint,
     groupsData,
-    manifestsData,
-    manifestsQuery.isFetching,
-    manifestsQuery.isError,
   ]);
 
   // Category keys should reflect both the group definition (authoritative for
@@ -1188,9 +1146,7 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
 
   const hasAnyManifests = manifests.length > 0;
   const hasAnyFiltered = filteredManifests.length > 0;
-  const primaryFetched =
-    (useGroupedManifestEndpoint && groupsQuery.isFetched) ||
-    (useLegacyManifestListEndpoint && manifestsQuery.isFetched);
+  const primaryFetched = groupsQuery.isFetched;
   const showEmptyState = primaryFetched && !hasAnyFiltered;
 
   return (
@@ -1258,24 +1214,17 @@ const ModelMenu: React.FC<{ panelSize?: number }> = ({ panelSize = 0 }) => {
                           title="Refresh models"
                           aria-label="Refresh models"
                           disabled={
-                            manifestVersionGateQuery.isFetching ||
                             groupsQuery.isFetching ||
                             manifestsQuery.isFetching
                           }
                           onClick={() => {
-                            manifestVersionGateQuery.refetch();
-                            if (useGroupedManifestEndpoint) {
-                              groupsQuery.refetch();
-                            }
-                            if (useLegacyManifestListEndpoint) {
-                              manifestsQuery.refetch();
-                            }
+                            groupsQuery.refetch();
+                            manifestsQuery.refetch();
                           }}
                           className="text-[11px] font-medium flex items-center justify-center gap-x-1.5 text-brand-light hover:text-brand-light/90 disabled:opacity-60 disabled:cursor-not-allowed bg-brand hover:bg-brand/80 border border-brand-light/10 rounded-[6px] px-3 py-1.5 transition-all"
                         >
                           <LuRefreshCw
                             className={`w-3.5 h-3.5 ${
-                              manifestVersionGateQuery.isFetching ||
                               groupsQuery.isFetching ||
                               manifestsQuery.isFetching
                                 ? "animate-spin"

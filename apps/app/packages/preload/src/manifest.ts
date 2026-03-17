@@ -73,6 +73,14 @@ async function deleteCustomModelPath(
   });
 }
 
+async function getSelectedItems(
+  manifestId: string,
+): Promise<ConfigResponse<any>> {
+  return await ipcRenderer.invoke("manifest:selected-items", {
+    manifest_id: manifestId,
+  });
+}
+
 async function updateManifestLoraScale(
   manifestId: string,
   loraIndex: number,
@@ -132,6 +140,7 @@ export {
   deleteManifestLora,
   listManifestGroups,
   getManifestGroup,
+  getSelectedItems,
 };
 
 

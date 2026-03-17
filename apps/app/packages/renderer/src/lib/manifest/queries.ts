@@ -1,5 +1,5 @@
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getManifest, getManifestPart, listManifests, listManifestGroups, listModelTypes, type ManifestGroup, type ModelTypeInfo } from "./api";
+import { getManifest, getManifestPart, listManifests, listManifestGroups, listModelTypes, type ManifestGroup, type ModelTypeInfo, getManifestGroup } from "./api";
 import { ManifestDocument } from "@/lib/manifest";
 import _ from "lodash";
 
@@ -131,32 +131,28 @@ export async function prefetchModelMenuQueries(
 ): Promise<void> {
   // Prefetch model types and groups in parallel.  The flat manifest list is
   // only fetched as a fallback when groups returns empty (old backend).
-  const [, groupsResult] = await Promise.allSettled([
-    queryClient.prefetchQuery({
+
+  try {
+
+    await queryClient.prefetchQuery({
       queryKey: ["modelTypes"],
       queryFn: fetchModelTypes,
-      staleTime: 30_000,
-    }),
-    queryClient.prefetchQuery({
+    })
+  await queryClient.prefetchQuery({
       queryKey: ["manifestGroups"],
       queryFn: () => fetchManifestGroups(queryClient),
-      staleTime: 30_000,
-    }),
-  ]);
-
-  // Only prefetch the flat manifest list when groups didn't return data.
-  const groups =
-    groupsResult.status === "fulfilled"
-      ? queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"])
-      : undefined;
-
-  if (!groups || groups.length === 0) {
+    })
     await queryClient.prefetchQuery({
       queryKey: ["manifest"],
       queryFn: () => fetchManifestsAndPrimeCache(queryClient),
-      staleTime: 30_000,
     });
+
+    console.log("prefetchModelMenuQueries done");
+
+  } catch (error) {
+    console.error("prefetchModelMenuQueries error", error);
   }
+
 }
 
 export const useManifestQuery = (manifestId: string | null, forceRefresh: boolean = false) => {
@@ -203,6 +199,53 @@ export const useManifestQuery = (manifestId: string | null, forceRefresh: boolea
   });
 };
 
+
+export const useModelGroupQuery = (groupId: string | null) => {
+  const queryClient = useQueryClient();   
+  return useQuery({
+  queryKey: ["manifestGroups", groupId],
+  queryFn: async () => {
+    if (!groupId)  {
+      // check if groups are even available
+      let groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
+      
+      if (!groups) {
+       await queryClient.invalidateQueries({ queryKey: ["manifestGroups"] });
+      }
+      return null;
+    }
+
+    const response = await getManifestGroup(groupId);
+    if (!response.success) {
+      throw new Error(
+        response.error || "Backend is unavailable (failed to load manifest).",
+      );
+    }
+    // update the manifest in the cache 
+    const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
+    const groupIndex = groups?.findIndex((g) => g.metadata?.id === groupId);
+    if (groupIndex !== undefined && groups) {
+      const updatedGroups = [...groups];
+      updatedGroups[groupIndex] = response.data as ManifestGroup;
+      queryClient.setQueryData(["manifestGroups"], updatedGroups);
+
+    }
+    return response.data ?? null;
+  },
+  initialData: () => {
+    const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
+    return groups?.find((g) => g.metadata?.id === groupId) ?? null;
+  },
+  placeholderData: () => {
+    const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
+    return groups?.find((g) => g.metadata?.id === groupId) ?? null;
+  },
+  retry: false,
+  refetchOnWindowFocus: false,
+  enabled: !!groupId,
+});
+};
+
 export const refreshManifest = async (
   manifestId: string | null,
   queryClient: QueryClient,
@@ -216,6 +259,33 @@ export const refreshManifest = async (
       response.error || "Backend is unavailable (failed to refresh manifest).",
     );
   }
+
+  const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
+      let groupToRefresh: ManifestGroup | null = null;
+      if (groups) {
+        for (const group of groups) {
+          const variants = group.variants ?? [];
+          for (const variant of variants) {
+            // Match by manifest_ref id, variant id, or resolved manifest id
+            if (variant.id === manifestId) {
+              groupToRefresh = group;
+              break;
+            }
+            if (variant.manifest?.metadata?.id === manifestId) {
+              groupToRefresh = group;
+              break;
+            }
+            if (variant.manifest?.id === manifestId) {
+              groupToRefresh = group;
+              break;
+            }
+          }
+        }
+      }
+
+    if (groupToRefresh) {
+      await queryClient.invalidateQueries({ queryKey: ["manifestGroups", groupToRefresh.metadata?.id] });
+    }
 
   const manifest = (response.data ?? null) as ManifestDocument | null;
   queryClient.setQueryData(["manifest", manifestId], manifest);
@@ -245,6 +315,34 @@ export const refreshManifestPart = async (manifestId: string | null, part:string
         throw new Error(response.error || "Backend is unavailable (failed to refresh manifest part).");
       }
       // update the manifest part in the cache
+      // if the manifest belongs to a group, also refresh the group
+      const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
+      let groupToRefresh: ManifestGroup | null = null;
+      if (groups) {
+        for (const group of groups) {
+          const variants = group.variants ?? [];
+          for (const variant of variants) {
+            // Match by manifest_ref id, variant id, or resolved manifest id
+            if (variant.id === manifestId) {
+              groupToRefresh = group;
+              break;
+            }
+            if (variant.manifest?.metadata?.id === manifestId) {
+              groupToRefresh = group;
+              break;
+            }
+            if (variant.manifest?.id === manifestId) {
+              groupToRefresh = group;
+              break;
+            }
+          }
+        }
+      }
+
+      if (groupToRefresh) {
+        await queryClient.invalidateQueries({ queryKey: ["manifestGroups", groupToRefresh.metadata?.id] });
+      }
+
       
       const manifest = queryClient.getQueryData<ManifestDocument>(["manifest", manifestId]);
       let updatedManifest: ManifestDocument | null = null;

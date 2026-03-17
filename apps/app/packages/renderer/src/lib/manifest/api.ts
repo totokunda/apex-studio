@@ -13,6 +13,7 @@ import {
   deleteManifestLora as deleteManifestLoraPreload,
   listManifestGroups as listManifestGroupsPreload,
   getManifestGroup as getManifestGroupPreload,
+  getSelectedItems as getSelectedItemsPreload,
 } from "@app/preload";
 import { ClipType } from "../types";
 import {
@@ -758,4 +759,19 @@ export const extractAllLoraDownloadingPaths = (lora: LoraType) => {
     allDownloadingPaths.add({type: "lora", path: source});
   }
   return Array.from(allDownloadingPaths);
+}
+
+export type SelectedItem = {
+  kind: string;
+  path: string;
+  variant: string;
+  precision: string;
+  type: string;
+  file_size: number;
+}
+
+export async function getSelectedItems(
+  manifestId: string,
+): Promise<ConfigResponse<SelectedItem[]>> {
+  return (await getSelectedItemsPreload(manifestId)) as ConfigResponse<SelectedItem[]>;
 }

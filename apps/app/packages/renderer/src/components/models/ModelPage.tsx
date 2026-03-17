@@ -10,7 +10,7 @@ import {
   isValidTimelineForClip,
 } from "@/lib/clip";
 import { v4 as uuidv4 } from "uuid";
-import { refreshManifest, useManifestQuery } from "@/lib/manifest/queries";
+import { refreshManifest, useManifestQuery, useModelGroupQuery } from "@/lib/manifest/queries";
 import ComponentCard, { LoraCard } from "./ComponentCard2";
 import { useQueryClient } from "@tanstack/react-query";
 import { getOffloadDefaultsForManifest } from "@app/preload";
@@ -137,13 +137,14 @@ const ModelPage: React.FC<ModelPageProps> = ({
   const { data: manifest, isFetching } = useManifestQuery(manifestId);
   const [isRefreshingManifest, setIsRefreshingManifest] = React.useState(false);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
+  const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
 
   // Find the parent group (if any) for the current manifest.
   // This enables variant tabs when the manifest belongs to a multi-variant group.
-  const parentGroup: ManifestGroup | null = useMemo(() => {
-    const groups = queryClient.getQueryData<ManifestGroup[]>(["manifestGroups"]);
-    if (!Array.isArray(groups) || groups.length === 0) return null;
+
+  const defaultParentGroup: ManifestGroup | null = useMemo(() => {
     
+    if (!Array.isArray(groups) || groups.length === 0) return null;
 
     for (const group of groups) {
       const variants = group.variants ?? [];
@@ -154,9 +155,12 @@ const ModelPage: React.FC<ModelPageProps> = ({
         if (variant.manifest?.id === manifestId) return group;
       }
     }
-    return null;
-  }, [manifestId, queryClient]);
 
+    return null;
+  }, [manifestId, groups]);
+  const {
+    data: parentGroup = defaultParentGroup,
+  } = useModelGroupQuery(defaultParentGroup?.metadata?.id ?? null);
 
   // Only show tabs when the group has more than one variant
   const groupVariants: ManifestGroupVariant[] = useMemo(() => {
@@ -222,10 +226,6 @@ const ModelPage: React.FC<ModelPageProps> = ({
     const url = await ensureExternalAssetUrl({ folder, filePath: seg });
     if (url) setResolvedDemoPath(url);
   };
-
-
-
-  
 
   useLayoutEffect(() => {
     if (!scrollCache || !scrollKey) return;
@@ -504,7 +504,6 @@ const ModelPage: React.FC<ModelPageProps> = ({
                           }
                         }}
                       >
-
                         <div className="flex w-full min-w-0 max-w-full items-start gap-2.5">
                           <VariantTabPreview
                             src={previewPath}
@@ -567,8 +566,6 @@ const ModelPage: React.FC<ModelPageProps> = ({
               </div>
             </div>
           )}
-          
-          
           <div className="mt-3 ">
             <div className="flex items-center justify-between">
               <h3 className="text-brand-light text-[13.5px] font-semibold text-start">
