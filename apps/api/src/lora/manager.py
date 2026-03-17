@@ -210,11 +210,13 @@ class LoraManager(DownloadMixin):
                             pass
                 except Exception:
                     pass
+                
                 item = LoraItem(
                     source=source,
                     local_paths=paths,
                     name=prefer_name or self._infer_name(source, local_path),
                 )
+                
                 self._cache[source] = item
                 return item
 
@@ -291,7 +293,7 @@ class LoraManager(DownloadMixin):
         )
         
         paths = self._collect_lora_files(local_path)
-        
+
         try:
             if (
                 not paths

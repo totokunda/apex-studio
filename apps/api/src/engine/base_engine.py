@@ -2591,6 +2591,111 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             elif dtype.lower() == "bfloat16" or dtype.lower() == "bf16":
                 return torch.bfloat16
         return torch.dtype(dtype)
+    
+    
+
+    def get_selected_items(self): 
+        
+        selected_items = []
+        model_download_profile = get_effective_model_download_profile()
+        hardware_profile = detect_hardware_memory_profile()
+        components_cfg = self.config.get("components", [])
+        
+        manifest_metadata = (
+            self.config.get("metadata")
+            if isinstance(self.config.get("metadata"), dict)
+            else {}
+        )
+        
+        for pseudo in components_cfg:
+            if not isinstance(pseudo, dict):
+                continue
+            if pseudo.get("type") != "extra_model_path":
+                continue
+            
+            raw_model_paths = pseudo.get("model_paths", pseudo.get("model_path"))
+            selected_label = pseudo.get("name") or pseudo.get("label")
+            selected_spec = None
+            target_ref = pseudo.get("component")
+            
+            if selected_label:
+                selected_spec = self.selected_components.get(selected_label)
+            if selected_spec is None and isinstance(target_ref, str):
+                selected_spec = self.selected_components.get(target_ref)
+
+            candidate_paths: list[Any]
+            if isinstance(raw_model_paths, list):
+                candidate_paths = raw_model_paths
+            elif raw_model_paths is None:
+                candidate_paths = []
+            else:
+                candidate_paths = [raw_model_paths]
+
+            selected_item = select_model_path_item(
+                candidate_paths,
+                selected_model_spec=selected_spec,
+                component_type="extra_model_path",
+                manifest_metadata=manifest_metadata,
+                model_download_profile=model_download_profile,
+                hardware_profile=hardware_profile,
+            )
+            
+            selected_items.append(selected_item)
+        
+        for component in components_cfg:
+            if not isinstance(component, dict):
+                continue
+            if component.get("type") == "extra_model_path":
+                # Pseudo component: already handled in pre-pass.
+                continue
+            
+            component_name = component.get("name")
+            component_type = component.get("type")
+            model_path = component.get("model_path")
+            if isinstance(model_path, list):
+                selected_model_spec = self.selected_components.get(
+                    component_name,
+                    self.selected_components.get(component_type, None),
+                )
+                
+                selected_model_item = select_model_path_item(
+                    model_path,
+                    selected_model_spec=selected_model_spec,
+                    component_type=str(component_type or ""),
+                    manifest_metadata=manifest_metadata,
+                    model_download_profile=model_download_profile,
+                    hardware_profile=hardware_profile,
+                )
+                
+                selected_items.append({
+                    "kind": "model",
+                    "path": selected_model_item.get("path"),
+                    "variant": selected_model_item.get("variant"),
+                    "precision": selected_model_item.get("precision"),
+                    "type": selected_model_item.get("type"),
+                    "file_size": selected_model_item.get("file_size"),
+                })
+        
+        # check loras too 
+        loras_cfg = self.config.get("loras", None)
+        
+        if loras_cfg:
+            for lora in loras_cfg:
+                if isinstance(lora, dict):
+                    source = lora.get("source")
+                    file_size = lora.get("file_size")
+                
+                    if source and file_size:
+                        selected_items.append({
+                            "kind": "lora",
+                            "path": source,
+                            "variant": "default",
+                            "precision": "fp16",
+                            "type": "safetensors",
+                            "file_size": file_size,
+                        })
+        
+        return selected_items
 
     def download(
         self,
@@ -2632,6 +2737,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         components_cfg = self.config.get("components", [])
         if not isinstance(components_cfg, list):
             return
+    
         model_download_profile = get_effective_model_download_profile()
         hardware_profile = detect_hardware_memory_profile()
         manifest_metadata = (
@@ -2656,6 +2762,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         # - Attach the *downloaded local path* to the referenced component's
         #   `extra_model_paths` list.
         # -------------------------------------------------------------
+        
         for pseudo in components_cfg:
             if not isinstance(pseudo, dict):
                 continue
@@ -2670,6 +2777,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
             selected_source: str | None = None
             selected_label = pseudo.get("name") or pseudo.get("label")
             selected_spec = None
+            
             if selected_label:
                 selected_spec = self.selected_components.get(selected_label)
             if selected_spec is None and isinstance(target_ref, str):
@@ -2702,6 +2810,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
 
             # Download or resolve local path.
             local_path = self.is_downloaded(selected_source, components_path)
+            
             if local_path is None:
                 local_path = self._download(
                     selected_source,
@@ -2933,6 +3042,7 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                         component_name,
                         self.selected_components.get(component_type, None),
                     )
+                    
                     selected_model_item = select_model_path_item(
                         model_path,
                         selected_model_spec=selected_model_spec,

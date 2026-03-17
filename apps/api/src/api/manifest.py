@@ -4,7 +4,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 
 import anyio
 import yaml
@@ -67,7 +67,6 @@ def resolve_manifest_path_for_write(relative_path: str) -> Path:
 # Cache the system's compute capability (it doesn't change during runtime)
 _SYSTEM_COMPUTE_CAPABILITY: Optional[ComputeCapability] = None
 
-
 async def _run_blocking(func, *args, **kwargs):
     """
     Run blocking (sync) work in a worker thread so async request handlers don't
@@ -92,6 +91,15 @@ class ModelTypeInfo(BaseModel):
 
 class ModelCategoryInfo(ModelTypeInfo):
     pass
+
+
+class SelectedItems(BaseModel):
+    kind: Literal["model", "lora"]
+    path: str | None = None
+    variant: str | None = None
+    precision: str | None = None
+    type: str | None = None
+    file_size: int | None = None
 
 
 def _normalize_subengine_relative_path(yaml_path: str) -> Optional[str]:
@@ -1378,18 +1386,26 @@ async def get_manifest_part(manifest_id: str, path: Optional[str] = None):
     return value
 
 
+@router.get("/{manifest_id}/selected-items")
+async def get_selected_items(manifest_id: str) -> List[SelectedItems]:
+    index = get_manifest_db().get_manifest_path_index()
+    relative_path = index.get(manifest_id)
+    if not relative_path:
+        raise HTTPException(status_code=404, detail="Manifest not found")
+    yaml_path = resolve_manifest_path_for_read(relative_path)
+    engine = UniversalEngine(yaml_path=yaml_path, should_download=False)
+    return engine.get_selected_items()
+
 class CustomModelPathRequest(BaseModel):
     manifest_id: str
     component_index: int
     path: str
     name: Optional[str] = None
 
-
 class DeleteCustomModelPathRequest(BaseModel):
     manifest_id: str
     component_index: int
     path: str
-
 
 class UpdateLoraScaleRequest(BaseModel):
     """
@@ -1599,7 +1615,6 @@ def _update_lora_name_sync(req: UpdateLoraNameRequest) -> Dict[str, Any]:
         "name": name,
     }
 
-
 class DeleteLoraRequest(BaseModel):
     """
     Request body for deleting a LoRA entry from a manifest YAML.
@@ -1611,12 +1626,14 @@ class DeleteLoraRequest(BaseModel):
 
     manifest_id: str
     lora_index: int
+    remove_from_yaml: bool = True
+
+
 
 
 @router.delete("/lora")
 async def delete_lora(req: DeleteLoraRequest) -> Dict[str, Any]:
     return await _run_blocking(_delete_lora_sync, req)
-
 
 def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
     """
@@ -1627,12 +1644,15 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
       - Attempts to delete any associated local LoRA file/folder if the entry has a
         concrete `source` path inside the lora directory.
     """
+    
+    
     if not req.manifest_id:
         raise HTTPException(status_code=400, detail="manifest_id is required")
     if req.lora_index < 0:
         raise HTTPException(status_code=400, detail="lora_index must be non-negative")
 
     manifest = get_manifest(req.manifest_id)
+
     if not manifest:
         raise HTTPException(
             status_code=404, detail=f"Manifest not found: {req.manifest_id}"
@@ -1644,7 +1664,9 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
             status_code=500,
             detail="Manifest missing full_path metadata; cannot locate YAML.",
         )
+    
     yaml_path = resolve_manifest_path_for_write(relative_path)
+    
     if not yaml_path.exists():
         raise HTTPException(
             status_code=500,
@@ -1652,6 +1674,7 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
         )
 
     doc = load_yaml_content(yaml_path)
+    
     if not isinstance(doc, dict):
         raise HTTPException(
             status_code=500,
@@ -1660,6 +1683,7 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
 
     spec = doc.get("spec") or {}
     loras = spec.get("loras") or []
+    
     if not isinstance(loras, list) or req.lora_index >= len(loras):
         raise HTTPException(
             status_code=400,
@@ -1687,7 +1711,9 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
                 local_path = resolved
 
     # Remove entry from list and write back to YAML
-    del loras[req.lora_index]
+    if req.remove_from_yaml:
+        del loras[req.lora_index]
+    
     doc.setdefault("spec", {})["loras"] = loras
 
     try:
@@ -1701,6 +1727,7 @@ def _delete_lora_sync(req: DeleteLoraRequest) -> Dict[str, Any]:
 
     # Best-effort local file/folder removal if path is under the LoRA base directory
     removed_local = False
+    
     if isinstance(local_path, str) and local_path:
         try:
             base = Path(get_lora_path()).resolve()

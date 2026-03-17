@@ -615,6 +615,7 @@ def delete_downloaded_path(request: DeleteRequest):
     Safety checks ensure deletion is within known download roots unless explicitly scoped by item_type.
     Also clears request-key -> last job_id mappings for the corresponding request and unmarks preprocessor downloads.
     """
+    
     try:
         # Determine allowed base(s)
         allowed_bases: List[Path] = []
@@ -658,6 +659,7 @@ def delete_downloaded_path(request: DeleteRequest):
         # cache revisions from inode/symlink relationships.
         hf_delete_strategy = None
         hf_revision_count = 0
+        
         try:
             hf_delete_strategy, hf_revision_count = _collect_hf_cache_strategy_for_delete(
                 request.source, target_resolved

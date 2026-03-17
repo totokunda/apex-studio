@@ -4,7 +4,7 @@ import os
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-from typing import Dict, Type, Any, Optional, List, Literal, Tuple
+from typing import Dict, Type, Any, Optional, List
 from pathlib import Path
 import importlib
 import inspect
@@ -14,9 +14,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.engine.base_engine import BaseEngine
+    base_class = BaseEngine
+else:
+    base_class = object
+    
 from src.manifest.resolver import resolve_manifest_reference
 from loguru import logger
 import traceback
+
 
 
 class EngineRegistry:
@@ -181,7 +186,7 @@ class EngineRegistry:
         )
 
 
-class UniversalEngine:
+class UniversalEngine(base_class):
     """Universal engine interface that can run any registered engine"""
 
     def __init__(

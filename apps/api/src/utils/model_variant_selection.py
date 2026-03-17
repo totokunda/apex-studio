@@ -393,6 +393,7 @@ def select_model_path_item(
     profile = normalize_model_download_profile(
         model_download_profile or get_effective_model_download_profile(),
     )
+    
     hardware = hardware_profile or detect_hardware_memory_profile()
 
     candidates = []

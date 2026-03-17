@@ -557,6 +557,9 @@ class DownloadMixin:
             downloaded_path = self._download_from_huggingface(
                 model_path, save_path, progress_callback
             )
+            if downloaded_path:
+                self.downloaded_paths.append(downloaded_path)
+            return downloaded_path
         elif self._is_url(model_path):
             downloaded_path = self._download_from_url(model_path, save_path, progress_callback)
             if downloaded_path:

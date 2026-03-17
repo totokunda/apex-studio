@@ -1,17 +1,27 @@
-from src.api.manifest import _load_and_enrich_manifest
+import watchdog.events
+import watchdog.observers
 import time
-import glob 
 
-paths = list(glob.glob("manifest/**/*.yml", recursive=True))   
-print(f"Found {len(paths)} paths")
+class FileEventHandler(watchdog.events.PatternMatchingEventHandler):
+    def on_created(self, event):
+        print(f"File created: {event.src_path}")
 
-total_time = time.time()
+    def on_deleted(self, event):
+        print(f"File deleted: {event.src_path}")
 
-for path in paths:
-    t = time.time()
-    content = _load_and_enrich_manifest(path.replace("manifest/", ""))
-    end = time.time()
-    print(f"Loaded and enriched manifest in {end - t} seconds")
+    def on_modified(self, event):
+        print(f"File modified: {event.src_path}")
 
-total_time = time.time() - total_time
-print(f"Total time: {total_time} seconds")
+    def on_moved(self, event):
+        print(f"File moved: {event.src_path}")
+
+if __name__ == "__main__":
+    observer = watchdog.observers.Observer()
+    observer.schedule(FileEventHandler(), path=".local_manifest", recursive=True)
+    observer.start()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
