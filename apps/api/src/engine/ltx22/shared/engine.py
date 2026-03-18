@@ -89,7 +89,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
             return duration
         elif isinstance(duration, str):
             if duration.endswith("s"):
-                return int(duration[:-1]) * fps
+                return round(float(duration[:-1]) * fps)
             elif duration.endswith("f"):
                 return int(duration[:-1])
             else:
