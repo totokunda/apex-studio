@@ -240,3 +240,4 @@ taehv/**
 apps/app/packages/renderer/src/lib/media/audio-decoder.worker.cjs
 apps/app/packages/renderer/src/lib/media/video-decoder.worker.cjs
 .manifest.db
+Procfile.dev
