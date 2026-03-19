@@ -99,6 +99,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
   clipTransform,
   canvasRef,
   imageRef,
+  imageSource,
   overlap,
   inputMode = false,
   isInFrame = true,
@@ -554,7 +555,7 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
           ref={imageRef}
           cornerRadius={safeCornerRadius}
           opacity={isInFrame ? (clipTransform?.opacity ?? 100) / 100 : 1}
-          image={canvasRef.current || undefined}
+          image={imageSource || canvasRef.current || undefined}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}
           width={nodeWidth}

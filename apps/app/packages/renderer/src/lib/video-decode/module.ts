@@ -57,20 +57,6 @@ interface UpdateRendererParams {
     useMask: boolean;
 }
 
-interface PreloadParams {
-    id: string;
-    startTimestamp: number;
-    endTimestamp: number;
-    secondsToPrefetch: number;
-    targetFps: number;
-    speed: number;
-    playbackState?: {
-        startWallTime: number;
-        startFocusFrame: number;
-        isPlaying: boolean;
-        mainNow: number;
-    };
-}
 
 class VideoDecoderModule {
     private worker: Worker;
@@ -172,22 +158,6 @@ class VideoDecoderModule {
             }
         });
 
-    }
-
-    preload(params: PreloadParams) {
-        const { id, startTimestamp, endTimestamp, secondsToPrefetch, targetFps, speed, playbackState } = params;
-        this.worker.postMessage({
-            type: "preload",
-            data: {
-                id, 
-                startTimestamp, 
-                endTimestamp,
-                secondsToPrefetch,
-                targetFps,
-                speed,
-                playbackState
-            }
-        });
     }
 
     pause(params: PauseParams) {

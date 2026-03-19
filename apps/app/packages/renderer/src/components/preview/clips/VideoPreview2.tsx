@@ -103,6 +103,7 @@ const VideoPreview: React.FC<
   assetId,
   clipId,
   startFrame = 0,
+  framesToPrefetch = 4,
   rectWidth,
   rectHeight,
   trimStart,
@@ -501,9 +502,15 @@ const VideoPreview: React.FC<
   const fpsFromControls = useControlsStore((s) => s.fps);
   const fpsFromInputs = useInputControlsStore((s) => s.getFps(inputId ?? ""));
   const fps = useInputScopedControls ? fpsFromInputs : fpsFromControls;
+  const prewarmLeadFrames = useMemo(() => {
+    const value = Number(framesToPrefetch ?? 0);
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.floor(value));
+  }, [framesToPrefetch]);
   const tool = useViewportStore((s) => s.tool);
 
   const currentSignatureRef = useRef<string | null>(null);
+  const prewarmedSeekKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     currentSignatureRef.current = createUpdateSignature(maskFrameForCurrentFocus, clip, focusFrame, applicators.map((applicator) => applicator.getClip()), tool !== "mask");
@@ -709,7 +716,9 @@ const VideoPreview: React.FC<
          onUpdateComplete: onUpdateComplete,
          onInitComplete: onInitComplete,
          onFrame() {
-           imageRef.current?.getLayer()?.batchDraw?.();
+          requestAnimationFrame(() => {
+            imageRef.current?.getLayer()?.batchDraw?.();
+          });
          },
         })
     }
@@ -743,7 +752,61 @@ const VideoPreview: React.FC<
         id: decoderId,
       });
     }
-  }, [isPlaying, isInFrame]);
+  }, [decoderId, fps, isInFrame, isPlaying, speed, videoDecoder]);
+
+  useEffect(() => {
+    if (!initCompleteRef.current) return;
+
+    if (!isPlaying) {
+      prewarmedSeekKeyRef.current = null;
+      return;
+    }
+
+    // Prewarm slightly before clip entry so the first visible frame is ready.
+    const framesUntilStart = startFrameUsed - focusFrame;
+    if (!Number.isFinite(framesUntilStart) || framesUntilStart <= 0) {
+      prewarmedSeekKeyRef.current = null;
+      return;
+    }
+
+    const clipEnd =
+      typeof endFrameUsed === "number" && Number.isFinite(endFrameUsed)
+        ? endFrameUsed
+        : Infinity;
+    if (focusFrame >= clipEnd) {
+      prewarmedSeekKeyRef.current = null;
+      return;
+    }
+
+    if (framesUntilStart > prewarmLeadFrames) {
+      prewarmedSeekKeyRef.current = null;
+      return;
+    }
+
+    const targetFrameInfo = getTargetFrameInfoRef.current();
+    if (!targetFrameInfo) return;
+
+    const seekKey = `${decoderId}:${Math.floor(targetFrameInfo.targetFrame)}`;
+    if (prewarmedSeekKeyRef.current === seekKey) return;
+
+    videoDecoder.seek({
+      id: decoderId,
+      timestamp: targetFrameInfo.timestamp,
+      speed: speed,
+      targetFps: fps,
+    });
+    prewarmedSeekKeyRef.current = seekKey;
+  }, [
+    decoderId,
+    endFrameUsed,
+    focusFrame,
+    fps,
+    isPlaying,
+    prewarmLeadFrames,
+    speed,
+    startFrameUsed,
+    videoDecoder,
+  ]);
 
 
   // Update refs when values change

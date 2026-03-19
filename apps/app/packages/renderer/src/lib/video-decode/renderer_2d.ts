@@ -83,6 +83,8 @@ class Canvas2DRenderer extends Renderer {
   drawFrame(frame: VideoFrame): void {
     this.#canvas.width = this.#width;
     this.#canvas.height = this.#height;
+
+ 
     this.#ctx!.drawImage(frame, 0, 0, this.#canvas.width, this.#canvas.height);
 
     let workingCanvas: OffscreenCanvas | null = null;

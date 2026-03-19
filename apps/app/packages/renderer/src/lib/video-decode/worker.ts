@@ -4,6 +4,7 @@ import { Canvas2DRenderer } from './renderer_2d';
 import { fileURLToPathInWorker, createNodeFileSource, readFileBuffer } from './utils';
 import { FilterClipProps, VideoClipProps } from '../types';
 import { WebGLHaldClut } from '@/components/preview/webgl-filters/hald-clut';
+import { MergeAlphaState, createMergeAlphaState, mergeAlphaIntoColor } from './merge-alpha';
 
 const { existsSync } = require('fs');
 
@@ -102,6 +103,7 @@ interface VideoState {
     keyframePackets: EncodedPacket[];  // Sorted by timestamp, for O(log k) seek
     videoConfig: VideoDecoderConfig;
     packetStats: PacketStats;
+    hasAlpha: boolean;
 }
 
 type RenderState = {
@@ -127,10 +129,13 @@ const canvasStates = new Map<string, OffscreenCanvas>();
 const encodedPacketSinkStates = new Map<string, EncodedPacketSink>();
 const renderStates = new Map<string, RenderState>();
 const decoderStates = new Map<string, VideoDecoder>();
+const alphaDecoderStates = new Map<string, VideoDecoder>();
 const lastPacketStates = new Map<string, EncodedPacket>();
 const renderers = new Map<string, WebGLRenderer | Canvas2DRenderer>();
 const decoderInUseStates = new Map<string, boolean>();
-const requestDecoderStates = new Map<string, boolean>();
+const alphaAssetStates = new Map<string, MergeAlphaState>();
+const alphaFramesByTimestamp = new Map<string, Map<number, VideoFrame>>();
+const pendingColorFramesByTimestamp = new Map<string, Map<number, VideoFrame>>();
 
 const seekQueueStates:Map<string, SeekPayload | null> = new Map();
 const seekInProgressStates:Map<string, boolean> = new Map();
@@ -148,6 +153,26 @@ const resolveSource = (path: string): Source => {
         return createNodeFileSource(filePath);
     }
 }
+
+const getOrCreateMergeAlphaState = (id: string): MergeAlphaState => {
+    let state = alphaAssetStates.get(id);
+    if (!state) {
+        state = createMergeAlphaState();
+        alphaAssetStates.set(id, state);
+    }
+    return state;
+}
+
+const drawToRenderer = (id: string, frame: VideoFrame, renderState: RenderState) => {
+    const renderer = renderers.get(id);
+    if (!renderer) { frame.close(); return; }
+    try {
+      renderer.draw(frame, renderState);
+    } catch (e) {
+      frame.close();
+      throw e;
+    }
+  };
 
 const handleMessage = (event: MessageEvent<Payload>): void => {
     const payload = event.data;
@@ -169,9 +194,6 @@ const handleMessage = (event: MessageEvent<Payload>): void => {
             break;
         case "update":
             updateRenderer(payload);
-            break;
-        case "preload":
-            preload(payload);
             break;
     }
 }
@@ -245,6 +267,8 @@ const init = async (payload: InitPayload): Promise<void> => {
         });
 
         let packets: EncodedPacket[];
+        let hasAlpha = false;
+
         if (existing && existing.length > 0) {
             // Reuse cached timestamps - skip expensive sink iteration
             packets = existing;
@@ -260,6 +284,9 @@ const init = async (payload: InitPayload): Promise<void> => {
                 packet.byteLength, 
                 packet.sideData);
                 newPackets.push(emptyPacket);
+                if (packet.sideData?.alpha) {
+                    hasAlpha = true;
+                }
             }
 
             packets = newPackets;
@@ -286,42 +313,105 @@ const init = async (payload: InitPayload): Promise<void> => {
             packets: packets,
             keyframePackets,
             videoConfig: videoConfig,
-            packetStats: packetStats
+            packetStats: packetStats,
+            hasAlpha: hasAlpha
         });
 
+        if (hasAlpha) {
+            pendingColorFramesByTimestamp.set(id, new Map());
+            alphaFramesByTimestamp.set(id, new Map());
+        }
 
-        const onFrame = async (frame: VideoFrame) => {
+        const onColorFrame = async (frame: VideoFrame) => {
            
-            if (!renderer) {
-                frame.close();
-                return;
-            }
-    
             let renderState = renderStates.get(id);
+            let videoState = videoStates.get(id);
                 
-            if (!renderState) {
+            if (!renderState || !videoState || !renderer) {
                 frame.close();
-                console.error("Render state not found");
+                console.error("Render state not found or video state not found");
                 return;
-            }
-    
-            try {
-                renderer.draw(frame, renderState);
-            } catch (e) {
-                // draw threw - frame was never enqueued (iterate) or closed (seek)
-                frame.close();
-                throw e;
             }
 
+            if (!videoState.hasAlpha) {
+                return drawToRenderer(id, frame, renderState);
+            }
+
+            const ts = frame.timestamp;
+            const alphaFrames = alphaFramesByTimestamp.get(id);
+            const alpha = alphaFrames?.get(ts);
+            
+            if (alpha) {
+                alphaFrames?.delete(ts);
+                const alphaAssetState = getOrCreateMergeAlphaState(id);
+                let merged: VideoFrame | undefined;
+                try {
+                    merged = mergeAlphaIntoColor(alphaAssetState, frame, alpha);
+                } catch (e) {
+                    // we fallback to the original frame if the merge fails
+                    merged = frame;
+                } finally {
+                    if (merged !== frame) frame.close();
+                    alpha.close();
+                }
+                return drawToRenderer(id, merged, renderState);
+            }
+            pendingColorFramesByTimestamp.get(id)?.set(ts, frame);
+  
+        }
+
+        const onAlphaFrame = async (alphaFrame: VideoFrame) => {
+            let videoState = videoStates.get(id);
+            const renderState = renderStates.get(id);
+
+            if (!videoState || !renderState) {
+                alphaFrame.close();
+                console.error("Video state not found");
+                return;
+            }
+
+           const ts = alphaFrame.timestamp;
+           const pendingColorFrames = pendingColorFramesByTimestamp.get(id);
+           const pendingFrame = pendingColorFrames?.get(ts);
+           if (pendingFrame) {
+             const mergeState = getOrCreateMergeAlphaState(id);
+             let merged: VideoFrame | undefined;
+             try {
+                merged = mergeAlphaIntoColor(mergeState, pendingFrame, alphaFrame);
+             } catch (e) {
+                merged = pendingFrame;
+             } finally {
+                if (merged !== pendingFrame) pendingFrame.close();
+                alphaFrame.close();
+             }
+             return drawToRenderer(id, merged, renderState);
+          } 
+
+          const alphaFrames = alphaFramesByTimestamp.get(id);
+          if (alphaFrames) {
+            if (alphaFrames.size >= 60) {
+            const firstKey = alphaFrames?.keys().next().value;
+              if (firstKey !== undefined) {
+                alphaFrames?.get(firstKey)?.close();
+                alphaFrames?.delete(firstKey);
+              }
+            }
+            alphaFrames.set(ts, alphaFrame);
+          }
         }
 
         const onError = (error: Error) => {
             console.log(error);
         }
 
-        const decoder = createDecoderState(videoStates.get(id)!, onFrame, onError);
+        const [decoder, alphaDecoder] = createDecoderState(videoStates.get(id)!, onColorFrame, onAlphaFrame, onError);
         decoderStates.set(id, decoder);
 
+        if (alphaDecoder) {
+            alphaDecoderStates.set(id, alphaDecoder);
+        }
+
+         
         self.postMessage({ type: "init_complete", data: { id, duration } });
     };
 }
@@ -341,7 +431,8 @@ const binarySearch = (packets: EncodedPacket[], timestamp: number): number => {
     return best;
 }
 
-const createDecoderState = (videoState: VideoState, onFrame: (frame: VideoFrame) => void, onError: (error: Error) => void): VideoDecoder => {
+const createDecoderState = (videoState: VideoState, onFrame: (frame: VideoFrame) => void, onAlphaFrame: (frame: VideoFrame) => void, onError: (error: Error) => void): [VideoDecoder, VideoDecoder | undefined] => {
+    let alphaDecoder: VideoDecoder | undefined;
     const decoder = new VideoDecoder({
         output: (frame) => {
             onFrame(frame);
@@ -351,8 +442,22 @@ const createDecoderState = (videoState: VideoState, onFrame: (frame: VideoFrame)
         }
     });
 
+    if (videoState.hasAlpha) {
+        alphaDecoder = new VideoDecoder({
+            output: (frame) => {
+                onAlphaFrame(frame);
+            },
+            error: (error) => { 
+                onError(error);
+            }
+        });
+        const cfgAny = { ...(videoState.videoConfig as any) };
+        delete cfgAny.alpha;
+        alphaDecoder.configure(cfgAny);
+    }
+
     decoder.configure(videoState.videoConfig);
-    return decoder;
+    return [decoder, alphaDecoder];
 }
 
 const processSeekQueue = async (payload: SeekPayload): Promise<void> => {
@@ -386,12 +491,10 @@ const seek = async (payload: SeekPayload): Promise<void> => {
     const videoState = videoStates.get(id);
     const renderer = renderers.get(id);
 
-
     const sourceFps = videoState?.packetStats.averagePacketRate ?? 30;
     renderer?.setup({ speed, sourceFps, targetFps, startTimestamp: timestamp });
 
     renderer?.stop?.();
-
 
     // clear previous render states
     renderStates.delete(id);
@@ -445,80 +548,59 @@ const seek = async (payload: SeekPayload): Promise<void> => {
         renderState.timestamp = targetPacket?.timestamp ?? timestamp;
     }
 
-
-    for await (const packet of sink.packets(keypacket, endPacket)) {
-        decoder.decode(packet.toEncodedVideoChunk());
-        lastPacketStates.set(id, packet);
-        if (renderState.stopDecode === true) {
-            break;
-        }
-    }
-    
-    await decoder.flush();
-
-}
-
-const preload = async (payload: PreloadPayload): Promise<void> => {
-    let { id, startTimestamp, endTimestamp:realEndTimestamp, secondsToPrefetch, targetFps, speed, playbackState } = payload.data;
-    const videoState = videoStates.get(id);
-    const sink = videoState?.sink;
-    const keyframes = videoState?.keyframePackets;
-    const decoder = decoderStates.get(id);
-    const sourceFps = videoState?.packetStats.averagePacketRate ?? 30;
-    renderStates.delete(id);
-    const renderer = renderers.get(id);
-
-    renderer?.stop?.();
-    renderer?.setup({ speed, sourceFps, targetFps, startTimestamp, playbackState, accumlateOnly: true });
-    const endTimestamp = startTimestamp + secondsToPrefetch;
-
-    if (!sink || !keyframes || !decoder) {
-        console.error("Sink, keyframes, or decoder not found");
-        return;
-    }
-
-    let renderState = {
-        id,
-        type: "iterate",
-        startTimestamp,
-        endTimestamp: realEndTimestamp ?? endTimestamp,
-        stopDecode: false,
-        stopRender: false,
-        preload: true
-    } as RenderState;
-
-    renderStates.set(id, renderState);
-
-    const startKeyframeIndex = binarySearch(keyframes, startTimestamp);
-    const startKeyFrame = keyframes[startKeyframeIndex];
-    let startKeyFramePacket = await sink.getPacket(startKeyFrame.timestamp) ?? undefined;
-
-    const metadataOnly = { metadataOnly: true };
-    const targetPacket = await sink.getPacket(endTimestamp, metadataOnly);
-    const endPacket = targetPacket ? await sink.getNextPacket(targetPacket, metadataOnly) ?? undefined : undefined;
-    const iterator = sink.packets(startKeyFramePacket, endPacket);
-
-   
-    // prefetch the packets
-    if (decoderInUseStates.get(id) === true || requestDecoderStates.get(id) === true) {  // if decoder is in use, don't prefetch
+    if (decoderInUseStates.get(id) === true) {
+        console.warn("Decoder already in use, skipping seek");
         return;
     }
 
     decoderInUseStates.set(id, true);
 
-    for await (const packet of iterator) {
-        if (requestDecoderStates.get(id) === true) {  // if decoder is in use, don't prefetch
-            break;
+    try {
+        for await (const packet of sink.packets(keypacket, endPacket)) {
+            decoder.decode(packet.toEncodedVideoChunk());
+        
+            if (packet.sideData?.alpha) {
+                const alphaDecoder = alphaDecoderStates.get(id);
+                if (alphaDecoder && alphaDecoder.state !== "closed") {
+                    try {
+                        alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
+                    } catch {
+                        // ignore alpha decode errors; color still decodes
+                    }
+                }
+            }
+    
+            lastPacketStates.set(id, packet);
+            if (renderState.stopDecode === true) {
+                break;
+            }
         }
-        // we can yield on every packet since we don't really care about speed here, we just want to prefetch the packets
-        await new Promise(r => requestAnimationFrame(r));
-        decoder.decode(packet.toEncodedVideoChunk());
+        
+        // flush decoders
+        await decoder.flush();
+        const alphaDecoder = alphaDecoderStates.get(id);
+        if (alphaDecoder && alphaDecoder.state !== "closed") {
+            try {
+                await alphaDecoder.flush();
+            } catch {
+                // ignore
+            }
+        }
+    } catch (e) {
+        // reset and configure decoders
+        decoder.reset();
+        decoder.configure(videoState.videoConfig);
+        const alphaDecoder = alphaDecoderStates.get(id);
+        if (alphaDecoder) {
+            alphaDecoder.reset();
+            alphaDecoder.configure(videoState.videoConfig);
+        }
     }
-
-    await decoder.flush();
-    decoderInUseStates.set(id, false);
-
+    finally {
+        decoderInUseStates.set(id, false);
+    }
 }
+
 
 const iterate = async (payload: IteratePayload): Promise<void> => {
     const { id, startTimestamp, endTimestamp, speed, targetFps, playbackState } = payload.data;
@@ -579,33 +661,62 @@ const iterate = async (payload: IteratePayload): Promise<void> => {
     const fps = Math.floor(Math.round(sourceFps) / 2);
     const iterator = sink.packets(startKeyFramePacket, endPacket);
 
-    requestDecoderStates.set(id, true);
-
     while (decoderInUseStates.get(id) === true) {
         await new Promise(r => requestAnimationFrame(r));
     }
 
-    requestDecoderStates.set(id, false);
     decoderInUseStates.set(id, true);
+
+    try {
+        for await (const packet of iterator) {
+            decoder.decode(packet.toEncodedVideoChunk());
     
-    for await (const packet of iterator) {
-        decoder.decode(packet.toEncodedVideoChunk());
-
-        if (renderState.stopDecode === true) {
-            decoder.reset();
-            decoder.configure(videoState.videoConfig);
-            break;
+            if (packet.sideData?.alpha) {
+                const alphaDecoder = alphaDecoderStates.get(id);
+                if (alphaDecoder && alphaDecoder.state !== "closed") {
+                    try {
+                        alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
+                    } catch {
+                        // ignore alpha decode errors; color still decodes
+                    }
+                }
+            }
+    
+            if (renderState.stopDecode === true) {
+                decoder.reset();
+                decoder.configure(videoState.videoConfig);
+                break;
+            }
+    
+            if (packetCount % fps === 0) {
+                await new Promise(r => requestAnimationFrame(r));
+            }
+    
+            packetCount++;
         }
-
-        if (packetCount % fps === 0) {
-            await new Promise(r => requestAnimationFrame(r));
+    
+        // flush decoders
+        await decoder.flush();
+        const alphaDecoder = alphaDecoderStates.get(id);
+        if (alphaDecoder && alphaDecoder.state !== "closed") {
+            try {
+                await alphaDecoder.flush();
+            } catch {
+                // ignore
+            }
         }
-
-        packetCount++;
+    }  catch (e) {
+        // reset and configure decoders
+        decoder.reset();
+        decoder.configure(videoState.videoConfig);
+        const alphaDecoder = alphaDecoderStates.get(id);
+        if (alphaDecoder) {
+            alphaDecoder.reset();
+            alphaDecoder.configure(videoState.videoConfig);
+        }
+    } finally {
+        decoderInUseStates.set(id, false);
     }
-
-    await decoder.flush();
-    decoderInUseStates.set(id, false);
 }
 
 const pause = async (payload: PausePayload): Promise<void> => {

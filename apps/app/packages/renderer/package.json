@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/build-video-decoder-worker.mjs",
+    "predev": "node scripts/build-video.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/build-video-decoder-worker.mjs",
-    "build:video": "npx esbuild src/lib/video-decode/renderer_2d.ts src/lib/video-decode/renderer.ts src/lib/video-decode/renderer_webgl.ts --outdir=src/lib/video-decode --format=esm && npx esbuild src/lib/video-decode/worker.ts --bundle --outfile=src/lib/video-decode/dist/worker.js --format=esm --platform=node --loader:.glsl=text --main-fields=browser,module,main && npx esbuild src/lib/video-decode/module.ts --bundle --outfile=src/lib/video-decode/dist/module.js --format=esm",
+    "prebuild": "node scripts/build-video.mjs",
+    "build:video": "node scripts/build-video.mjs",
     "build": "npm run build:video && tsc && NODE_OPTIONS='--max-old-space-size=8192' vite build",
     "preview": "vite preview"
   },
