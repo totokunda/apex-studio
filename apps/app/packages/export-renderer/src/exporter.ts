@@ -338,6 +338,28 @@ const getAudioSrc = async (src:string): Promise<URL | null> => {
   return mediaInfo.audio?.input?.source?._url as URL;
 }
 
+const closeVideoIterator = async (
+  iterator: AsyncIterator<WrappedCanvas | null> | null | undefined,
+) => {
+  if (!iterator?.return) return;
+  try {
+    await iterator.return();
+  } catch {}
+};
+
+const closeAllVideoIterators = async <
+  T extends { iter: AsyncIterator<WrappedCanvas | null> },
+>(
+  iterMap: Map<string, T>,
+) => {
+  const pending: Promise<void>[] = [];
+  for (const value of iterMap.values()) {
+    pending.push(closeVideoIterator(value.iter));
+  }
+  iterMap.clear();
+  await Promise.allSettled(pending);
+};
+
 /**
  * Extracts any `startFrame` / `endFrame` window encoded on a media URL.
  * These are used by the editor when splitting clips (see `clip.ts:1513-1535`)
@@ -830,6 +852,10 @@ export async function exportSequence(
         );
 
         if (!reusable) {
+          if (ctxIter) {
+            await closeVideoIterator(ctxIter.iter);
+            videoIters.delete(c.clipId);
+          }
           const asyncIterable = await getVideoFrameIterator(selectedSrc, {
             projectFps: Math.max(1, fps),
             startIndex: currentSourceIndex,
@@ -1133,6 +1159,9 @@ export async function exportSequence(
     }
     return result;
   } finally {
+    try {
+      await closeAllVideoIterators(videoIters);
+    } catch {}
     try {
       if (audioPath) await deleteFile(audioPath);
     } catch {}
@@ -1523,6 +1552,10 @@ export async function exportClip(
       );
 
       if (!reusable) {
+        if (ctxIter) {
+          await closeVideoIterator(ctxIter.iter);
+          videoIters.delete(workingClip.clipId);
+        }
         const asyncIterable = await getVideoFrameIterator(selectedSrc, {
           projectFps: Math.max(1, fps),
           startIndex: currentSourceIndex,
@@ -1747,6 +1780,9 @@ export async function exportClip(
     }
     return result;
   } finally {
+    try {
+      await closeAllVideoIterators(videoIters);
+    } catch {}
     try {
       if (audioPath) await deleteFile(audioPath);
     } catch {}

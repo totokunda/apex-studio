@@ -168,6 +168,7 @@ export const getVideoFrameIterator = async (
     : undefined;
 
   async function* iterate(): AsyncGenerator<WrappedCanvas | null> {
+    let it: AsyncIterator<WrappedCanvas | null> | null = null;
     try {
       // Compute source time window based on project indices and speed
       const startTimestamp = (startIndex / projectFps) * speed;
@@ -182,7 +183,7 @@ export const getVideoFrameIterator = async (
         endTimestamp,
       );
       
-      const it = (stream as AsyncIterable<WrappedCanvas | null>)[
+      it = (stream as AsyncIterable<WrappedCanvas | null>)[
         Symbol.asyncIterator
       ]();
 
@@ -223,6 +224,9 @@ export const getVideoFrameIterator = async (
         yield out ?? null;
       }
     } finally {
+      try {
+        await it?.return?.();
+      } catch {}
       pruneStaleDecoders();
     }
   }

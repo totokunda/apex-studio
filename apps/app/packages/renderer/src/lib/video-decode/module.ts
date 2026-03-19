@@ -47,7 +47,7 @@ interface PauseParams {
 
 interface DestroyParams {
     id: string;
-    canvasId: string;
+    canvasId?: string;
 }
 
 interface UpdateRendererParams {
@@ -96,14 +96,13 @@ class VideoDecoderModule {
 
     init(params: InitParams) {
         const { canvasId, canvas, sourceOrPath, id, renderer, onInitComplete, onFrame, onUpdateComplete, width, height } = params;
-
+        
         
         if (onInitComplete) {
             this.initCallbacks.set(id, onInitComplete);
         }
 
         if (onFrame) {
-
             this.frameCallbacks.set(id, onFrame);
         }
 
@@ -126,6 +125,7 @@ class VideoDecoderModule {
                 }
             });
         }
+
         const offscreenCanvas = canvas.transferControlToOffscreen();
         this.transferredCanvases.add(canvas);
 
@@ -141,6 +141,7 @@ class VideoDecoderModule {
                 height
             }
         }, [offscreenCanvas]);
+
     }
 
     seek(params: SeekParams) {
@@ -185,12 +186,13 @@ class VideoDecoderModule {
     }
 
     destroy(params: DestroyParams) {
-        const { id } = params;
+        const { id, canvasId } = params;
 
         this.worker.postMessage({
             type: "destroy",
             data: {
-                id
+                id,
+                canvasId
             }
         });
     }

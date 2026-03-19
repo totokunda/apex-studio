@@ -21,7 +21,7 @@ import SharedClipCanvasSurface, {
 } from "./shared/SharedClipCanvasSurface";
 
 import {useVideoDecoder} from "@/lib/video-decode/context";
-
+import { useUnmount } from "react-use";
 
 import { useViewportStore } from "@/lib/viewport";
 
@@ -175,6 +175,7 @@ const VideoPreview: React.FC<
 
   const initCompleteRef = useRef(false);
 
+
   const useInputScopedControls = inputMode && !!inputId;
   const focusFrame =
     typeof focusFrameOverride === "number"
@@ -194,6 +195,12 @@ const VideoPreview: React.FC<
   const [imageSource, setImageSource] = useState<HTMLCanvasElement | null>(
     null,
   );
+
+  const canvasIdRef = useRef<string | null>(null);
+  if (!canvasIdRef.current) {
+    canvasIdRef.current = `canvas-${crypto.randomUUID()}`;
+  }
+  const stableCanvasId = canvasIdRef.current;
 
   const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
   const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -638,7 +645,6 @@ const VideoPreview: React.FC<
       isUsingPreprocessorSrc,
     );
 
-    
     const actualFrame = Math.floor((idealFrame / projectFps) * clipFps + 1e-4);
     const totalFrames = Math.max(
       0,
@@ -755,7 +761,7 @@ const VideoPreview: React.FC<
       );
 
       videoDecoder.init({
-         canvasId: clipId,
+         canvasId: stableCanvasId,
          canvas: canvasRef.current,
          sourceOrPath: currentMediaInfo?.path || "",
          renderer: "2d",
@@ -777,12 +783,21 @@ const VideoPreview: React.FC<
         const currentDecoderId = makeDecoderId(source);
         videoDecoder.destroy({
           id: currentDecoderId,
-          canvasId: clipId,
         });
       }
     }
 
   }, [clipId, decoderSources]);
+
+  useUnmount(() => {
+    for (const source of decoderSources) {
+      const currentDecoderId = makeDecoderId(source);
+      videoDecoder.destroy({
+        id: currentDecoderId,
+        canvasId: stableCanvasId,
+      });
+    }
+  }); 
 
   useEffect(() => {
     if (!initCompleteRef.current) return;
