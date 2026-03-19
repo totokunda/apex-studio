@@ -2,8 +2,8 @@ import React, { useMemo, useState } from "react";
 import PropertiesSlider from "./PropertiesSlider";
 import { useClipStore } from "@/lib/clip";
 import { AudioClipProps } from "@/lib/types";
-import { getMediaInfoCached } from "@/lib/media/utils";
 import { IoRefreshOutline } from "react-icons/io5";
+import { useControlsStore } from "@/lib/control";
 
 interface AudioPropertiesProps {
   clipId: string;
@@ -16,7 +16,7 @@ const AudioProperties: React.FC<AudioPropertiesProps> = ({ clipId }) => {
   const fadeIn = useMemo(() => clip?.fadeIn ?? 0, [clip?.fadeIn]);
   const fadeOut = useMemo(() => clip?.fadeOut ?? 0, [clip?.fadeOut]);
   const [spinning, setSpinning] = useState(false);
-
+  const { fps } = useControlsStore();
   const setVolume = (value: number) => {
     updateClip(clipId, { volume: value });
   };
@@ -29,7 +29,8 @@ const AudioProperties: React.FC<AudioPropertiesProps> = ({ clipId }) => {
 
   const clipDuration = useMemo(() => {
     if (!clip?.assetId) return 0;
-    const duration = getMediaInfoCached(clip?.assetId)?.duration;
+    const frameDuration = clip?.endFrame - clip?.startFrame;
+    const duration = frameDuration / fps;
     return duration ?? 0;
   }, [clip?.assetId]);
 

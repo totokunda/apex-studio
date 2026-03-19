@@ -31,6 +31,23 @@ class WebGLRenderer extends Renderer {
   #focusFrame = null;
   #filters = [];
   #useMask = true;
+  currentSignature = null;
+  setCurrentSignature(signature) {
+    this.currentSignature = signature;
+  }
+  getCurrentSignature() {
+    return this.currentSignature;
+  }
+  createUpdateSignature(maskFrame, clip, focusFrame, filters, useMask) {
+    const signature = JSON.stringify({
+      maskFrame,
+      clip,
+      focusFrame,
+      filters,
+      useMask
+    });
+    return signature;
+  }
   update(maskFrame, clip, focusFrame, filters, useMask) {
     this.#filterParams = {
       brightness: clip?.brightness,

@@ -25,7 +25,7 @@ import { LuPause, LuPlay } from "react-icons/lu";
 import { useClipStore } from "@/lib/clip";
 import { useControlsStore } from "@/lib/control";
 import { useViewportStore } from "@/lib/viewport";
-import VideoPreview from "@/components/preview/clips/VideoPreview";
+import VideoPreview from "@/components/preview/clips/VideoPreview2";
 import ImagePreview from "@/components/preview/clips/ImagePreview";
 import { getApplicatorsForClip } from "@/lib/applicator-utils";
 import { useWebGLHaldClut } from "@/components/preview/webgl-filters";
@@ -528,7 +528,8 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
         setDragProgress(newProgress);
       });
 
-      const newFrame = Math.round(startFrame + newProgress * duration);
+
+      const newFrame = Math.round(newProgress * duration); // previously used startFrame + newProgress * duration
       setFocusFrame(newFrame);
     },
     [selectedClip, setFocusFrame],
@@ -1243,6 +1244,7 @@ export const MediaDialog: React.FC<MediaDialogProps> = ({
     selectedClip?.clipId,
     getOverlayPath,
   ]); // Re-run explicitly when clipId changes
+
 
   const applyAspectRatioCrop = useCallback(
     (ratio: string, options?: { force?: boolean }) => {

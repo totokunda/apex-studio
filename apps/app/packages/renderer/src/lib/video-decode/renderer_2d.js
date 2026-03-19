@@ -13,6 +13,7 @@ class Canvas2DRenderer extends Renderer {
   #filters = [];
   #useMask = true;
   #haldClutInstance = null;
+  currentSignature = null;
   constructor(id, postMessage, canvas, width, height, haldClutInstance) {
     super(id, postMessage);
     this.#canvas = canvas;
@@ -21,6 +22,22 @@ class Canvas2DRenderer extends Renderer {
     this.#height = height;
     this.#compositor = new CompositorShader();
     this.#haldClutInstance = haldClutInstance;
+  }
+  setCurrentSignature(signature) {
+    this.currentSignature = signature;
+  }
+  getCurrentSignature() {
+    return this.currentSignature;
+  }
+  createUpdateSignature(maskFrame, clip, focusFrame, filters, useMask) {
+    const signature = JSON.stringify({
+      maskFrame,
+      clip,
+      focusFrame,
+      filters,
+      useMask
+    });
+    return signature;
   }
   async update(maskFrame, clip, focusFrame, filters, useMask) {
     this.#filterParams = {
@@ -84,6 +101,7 @@ class Canvas2DRenderer extends Renderer {
         }
       }
     }
+    if (this.#filters.length === 0) return;
     if (!workingCanvas || !workingCtx) {
       workingCanvas = new OffscreenCanvas(this.#width, this.#height);
       workingCtx = workingCanvas.getContext("2d");

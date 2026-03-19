@@ -9,7 +9,7 @@ import { Stage, Layer, Group, Rect } from "react-konva";
 import { useViewportStore } from "@/lib/viewport";
 import { useClipStore } from "@/lib/clip";
 import { BASE_LONG_SIDE } from "@/lib/settings";
-import VideoPreview from "./clips/VideoPreview";
+import VideoPreview from "./clips/VideoPreview2";
 import ImagePreview from "./clips/ImagePreview";
 import ShapePreview from "./clips/ShapePreview";
 import TextPreview from "./clips/TextPreview";
@@ -371,6 +371,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
                       applicators={applicators}
                       overlap={clipAtFrameNoOverlap}
                       hidden={!clipAtFrameNoOverlap}
+                      decoderKey={`fullscreen::${clip.clipId}`}
                     />
                   );
                 case "image":

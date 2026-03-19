@@ -209,7 +209,7 @@ const PreprocessorParametersPanel: React.FC<
       <div className="flex flex-col gap-y-5  rounded-md">
         {/* Create New Clip toggle - applies to all preprocessors (hidden once a src/result/asset is present) */}
         {!hasExistingResultSource && (
-          <div className="flex flex-col gap-y-2">
+          <div className=" flex-col gap-y-2 hidden">
             <div className="flex flex-row items-center gap-x-2 justify-between">
               <span className="text-brand-lighter text-[11px] font-semibold">
                 Create new clip

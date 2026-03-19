@@ -1162,7 +1162,10 @@ const TimelineClip: React.FC<
       if (assetMode) {
         setSelectedAssetClipId(currentClipId);
       } else {
+        // move to top 
         ctrlToggleClipSelection(currentClipId, isShiftClick);
+        rootGroupRef.current?.moveToTop();
+        
       }
       setSelectedPreprocessorId(null);
     },
@@ -1868,7 +1871,7 @@ const TimelineClip: React.FC<
   }, [currentClip, getClipById, clipType]);
 
   // (removed) shimmer animation for model clip background gradient
-
+ 
   return (
     <Group ref={rootGroupRef}>
       <Group

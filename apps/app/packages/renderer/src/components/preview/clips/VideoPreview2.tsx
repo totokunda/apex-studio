@@ -1,4 +1,4 @@
-import { MediaInfo, VideoClipProps } from "@/lib/types";
+import { FilterClipProps, MediaInfo, VideoClipProps } from "@/lib/types";
 import React, {
   useCallback,
   useEffect,
@@ -64,7 +64,15 @@ const toSourceProjectFrame = (
   return Math.max(0, (trimStart || 0) + timelineLocalFrame * speedFactor);
 };
 
-
+const createUpdateSignature = (maskFrame: number, clip: VideoClipProps, focusFrame: number, filters: FilterClipProps[], useMask: boolean): string => {
+  return JSON.stringify({
+    maskFrame,
+    clip,
+    focusFrame,
+    filters,
+    useMask,
+  });
+}
 
 const VideoPreview: React.FC<
   VideoClipProps & {
@@ -95,7 +103,6 @@ const VideoPreview: React.FC<
   assetId,
   clipId,
   startFrame = 0,
-  framesToPrefetch: _framesToPrefetch = 32,
   rectWidth,
   rectHeight,
   trimStart,
@@ -146,6 +153,8 @@ const VideoPreview: React.FC<
   const originalFrameRef = useRef<HTMLCanvasElement | null>(null); // Store unfiltered frame
   const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<Konva.Image>(null);
+
+  
 
   const compositorRef = useRef<CompositorShader | null>(null);
   if (!compositorRef.current) {
@@ -201,6 +210,7 @@ const VideoPreview: React.FC<
     return typeof rawEnd === "number" ? rawEnd : undefined;
   }, [clip, groupStartForClip, inputMode]);
 
+
   // Gate Konva node rendering: keep decode/effects hooks running, but do not mount Konva
   // nodes unless the clip is actually in frame for the current focus frame.
   const isInFrame = useMemo(() => {
@@ -220,7 +230,7 @@ const VideoPreview: React.FC<
         }
       }
 
-    return f >= s && f <= e;
+    return f >= s && f < e;
   }, [focusFrame, startFrameUsed, endFrameUsed]);
 
 
@@ -262,13 +272,12 @@ const VideoPreview: React.FC<
       }
       // For normal timeline playback, keep the legacy id so it matches the
       // preconfigured decoders from VideoDecoderManagerProvider.
+
       return `${id}::${logicalClipKey}`;
     },
     [clipId, decoderKey, inputMode, inputId],
   );
-  const decoderId = useMemo(() => {
-    return makeDecoderId(assetId);
-  }, [assetId, clipId, decoderKey, inputMode, inputId]);
+
 
   const { selectedAssetId, frameOffset } = useMemo(() => {
     // Check if we can use the cached result
@@ -339,6 +348,11 @@ const VideoPreview: React.FC<
     return { selectedAssetId: assetId, frameOffset: 0 };
   }, [clip?.preprocessors, assetId, currentFrame, trimStart]);
 
+  const decoderId = useMemo(() => {
+    return makeDecoderId(selectedAssetId);
+  }, [selectedAssetId, clipId, decoderKey, inputMode, inputId]);
+
+
   const maskFrameForCurrentFocus = useMemo(() => {
     if (clip) {
       if (inputMode) {
@@ -394,7 +408,6 @@ const VideoPreview: React.FC<
     frameOffset,
     startFrameUsed,
   ]);
-
 
   const effectiveSourceRange = useMemo<FrameRange>(() => {
     const info = mediaInfo.current;
@@ -453,9 +466,11 @@ const VideoPreview: React.FC<
   // (seekInProgressRef removed; was unused and could cause confusion)
 
   const isPlayingFromControls = useControlsStore((s) => s.isPlaying);
+
   const isPlayingFromInputs = useInputControlsStore((s) =>
     s.getIsPlaying(inputId ?? ""),
   );
+
   // IMPORTANT:
   // - `isPlaying` must be reactive (derived from store selectors), otherwise playback
   //   can get stuck in "paused" mode and force per-frame seeks.
@@ -488,6 +503,12 @@ const VideoPreview: React.FC<
   const fps = useInputScopedControls ? fpsFromInputs : fpsFromControls;
   const tool = useViewportStore((s) => s.tool);
 
+  const currentSignatureRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentSignatureRef.current = createUpdateSignature(maskFrameForCurrentFocus, clip, focusFrame, applicators.map((applicator) => applicator.getClip()), tool !== "mask");
+  }, [maskFrameForCurrentFocus, clip, focusFrame, applicators, tool]);
+
   const fpsRef = useRef(fps);
   useEffect(() => {
     fpsRef.current = fps;
@@ -497,7 +518,12 @@ const VideoPreview: React.FC<
   useEffect(() => {
     speedRef.current = speed;
   }, [speed]);
-  
+
+  const isInFrameRef = useRef(isInFrame);
+  useEffect(() => {
+    isInFrameRef.current = isInFrame;
+  }, [isInFrame]);
+
 
   // Create canvas once and expose to Konva Image via state so initial render receives it
   useEffect(() => {
@@ -539,7 +565,6 @@ const VideoPreview: React.FC<
     displaySizeRef.current = { displayWidth, displayHeight, offsetX, offsetY };
   }, [displayWidth, displayHeight, offsetX, offsetY]);
 
-
   const getTargetFrameInfo = useCallback(() => {
     if (!mediaInfo.current) return null;
     const clipFps =
@@ -558,16 +583,33 @@ const VideoPreview: React.FC<
       speed,
       isUsingPreprocessorSrc,
     );
+
+    
     const actualFrame = Math.floor((idealFrame / projectFps) * clipFps + 1e-4);
     const totalFrames = Math.max(
       0,
       Math.floor((mediaInfo.current.duration || 0) * clipFps),
     );
+
     const targetFrame =
       Math.max(0, Math.min(totalFrames, actualFrame)) +
       Math.round((effectiveSourceRange.startFrame / projectFps) * clipFps);
 
-    return { timestamp: targetFrame / clipFps, targetFrame };
+      const timelineLocalEndFrame = Math.max(0, (endFrameUsed ?? 0) - startFrameUsed);
+      const endFrameProject = toSourceProjectFrame(
+        timelineLocalEndFrame,
+        trimStart,
+        frameOffset,
+        speed,
+        isUsingPreprocessorSrc,
+      );
+      const endTimestamp =
+        endFrameProject > 0
+          ? endFrameProject / projectFps
+          : (mediaInfo.current?.duration ?? undefined);
+      
+    
+    return { timestamp: targetFrame / clipFps, targetFrame, endTimestamp };
   }, [
     mediaInfo,
     fps,
@@ -578,7 +620,8 @@ const VideoPreview: React.FC<
     trimStart,
     frameOffset,
     speed,
-    effectiveSourceRange.startFrame,
+    effectiveSourceRange,
+    endFrameUsed,
   ]);
 
   const getTargetFrameInfoRef = useRef(getTargetFrameInfo);
@@ -587,8 +630,10 @@ const VideoPreview: React.FC<
   }, [getTargetFrameInfo]);
 
   const onUpdateComplete = useCallback((data: { id: string, success: boolean }) => {
-    if (!isPlayingRef.current && data.success) {
+    
+    if (!isPlayingRef.current && data.success && isInFrameRef.current) {
       const targetFrameInfo = getTargetFrameInfoRef.current();
+      
       if (targetFrameInfo) {
         videoDecoder.seek({
           id: data.id,
@@ -603,60 +648,103 @@ const VideoPreview: React.FC<
   const onInitComplete = useCallback((data: { id: string, duration: number }) => {
     initCompleteRef.current = true;
     const targetFrameInfo = getTargetFrameInfoRef.current();
+    if (!isInFrameRef.current) return;
     if (targetFrameInfo) {
-      videoDecoder.seek({
-        id: data.id,
-        timestamp: targetFrameInfo.timestamp,
-        speed: speed,
-        targetFps: fps,
-      });
+      if (isPlayingRef.current) {
+        // we want to continue iterating from the current frame
+        videoDecoder.iterate({
+          id: data.id,
+          startTimestamp: targetFrameInfo.timestamp,
+          endTimestamp: targetFrameInfo.endTimestamp,
+          speed: speed,
+          targetFps: fps,
+        });
+        
+      } else {
+
+        videoDecoder.pause({
+          id: data.id,
+        });
+        
+        videoDecoder.seek({
+          id: data.id,
+          timestamp: targetFrameInfo.timestamp,
+          speed: speed,
+          targetFps: fps,
+        });
+      }
+      
     }
   }, [videoDecoder]);
+
+  const decoderSources = useMemo(() => {
+    // get all assetIDs from the clip and preprocessors
+    const assetIds = [assetId, ...(clip?.preprocessors ?? []).map((p) => p.assetId)];
+    return assetIds.filter((id): id is string => id !== undefined);
+  }, [mediaInfo.current?.path, clip?.preprocessors]);
+
 
   useEffect(() => {
     if (!canvasRef.current) {
       canvasRef.current = document.createElement("canvas");
     }
 
-      videoDecoder.init({
-       canvas: canvasRef.current,
-       sourceOrPath: mediaInfo.current?.path || "",
-       renderer: "2d",
-       width: displayWidth,
-       height: displayHeight,
-       id: decoderId,
-       onUpdateComplete: onUpdateComplete,
-       onInitComplete: onInitComplete,
-       onFrame() {
-         imageRef.current?.getLayer()?.batchDraw?.();
-       },
-      })
+    for (const source of decoderSources) {
+      const currentDecoderId = makeDecoderId(source);
+      const currentMediaInfo = getMediaInfoCached(source) || mediaInfo.current;
+      const {displayWidth: currentDisplayWidth, displayHeight: currentDisplayHeight} = getAspectFitSize(
+        currentMediaInfo?.video?.displayWidth || 0,
+        currentMediaInfo?.video?.displayHeight || 0,
+        rectWidth,
+        rectHeight,
+      );
 
-      return () => {
+      videoDecoder.init({
+         canvas: canvasRef.current,
+         sourceOrPath: currentMediaInfo?.path || "",
+         renderer: "2d",
+         width: currentDisplayWidth,
+         height: currentDisplayHeight,
+         id: currentDecoderId,
+         onUpdateComplete: onUpdateComplete,
+         onInitComplete: onInitComplete,
+         onFrame() {
+           imageRef.current?.getLayer()?.batchDraw?.();
+         },
+        })
+    }
+
+    return () => {
+      for (const source of decoderSources) {
+        const currentDecoderId = makeDecoderId(source);
         videoDecoder.destroy({
-          id: decoderId,
+          id: currentDecoderId,
         });
       }
-      
-  }, [clipId, decoderId, mediaInfo.current?.path]);
+    }
 
+  }, [clipId, decoderSources]);
 
   useEffect(() => {
     if (!initCompleteRef.current) return;
-    if (isPlaying) {
-      const targetFrameInfo = getTargetFrameInfo();
+    if (isPlaying && isInFrame) {
+      const targetFrameInfo = getTargetFrameInfoRef.current();
+
       videoDecoder.iterate({
         id: decoderId,
         startTimestamp: targetFrameInfo?.timestamp ?? 0,
+        endTimestamp: targetFrameInfo?.endTimestamp ?? 0,
         speed: speed,
-        targetFps: fps,
+        targetFps: fps
       });
+
     } else {
       videoDecoder.pause({
         id: decoderId,
       });
     }
-  }, [isPlaying]);
+  }, [isPlaying, isInFrame]);
+
 
   // Update refs when values change
   useEffect(() => {
@@ -682,7 +770,6 @@ const VideoPreview: React.FC<
     fps,
     isPlaying,
   ]);
-
 
   return (
     <SharedClipCanvasSurface

@@ -357,7 +357,8 @@ export async function preseekAudioWorker(
 }
 
 export const getAudioIterator = async (
-  path: string,
+  decoderId?: string,
+  path?: string,
   options?: {
     mediaInfo?: MediaInfo;
     sampleRate?: number;
@@ -369,7 +370,7 @@ export const getAudioIterator = async (
 ) => {
   try {
     const mediaInfo =
-      options?.mediaInfo || MediaCache.getState().getMedia(path);
+      options?.mediaInfo || MediaCache.getState().getMedia(path || "");
     if (!mediaInfo || !mediaInfo.audio)
       throw new Error("Media info not found");
 
@@ -401,7 +402,7 @@ export const getAudioIterator = async (
     }
 
     // Get or create worker
-    const assetId = path; // Use path as asset ID
+    const assetId = decoderId || path || ""; // Use path as asset ID
     const workerState = getOrCreateAudioWorker(assetId);
     const requestId = ++workerState.requestId;
     const folderUuid = getActiveFolderUuid();
@@ -420,7 +421,7 @@ export const getAudioIterator = async (
       await workerState.configurePromise;
     } else if (!workerState.configured || workerState.configuredFolderUuid !== folderUuid) {
       // Not preconfigured, configure now
-      const ext = path.split(".").pop()?.toLowerCase() || "";
+      const ext = path?.split(".").pop()?.toLowerCase() || "";
       const formatMap: Record<string, string> = {
         mp4: "mp4",
         m4a: "mp4",
@@ -460,7 +461,7 @@ export const getAudioIterator = async (
             asset: {
               id: assetId,
               type: "audio",
-              path,
+              path: path || "",
             },
             formatStr,
             folderUuid,

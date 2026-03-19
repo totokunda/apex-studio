@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ZoomLevel } from "./types";
+
 import {
   TIMELINE_DURATION_SECONDS,
   DEFAULT_FPS,
@@ -12,6 +13,8 @@ import _ from "lodash";
 let __playbackRafId: number | null = null;
 let __lastTickMs = 0;
 let __frameAccumulator = 0;
+let __playbackStartWallTime = 0;
+let __playbackStartFocusFrame = 0;
 
 const __playbackTick = (now: number) => {
   const controls = useControlsStore.getState();
@@ -46,6 +49,15 @@ const __playbackTick = (now: number) => {
   __lastTickMs = now;
   __playbackRafId = requestAnimationFrame(__playbackTick);
 };
+
+export const getPlaybackState = () => {
+  return {
+    startWallTime: __playbackStartWallTime,
+    startFocusFrame: __playbackStartFocusFrame,
+    isPlaying: true,
+    mainNow: performance.now(),
+  };
+}
 
 interface ControlStore {
   maxZoomLevel: ZoomLevel;
@@ -302,6 +314,8 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
   play: () => {
     const state = get();
     const clips = useClipStore.getState();
+    __playbackStartWallTime = performance.now();
+    __playbackStartFocusFrame = state.focusFrame || 0;
     if (state.isPlaying) return;
     if (!clips || (clips.clips || []).length === 0) return;
     // If we're at or past the end, restart from the beginning
@@ -310,9 +324,23 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     }
     __lastTickMs = 0;
     __frameAccumulator = 0;
+    __playbackStartWallTime = performance.now();
+    __playbackStartFocusFrame = state.focusFrame || 0;
     if (__playbackRafId != null) cancelAnimationFrame(__playbackRafId);
     set({ isPlaying: true });
     __playbackRafId = requestAnimationFrame(__playbackTick);
+
+    window.dispatchEvent(new CustomEvent("apex:playback:playing", { detail: {
+      isPlaying: true,
+      focusFrame: state.focusFrame,
+      fps: state.fps,
+      timeSec: state.focusFrame / state.fps,
+      startWallTime: __playbackStartWallTime,
+      startFocusFrame: __playbackStartFocusFrame,
+      inputMode: false,
+      inputId: null,
+    } }));
+    
   },
   pause: () => {
     if (__playbackRafId != null) {
@@ -322,6 +350,19 @@ export const useControlsStore = create<ControlStore>((set, get) => ({
     __lastTickMs = 0;
     __frameAccumulator = 0;
     set({ isPlaying: false });
+    const state = get();
+
+    window.dispatchEvent(new CustomEvent("apex:playback:paused", { detail: {
+      isPlaying: false,
+      focusFrame: state.focusFrame,
+      fps: state.fps,
+      timeSec: state.focusFrame / state.fps,
+      startWallTime: __playbackStartWallTime,
+      startFocusFrame: __playbackStartFocusFrame,
+      inputMode: false,
+      inputId: null,
+    } }));
+
   },
   isPlaying: false,
   setIsPlaying: (isPlaying) => set({ isPlaying }),

@@ -7,6 +7,7 @@ import { getAudioIterator, preconfigureAudioWorker, preseekAudioWorker } from "@
 import { WrappedAudioBuffer } from "mediabunny";
 import type { BaseClipApplicator } from "./apply/base";
 import { useClipStore } from "@/lib/clip";
+import { useSharedAudioContext } from "./shared/SharedAudioContextProvider";
 
 type FrameRange = {
   startFrame: number;
@@ -85,7 +86,8 @@ const AudioPreview: React.FC<
     fadeIn = 0,
     fadeOut = 0,
     speed: _speed,
-    framesToPrefetch = 5,
+    framesToPrefetch = 12,
+    clipId,
   } = props;
 
   const {
@@ -177,10 +179,12 @@ const AudioPreview: React.FC<
   const soundtouchInitCtxRef = useRef<AudioContext | null>(null);
   const lastConfiguredSpeedRef = useRef<number | null>(null);
   const asset = useMemo(() => getAssetById(assetId), [assetId]);
+
   const getEffectiveSourceRange = useCallback(
     () => resolveFrameRange(mediaInfoRef.current, asset?.path),
     [asset?.path],
   );
+
   const withAssetRange = useCallback(
     (info: MediaInfo): MediaInfo => {
       const range = resolveFrameRange(info, asset?.path);
@@ -196,30 +200,30 @@ const AudioPreview: React.FC<
   );
   useEffect(() => {
     const wasPlaying = prevIsPlayingRef.current;
-    if (!wasPlaying && isPlaying && isInFrame) {
+    if (!wasPlaying && isPlaying && isInFrame && inputMode) {
       try {
         const detail = {
           assetId,
           currentFrame,
           fps,
           timeSec: fps ? currentFrame / fps : 0,
-          inputMode: !!inputMode,
-          inputId: inputMode ? String(inputId || "") : null,
+          inputMode: true,
+          inputId: String(inputId || ""),
         } as any;
         window.dispatchEvent(
           new CustomEvent("apex:playback:playing", { detail }),
         );
       } catch {}
     }
-    if (wasPlaying && !isPlaying && isInFrame) {
+    if (wasPlaying && !isPlaying && isInFrame && inputMode) {
       try {
         const detail = {
           assetId,
           currentFrame,
           fps,
           timeSec: fps ? currentFrame / fps : 0,
-          inputMode: !!inputMode,
-          inputId: inputMode ? String(inputId || "") : null,
+          inputMode: true,
+          inputId: String(inputId || ""),
         } as any;
         window.dispatchEvent(
           new CustomEvent("apex:playback:paused", { detail }),
@@ -229,10 +233,17 @@ const AudioPreview: React.FC<
     prevIsPlayingRef.current = isPlaying;
   }, [isPlaying, assetId, currentFrame, fps, inputMode, inputId, isInFrame]);
 
+  const { ctx:sharedCtx } = useSharedAudioContext();
+
   const { ctx, gainNode } = useMemo<{
     ctx: AudioContext;
     gainNode: GainNode;
   }>(() => {
+    if (sharedCtx) {
+      const gainNode = sharedCtx.createGain();
+      gainNode.connect(sharedCtx.destination);
+      return { ctx: sharedCtx, gainNode };
+    }
     const AudioContext: any =
       (window as any).AudioContext || (window as any).webkitAudioContext;
     // Use low latency hint for minimal audio delay
@@ -240,7 +251,7 @@ const AudioPreview: React.FC<
     const gainNode = ctx.createGain();
     gainNode.connect(ctx.destination);
     return { ctx, gainNode };
-  }, []);
+  }, [sharedCtx]);
 
   // Keep AudioContext warm - resume on any user interaction to avoid cold-start latency
   useEffect(() => {
@@ -675,13 +686,15 @@ const AudioPreview: React.FC<
     const asset = getAssetById(assetId);
     if (!asset) return;
     const rangedInfo = withAssetRange(mediaInfo);
+    const decoderId = `${asset.id}:${clipId}`;
+    
     
     // Start iterator and soundtouch setup in parallel
     const [iteratorResult, soundtouchNode] = await Promise.all([
-      getAudioIterator(asset.path, {
+      getAudioIterator(decoderId, asset.path, {
         mediaInfo: rangedInfo,
         fps,
-        startIndex: mediaFrameIndex,
+        startIndex: Math.max(0, mediaFrameIndex - 4),
         endIndex,
       }),
       ensureSoundtouchNode(),
@@ -720,6 +733,8 @@ const AudioPreview: React.FC<
         continue; // Skip invalid buffers but keep trying
       }
 
+      
+
       // Map media timestamp to wall clock according to speed.
       // Timeline seconds advance 1:1 with wall clock; media advances at `speed`.
       const speedVal = Math.max(0.1, speed);
@@ -727,6 +742,12 @@ const AudioPreview: React.FC<
       // This ensures audio reaches the speakers at the same time as video reaches the screen
       let startTimestamp =
         startTimeRef.current + (timestamp - mediaTimeAtStart) / speedVal - outputLatency;
+
+      const isClipStart = timestamp < 0.01; // or half a frame / tiny epsilon
+      const isLateStart = startTimestamp < ctx.currentTime;
+      const antiClickFade = 0.003;
+
+    
 
       let bufferDurationToPlay = duration;
 
@@ -760,6 +781,7 @@ const AudioPreview: React.FC<
 
       // Ensure no gap at clip boundaries - if this buffer should start very soon, start it immediately
       const timeUntilStart = startTimestamp - ctx.currentTime;
+
       if (timeUntilStart > 0 && timeUntilStart < 0.001) {
         startTimestamp = ctx.currentTime;
       }
@@ -794,7 +816,8 @@ const AudioPreview: React.FC<
       const fadeInDuration = fadeIn || 0;
       const fadeOutDuration = fadeOut || 0;
       const totalDuration = mediaInfoRef.current?.duration || duration;
-
+      const scheduleTime = Math.max(startTimestamp, ctx.currentTime);
+  
       // Set up fade in
       if (fadeInDuration > 0 && timestamp < fadeInDuration) {
         const fadeProgress = Math.min(1, timestamp / fadeInDuration);
@@ -869,12 +892,11 @@ const AudioPreview: React.FC<
               : ctx.currentTime) + duration,
           );
         }
+      } else if (isClipStart || isLateStart) {
+        nodeGain.gain.setValueAtTime(0, scheduleTime);
+        nodeGain.gain.linearRampToValueAtTime(baseGain, scheduleTime + antiClickFade);
       } else {
-        // No fade - just apply constant volume
-        nodeGain.gain.setValueAtTime(
-          baseGain,
-          startTimestamp >= ctx.currentTime ? startTimestamp : ctx.currentTime,
-        );
+        nodeGain.gain.setValueAtTime(baseGain, scheduleTime);
       }
 
       if (startTimestamp >= ctx.currentTime) {

@@ -32,6 +32,12 @@ interface IterateParams {
     id: string;
     speed: number;
     targetFps: number;
+    playbackState?: {
+        startWallTime: number;
+        startFocusFrame: number;
+        isPlaying: boolean;
+        mainNow: number;
+    };
 }
 
 interface PauseParams {
@@ -49,6 +55,21 @@ interface UpdateRendererParams {
     focusFrame: number;
     filters: FilterClipProps[];
     useMask: boolean;
+}
+
+interface PreloadParams {
+    id: string;
+    startTimestamp: number;
+    endTimestamp: number;
+    secondsToPrefetch: number;
+    targetFps: number;
+    speed: number;
+    playbackState?: {
+        startWallTime: number;
+        startFocusFrame: number;
+        isPlaying: boolean;
+        mainNow: number;
+    };
 }
 
 class VideoDecoderModule {
@@ -133,10 +154,11 @@ class VideoDecoderModule {
                 targetFps
             }
         });
+
     }
 
     iterate(params: IterateParams) {
-        const { startTimestamp, endTimestamp, id, speed, targetFps} = params;
+        const { startTimestamp, endTimestamp, id, speed, targetFps, playbackState } = params;
 
         this.worker.postMessage({
             type: "iterate",
@@ -145,10 +167,27 @@ class VideoDecoderModule {
                 startTimestamp,
                 endTimestamp,
                 speed,
-                targetFps
+                targetFps,
+                playbackState
             }
         });
 
+    }
+
+    preload(params: PreloadParams) {
+        const { id, startTimestamp, endTimestamp, secondsToPrefetch, targetFps, speed, playbackState } = params;
+        this.worker.postMessage({
+            type: "preload",
+            data: {
+                id, 
+                startTimestamp, 
+                endTimestamp,
+                secondsToPrefetch,
+                targetFps,
+                speed,
+                playbackState
+            }
+        });
     }
 
     pause(params: PauseParams) {
@@ -163,8 +202,6 @@ class VideoDecoderModule {
 
     destroy(params: DestroyParams) {
         const { id } = params;
-        this.initCallbacks.delete(id);
-        this.frameCallbacks.delete(id);
 
         this.worker.postMessage({
             type: "destroy",
@@ -183,6 +220,7 @@ class VideoDecoderModule {
             }
         });
     }
+
 }
 
 export default VideoDecoderModule;

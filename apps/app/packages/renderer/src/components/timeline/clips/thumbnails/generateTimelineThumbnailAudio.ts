@@ -155,6 +155,7 @@ export const generateTimelineThumbnailAudio = async (
   const segDurationSec = Math.max(1e-6, segEndSec - segStartSec);
   const barDurationSec = segDurationSec / barCount;
 
+
   const color = "#7791C4";
   const volumeDb = Number((currentClip as any)?.volume ?? 0);
   const fadeInSec = Math.max(0, Number((currentClip as any)?.fadeIn ?? 0));
@@ -224,6 +225,7 @@ export const generateTimelineThumbnailAudio = async (
     key: diskCacheKey,
     sourceSignature,
   });
+
   if (diskCached) {
     ctx.clearRect(0, 0, targetW, targetH);
     drawFittedCanvas(ctx, diskCached, targetW, targetH);
@@ -257,6 +259,7 @@ export const generateTimelineThumbnailAudio = async (
     if (!rgb) return hex;
     return `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
   };
+
   const lighten = (hex: string, pct: number) => {
     const rgb = hexToRgb(hex);
     if (!rgb) return hex;
@@ -279,6 +282,7 @@ export const generateTimelineThumbnailAudio = async (
   bgCanvas.width = targetW;
   bgCanvas.height = targetH;
   const bgctx = bgCanvas.getContext("2d");
+
   if (!bgctx) return;
   bgctx.imageSmoothingEnabled = true;
   // @ts-ignore - not available in all browsers/contexts
@@ -332,6 +336,7 @@ export const generateTimelineThumbnailAudio = async (
   barsCanvas.width = targetW;
   barsCanvas.height = targetH;
   const bctx = barsCanvas.getContext("2d");
+
   if (!bctx) return;
   bctx.imageSmoothingEnabled = true;
   // @ts-ignore - not available in all browsers/contexts
@@ -399,6 +404,7 @@ export const generateTimelineThumbnailAudio = async (
       (visualValue / 100) * targetH * mult,
       targetH,
     );
+
     if (visualValue <= 0 || barHeight <= 0) return;
     const h = Math.round(barHeight);
     const y = targetH - h;
@@ -522,15 +528,18 @@ export const generateTimelineThumbnailAudio = async (
   try {
     const ensuredMediaInfo =
       mediaInfoRef ?? (await getMediaInfo(asset.path).catch(() => undefined));
+      const decoderId = `${asset.id}-${currentClipId}`;
 
-    const iter = await getAudioIterator(asset.path, {
+    const iter = await getAudioIterator(decoderId, asset.path, {
       mediaInfo: ensuredMediaInfo,
       fps: projectFps,
       startIndex,
       endIndex,
     });
 
+
     for await (const item of iter) {
+ 
       if ((audioRenderSeqByClipId.get(currentClipId) ?? 0) !== mySeq) return;
       if (!item?.buffer) continue;
 
@@ -634,8 +643,9 @@ export const generateTimelineThumbnailAudio = async (
         groupRef.current?.getLayer()?.batchDraw();
       }
     }
-  } catch {
+  } catch (err) {
     // Best-effort: if streaming decode fails, leave the background in place.
+    console.log("[audio-thumbnail] Error streaming decode", currentClipId, err);
   } finally {
     if ((audioRenderSeqByClipId.get(currentClipId) ?? 0) === mySeq) {
       // Draw any remaining bars (may be silent / 0)

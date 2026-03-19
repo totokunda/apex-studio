@@ -16,6 +16,7 @@ class Canvas2DRenderer extends Renderer {
   #filters: FilterClipProps[] = [];
   #useMask: boolean = true;
   #haldClutInstance: WebGLHaldClut | null = null;
+  currentSignature: string | null = null;
 
 
   constructor(id: string, postMessage: (message: any) => void, canvas: OffscreenCanvas, width: number, height: number, haldClutInstance: WebGLHaldClut | null) {
@@ -26,6 +27,25 @@ class Canvas2DRenderer extends Renderer {
     this.#height = height;
     this.#compositor = new CompositorShader();
     this.#haldClutInstance = haldClutInstance;
+  }
+
+  setCurrentSignature(signature: string | null): void {
+    this.currentSignature = signature;
+  }
+  
+  getCurrentSignature(): string | null {
+    return this.currentSignature;
+  }
+
+  createUpdateSignature(maskFrame: number, clip: VideoClipProps, focusFrame: number, filters: FilterClipProps[], useMask: boolean): string {
+    const signature = JSON.stringify({
+      maskFrame,
+      clip,
+      focusFrame,
+      filters,
+      useMask,
+    });
+    return signature;
   }
 
   async update(maskFrame: number, clip: VideoClipProps, focusFrame: number, filters: FilterClipProps[], useMask: boolean): Promise<void> {
@@ -97,6 +117,8 @@ class Canvas2DRenderer extends Renderer {
         
       }
     }
+
+    if (this.#filters.length === 0) return;
 
     if (!workingCanvas || !workingCtx) {
       workingCanvas = new OffscreenCanvas(this.#width, this.#height);

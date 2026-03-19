@@ -47,13 +47,14 @@ const BackButton = () => {
 };
 
 const RewindBackward = () => {
-  const { setFocusFrame, fps, focusFrame } = useControlsStore();
+  const { setFocusFrame, fps, focusFrame, pause } = useControlsStore();
   const { clips } = useClipStore();
   const hasClips = clips.length > 0;
   const disabled = focusFrame === 0 || !hasClips;
   const handleRewindBackward = useCallback(() => {
     if (disabled) return;
     const framesBack = Math.max(0, focusFrame - fps * 5);
+    pause();
     setFocusFrame(framesBack);
   }, [disabled, focusFrame, fps, setFocusFrame]);
   return (
@@ -74,13 +75,15 @@ const RewindBackward = () => {
 };
 
 const RewindForward = () => {
-  const { setFocusFrame, fps, focusFrame } = useControlsStore();
+  const { setFocusFrame, fps, focusFrame, pause } = useControlsStore();
   const { clipDuration, clips } = useClipStore();
   const hasClips = clips.length > 0;
   const disabled = focusFrame === clipDuration || !hasClips;
   const handleRewindForward = useCallback(() => {
     if (disabled) return;
     const framesForward = Math.min(focusFrame + fps * 5, clipDuration);
+    // pause the video before seeking
+    pause();
     setFocusFrame(framesForward);
   }, [disabled, focusFrame, fps, clipDuration, setFocusFrame]);
   return (

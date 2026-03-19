@@ -537,24 +537,23 @@ const SharedClipCanvasSurface: React.FC<SharedClipCanvasSurfaceProps> = ({
   );
   const safeCornerRadius = useMemo(
     () =>
-      sanitizeCornerRadius(clipTransform?.cornerRadius, nodeWidth, nodeHeight),
+      sanitizeCornerRadius(clipTransform?.cornerRadius, Math.max(nodeWidth, 1), Math.max(nodeHeight, 1)),
     [clipTransform?.cornerRadius, nodeHeight, nodeWidth],
   );
 
-  if (hidden || !isInFrame) {
-    return null;
-  }
+  //if (hidden || !isInFrame) {
+  //  console.log("hidden or !isInFrame", hidden, isInFrame);
+  //  return null;
+  //}
 
   return (
     <React.Fragment>
-      <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight}>
+      <Group ref={groupRef} clipX={0} clipY={0} clipWidth={rectWidth} clipHeight={rectHeight} visible={!hidden && isInFrame} listening={!hidden && isInFrame}>
         <Image
-          visible={!hidden}
-          listening={!hidden}
           draggable={tool === "pointer" && !isTransforming && !inputMode && !hidden}
           ref={imageRef}
           cornerRadius={safeCornerRadius}
-          opacity={(clipTransform?.opacity ?? 100) / 100}
+          opacity={isInFrame ? (clipTransform?.opacity ?? 100) / 100 : 1}
           image={canvasRef.current || undefined}
           x={clipTransform?.x ?? offsetX}
           y={clipTransform?.y ?? offsetY}

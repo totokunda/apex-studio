@@ -4,6 +4,7 @@ import { Canvas2DRenderer } from './renderer_2d';
 import { fileURLToPathInWorker, createNodeFileSource, readFileBuffer } from './utils';
 import { FilterClipProps, VideoClipProps } from '../types';
 import { WebGLHaldClut } from '@/components/preview/webgl-filters/hald-clut';
+
 const { existsSync } = require('fs');
 
 const VERSION = 1;  
@@ -39,6 +40,12 @@ type IteratePayload = {
         endTimestamp?: number;
         speed: number;
         targetFps: number;
+        playbackState?: {
+            startWallTime: number;
+            startFocusFrame: number;
+            isPlaying: boolean;
+            mainNow: number;
+        };
     }
 }
 
@@ -68,6 +75,24 @@ type UpdateRendererPayload = {
     }
 }
 
+type PreloadPayload = {
+    type: "preload"
+    data: {
+        id: string;
+        startTimestamp: number;
+        endTimestamp?: number;
+        secondsToPrefetch: number;
+        targetFps: number;
+        speed: number;
+        playbackState?: {
+            startWallTime: number;
+            startFocusFrame: number;
+            isPlaying: boolean;
+            mainNow: number;
+        };
+    }
+}
+
 interface VideoState {
     id: string;
     input: Input;
@@ -93,7 +118,9 @@ type RenderState = {
     timingFunc: (() => Promise<void>) | undefined;
     stopDecode: boolean;
     stopRender: boolean;
+    preload?: boolean;
 }
+
 
 const videoStates = new Map<string, VideoState>();
 const canvasStates = new Map<string, OffscreenCanvas>();
@@ -102,13 +129,15 @@ const renderStates = new Map<string, RenderState>();
 const decoderStates = new Map<string, VideoDecoder>();
 const lastPacketStates = new Map<string, EncodedPacket>();
 const renderers = new Map<string, WebGLRenderer | Canvas2DRenderer>();
+const decoderInUseStates = new Map<string, boolean>();
+const requestDecoderStates = new Map<string, boolean>();
 
 const seekQueueStates:Map<string, SeekPayload | null> = new Map();
 const seekInProgressStates:Map<string, boolean> = new Map();
 
 const haldClutInstance = new WebGLHaldClut(readFileBuffer);
 
-type Payload = InitPayload | SeekPayload | IteratePayload | PausePayload | DestroyPayload | UpdateRendererPayload;
+type Payload = InitPayload | SeekPayload | IteratePayload | PausePayload | DestroyPayload | UpdateRendererPayload | PreloadPayload;
 
 const resolveSource = (path: string): Source => {
     const filePath = fileURLToPathInWorker(path);
@@ -141,6 +170,9 @@ const handleMessage = (event: MessageEvent<Payload>): void => {
         case "update":
             updateRenderer(payload);
             break;
+        case "preload":
+            preload(payload);
+            break;
     }
 }
 
@@ -156,7 +188,8 @@ const init = async (payload: InitPayload): Promise<void> => {
 
     const videoTrack = await input.getPrimaryVideoTrack();
     if (!videoTrack) {
-        throw new Error("No video track found");
+        console.error("No video track found");
+        return;
     }
 
     const duration = await videoTrack.computeDuration();
@@ -170,7 +203,8 @@ const init = async (payload: InitPayload): Promise<void> => {
     } else if (rendererName === "2d") {  
         renderer = new Canvas2DRenderer(id, self.postMessage.bind(self), canvas, width, height, haldClutInstance);
     } else {
-        throw new Error("Invalid renderer");
+        console.error("Invalid renderer");
+        return;
     }
 
     renderers.set(id, renderer);
@@ -178,7 +212,8 @@ const init = async (payload: InitPayload): Promise<void> => {
     let sink: EncodedPacketSink;
 
     if (!videoConfig) {
-        throw new Error("No video config found");
+        console.error("No video config found");
+        return;
     }
     
     if (encodedPacketSinkStates.has(path)) {
@@ -242,8 +277,7 @@ const init = async (payload: InitPayload): Promise<void> => {
         }
 
         const keyframePackets = packets.filter(p => p.type === "key");
-
-
+    
         videoStates.set(id, {
             id,
             input,
@@ -254,6 +288,7 @@ const init = async (payload: InitPayload): Promise<void> => {
             videoConfig: videoConfig,
             packetStats: packetStats
         });
+
 
         const onFrame = async (frame: VideoFrame) => {
            
@@ -266,7 +301,8 @@ const init = async (payload: InitPayload): Promise<void> => {
                 
             if (!renderState) {
                 frame.close();
-                throw new Error("Render state not found");
+                console.error("Render state not found");
+                return;
             }
     
             try {
@@ -346,13 +382,16 @@ const processSeekQueue = async (payload: SeekPayload): Promise<void> => {
 
 const seek = async (payload: SeekPayload): Promise<void> => {
     const { id, timestamp, speed, targetFps } = payload.data;
+
     const videoState = videoStates.get(id);
     const renderer = renderers.get(id);
-    renderer?.stop?.();
 
 
     const sourceFps = videoState?.packetStats.averagePacketRate ?? 30;
     renderer?.setup({ speed, sourceFps, targetFps, startTimestamp: timestamp });
+
+    renderer?.stop?.();
+
 
     // clear previous render states
     renderStates.delete(id);
@@ -368,7 +407,8 @@ const seek = async (payload: SeekPayload): Promise<void> => {
     renderStates.set(id, renderState);
 
     if (!videoState) {
-        throw new Error("Video state not found");
+        console.error("Video state not found");
+        return;
     }
 
     const sink = videoState.sink;
@@ -376,7 +416,8 @@ const seek = async (payload: SeekPayload): Promise<void> => {
     const keyframes = videoState.keyframePackets;
 
     if (keyframes.length === 0) {
-        throw new Error("No keyframes found");
+        console.error("No keyframes found");
+        return;
     }
 
     let keypacket: EncodedPacket | undefined;
@@ -385,7 +426,10 @@ const seek = async (payload: SeekPayload): Promise<void> => {
 
     keypacket = await sink.getPacket(currentKeyframe.timestamp) ?? undefined;
 
-    if (!keypacket) throw new Error("Cannot find keypacket")
+    if (!keypacket) {
+        console.error("Cannot find keypacket");
+        return;
+    }
 
     const metadataOnly = { metadataOnly: true };
     const targetPacket = await sink.getPacket(timestamp, metadataOnly);
@@ -393,7 +437,8 @@ const seek = async (payload: SeekPayload): Promise<void> => {
 
     const decoder = decoderStates.get(id);
     if (!decoder) {
-        throw new Error("Decoder not found");
+        console.error("Decoder not found");
+        return;
     }
 
     if (renderState.type === "seek") {
@@ -409,22 +454,87 @@ const seek = async (payload: SeekPayload): Promise<void> => {
         }
     }
     
-
     await decoder.flush();
 
 }
 
+const preload = async (payload: PreloadPayload): Promise<void> => {
+    let { id, startTimestamp, endTimestamp:realEndTimestamp, secondsToPrefetch, targetFps, speed, playbackState } = payload.data;
+    const videoState = videoStates.get(id);
+    const sink = videoState?.sink;
+    const keyframes = videoState?.keyframePackets;
+    const decoder = decoderStates.get(id);
+    const sourceFps = videoState?.packetStats.averagePacketRate ?? 30;
+    renderStates.delete(id);
+    const renderer = renderers.get(id);
+
+    renderer?.stop?.();
+    renderer?.setup({ speed, sourceFps, targetFps, startTimestamp, playbackState, accumlateOnly: true });
+    const endTimestamp = startTimestamp + secondsToPrefetch;
+
+    if (!sink || !keyframes || !decoder) {
+        console.error("Sink, keyframes, or decoder not found");
+        return;
+    }
+
+    let renderState = {
+        id,
+        type: "iterate",
+        startTimestamp,
+        endTimestamp: realEndTimestamp ?? endTimestamp,
+        stopDecode: false,
+        stopRender: false,
+        preload: true
+    } as RenderState;
+
+    renderStates.set(id, renderState);
+
+    const startKeyframeIndex = binarySearch(keyframes, startTimestamp);
+    const startKeyFrame = keyframes[startKeyframeIndex];
+    let startKeyFramePacket = await sink.getPacket(startKeyFrame.timestamp) ?? undefined;
+
+    const metadataOnly = { metadataOnly: true };
+    const targetPacket = await sink.getPacket(endTimestamp, metadataOnly);
+    const endPacket = targetPacket ? await sink.getNextPacket(targetPacket, metadataOnly) ?? undefined : undefined;
+    const iterator = sink.packets(startKeyFramePacket, endPacket);
+
+   
+    // prefetch the packets
+    if (decoderInUseStates.get(id) === true || requestDecoderStates.get(id) === true) {  // if decoder is in use, don't prefetch
+        return;
+    }
+
+    decoderInUseStates.set(id, true);
+
+    for await (const packet of iterator) {
+        if (requestDecoderStates.get(id) === true) {  // if decoder is in use, don't prefetch
+            break;
+        }
+        // we can yield on every packet since we don't really care about speed here, we just want to prefetch the packets
+        await new Promise(r => requestAnimationFrame(r));
+        decoder.decode(packet.toEncodedVideoChunk());
+    }
+
+    await decoder.flush();
+    decoderInUseStates.set(id, false);
+
+}
+
 const iterate = async (payload: IteratePayload): Promise<void> => {
-    const { id, startTimestamp, endTimestamp, speed, targetFps } = payload.data;
+    const { id, startTimestamp, endTimestamp, speed, targetFps, playbackState } = payload.data;
     const videoState = videoStates.get(id);
 
     const sourceFps = videoState?.packetStats.averagePacketRate ?? 30;
     // clear previous render states
+    const previousRenderState = renderStates.get(id);
     renderStates.delete(id);
     const renderer = renderers.get(id);
-    renderer?.setup({ speed, sourceFps, targetFps, startTimestamp });
-    if (!renderer) {
-        throw new Error("Renderer not found");
+
+    if (!(previousRenderState && previousRenderState.type === "iterate" && previousRenderState.preload === true && previousRenderState.startTimestamp === startTimestamp && previousRenderState.endTimestamp === endTimestamp)) {
+        renderer?.stop?.();
+        renderer?.setup({ speed, sourceFps, targetFps, startTimestamp, playbackState });
+    } else {
+        renderer?.startPlayback();
     }
   
     let renderState = {
@@ -439,7 +549,7 @@ const iterate = async (payload: IteratePayload): Promise<void> => {
     renderStates.set(id, renderState);
 
     if (!videoState) {
-        throw new Error("Video state not found");
+        return;
     }
 
     const sink = videoState.sink;
@@ -447,14 +557,13 @@ const iterate = async (payload: IteratePayload): Promise<void> => {
     const decoder = decoderStates.get(id);
 
     if (!decoder) {
-        throw new Error("Decoder not found");
+        console.error("Decoder not found");
+        return;
     }
 
     const startKeyframeIndex = binarySearch(keyframes, startTimestamp);
     const startKeyFrame = keyframes[startKeyframeIndex];
-    let startKeyFramePacket: EncodedPacket | undefined;
-
-    startKeyFramePacket = await sink.getPacket(startKeyFrame.timestamp) ?? undefined;
+    let startKeyFramePacket = await sink.getPacket(startKeyFrame.timestamp) ?? undefined;
 
     const metadataOnly = { metadataOnly: true };
     const targetPacket = endTimestamp ? await sink.getPacket(endTimestamp, metadataOnly) : undefined;
@@ -462,13 +571,24 @@ const iterate = async (payload: IteratePayload): Promise<void> => {
     ? await sink.getNextPacket(targetPacket, metadataOnly) ?? undefined : undefined;
 
     if (!startKeyFramePacket) {
-        throw new Error("Cannot find start keyframe packet");
+        console.error("Cannot find start keyframe packet");
+        return;
     }
 
     let packetCount = 0;
-    const fps = Math.round(videoStates.get(id)?.packetStats.averagePacketRate ?? 30);
+    const fps = Math.floor(Math.round(sourceFps) / 2);
+    const iterator = sink.packets(startKeyFramePacket, endPacket);
 
-    for await (const packet of sink.packets(startKeyFramePacket, endPacket)) {
+    requestDecoderStates.set(id, true);
+
+    while (decoderInUseStates.get(id) === true) {
+        await new Promise(r => requestAnimationFrame(r));
+    }
+
+    requestDecoderStates.set(id, false);
+    decoderInUseStates.set(id, true);
+    
+    for await (const packet of iterator) {
         decoder.decode(packet.toEncodedVideoChunk());
 
         if (renderState.stopDecode === true) {
@@ -478,14 +598,14 @@ const iterate = async (payload: IteratePayload): Promise<void> => {
         }
 
         if (packetCount % fps === 0) {
-            await new Promise(r => setTimeout(r, 0));
+            await new Promise(r => requestAnimationFrame(r));
         }
 
         packetCount++;
     }
 
     await decoder.flush();
-
+    decoderInUseStates.set(id, false);
 }
 
 const pause = async (payload: PausePayload): Promise<void> => {
@@ -493,9 +613,7 @@ const pause = async (payload: PausePayload): Promise<void> => {
     const renderState = renderStates.get(id);
     const renderer = renderers.get(id);
 
-    if (!renderState) {
-        throw new Error("Render state not found");
-    }
+    if (!renderState) return;
 
     renderState.stopDecode = true;
     renderState.stopRender = true;
@@ -507,17 +625,15 @@ const destroy = async (payload: DestroyPayload): Promise<void> => {
     const renderer = renderers.get(id);
     renderer?.stop?.();
     const renderState = renderStates.get(id);
+    const decoderState = decoderStates.get(id);
+
     if (!renderState) {
+        console.error("Render state not found");
         return;
     }   
 
     renderState.stopDecode = true;
     renderState.stopRender = true;
-    try {
-        await decoderStates.get(id)?.close();
-    } catch (e) {
-        console.error("Error closing decoder", e);
-    }
 
     videoStates.delete(id);
     canvasStates.delete(id);
@@ -528,13 +644,33 @@ const destroy = async (payload: DestroyPayload): Promise<void> => {
     renderers.delete(id);
     seekQueueStates.delete(id);
     seekInProgressStates.delete(id);
+
+    try {
+        await decoderState?.close();
+    } catch (e) {
+        console.error("Error closing decoder", e);
+    }
+
 }
 
 const updateRenderer = async (payload: UpdateRendererPayload): Promise<void> => {
     const { id, maskFrame, clip, focusFrame, filters, useMask = true } = payload.data;
     const renderer = renderers.get(id);
     try {
+        const signature = renderer?.getCurrentSignature();
+        let newSignature: string | null = null;
+        if (signature !== null) {
+            newSignature = renderer?.createUpdateSignature(maskFrame, clip, focusFrame, filters, useMask) ?? null;
+            
+            if (signature === newSignature) {
+                return;
+            }
+        } else {
+            // first update
+            newSignature = renderer?.createUpdateSignature(maskFrame, clip, focusFrame, filters, useMask) ?? null;
+        }
         await renderer?.update(maskFrame, clip, focusFrame, filters, useMask);
+        renderer?.setCurrentSignature(newSignature);
         self.postMessage({ type: "update_complete", data: { id, success: true } });
     } catch (e) {
         console.error("Error updating renderer", e);

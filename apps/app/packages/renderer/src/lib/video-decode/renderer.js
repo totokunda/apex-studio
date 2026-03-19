@@ -1,87 +1,4 @@
-class Scheduler {
-  targetFps;
-  speed;
-  drawFrame;
-  postMessage;
-  startWallTime = 0;
-  startTimestamp = 0;
-  running = false;
-  frameQueue = [];
-  lastDisplayedFrame = null;
-  lastDrawWallTime = 0;
-  id;
-  constructor(id, targetFps, speed, drawFrame, postMessage) {
-    this.id = id;
-    this.targetFps = targetFps;
-    this.speed = speed;
-    this.drawFrame = drawFrame;
-    this.postMessage = postMessage;
-  }
-  start(startTimestamp) {
-    this.stop();
-    this.startWallTime = performance.now();
-    this.startTimestamp = startTimestamp;
-    this.lastDrawWallTime = 0;
-    this.running = true;
-    this.tick();
-  }
-  stop() {
-    this.running = false;
-    this.lastDisplayedFrame?.close();
-    this.lastDisplayedFrame = null;
-    for (const { frame } of this.frameQueue) {
-      frame.close();
-    }
-    this.frameQueue = [];
-  }
-  enqueueFrame(frame) {
-    const timestamp = frame.timestamp / 1e6;
-    this.frameQueue.push({ frame, timestamp });
-  }
-  tick = () => {
-    if (!this.running) return;
-    const now = performance.now();
-    const minDrawIntervalMs = 1e3 / (this.targetFps * this.speed);
-    const canDraw = now - this.lastDrawWallTime >= minDrawIntervalMs;
-    if (canDraw) {
-      const elapsedSeconds = (now - this.startWallTime) / 1e3;
-      const currentMediaTime = this.startTimestamp + elapsedSeconds * this.speed;
-      const frameToDisplay = this.selectFrame(currentMediaTime);
-      if (frameToDisplay) {
-        if (this.lastDisplayedFrame && this.lastDisplayedFrame !== frameToDisplay.frame) {
-          this.lastDisplayedFrame.close();
-        }
-        this.drawFrame(frameToDisplay.frame);
-        this.lastDisplayedFrame = frameToDisplay.frame;
-        this.lastDrawWallTime = now;
-        this.discardFramesUpTo(frameToDisplay.timestamp);
-        this.postMessage({ type: "frame", data: { id: this.id, timestamp: frameToDisplay.frame.timestamp } });
-      }
-    }
-    if (this.running) {
-      requestAnimationFrame(this.tick);
-    }
-  };
-  selectFrame(currentMediaTime) {
-    let best = null;
-    for (const item of this.frameQueue) {
-      if (item.timestamp <= currentMediaTime) {
-        best = item;
-      } else {
-        break;
-      }
-    }
-    return best;
-  }
-  discardFramesUpTo(keepTimestamp) {
-    while (this.frameQueue.length > 0 && this.frameQueue[0].timestamp <= keepTimestamp) {
-      const item = this.frameQueue.shift();
-      if (item.frame !== this.lastDisplayedFrame) {
-        item.frame.close();
-      }
-    }
-  }
-}
+import Scheduler from "./scheduler";
 class Renderer {
   #speed = 1;
   #sourceFps = 30;
@@ -94,7 +11,7 @@ class Renderer {
     this.#id = id;
     this.#postMessage = postMessage;
   }
-  setup({ speed, sourceFps, targetFps, startTimestamp }) {
+  setup({ speed, sourceFps, targetFps, startTimestamp, playbackState, accumlateOnly = false }) {
     this.#speed = speed ?? this.#speed;
     this.#sourceFps = sourceFps ?? this.#sourceFps;
     this.#targetFps = targetFps ?? this.#targetFps;
@@ -102,8 +19,11 @@ class Renderer {
     this.#scheduler?.stop();
     this.#scheduler = new Scheduler(this.#id, this.#targetFps, this.#speed, this.drawFrame.bind(this), this.#postMessage.bind(this));
     if (startTimestamp !== void 0) {
-      this.#scheduler.start(startTimestamp);
+      this.#scheduler.start(startTimestamp, playbackState, { accumlateOnly });
     }
+  }
+  startPlayback() {
+    this.#scheduler?.beginTicking();
   }
   stop() {
     this.#scheduler?.stop();
@@ -119,12 +39,12 @@ class Renderer {
       if (Math.abs(frameTimestamp - seekTimestamp) < 0.01 && !renderState.stopRender) {
         this.drawFrame(frame);
         renderState.stopDecode = true;
-        this.#postMessage({ type: "frame", data: { id: renderState.id, timestamp: frame.timestamp } });
+        this.#postMessage({ type: "frame", data: { id: renderState.id, timestamp: frameTimestamp } });
       }
       frame.close();
     } else if (type === "iterate") {
       const { startTimestamp, endTimestamp } = renderState;
-      if (frameTimestamp >= startTimestamp && !renderState.stopRender) {
+      if (frameTimestamp >= startTimestamp && !renderState.stopRender && (!endTimestamp || frameTimestamp <= endTimestamp)) {
         this.#scheduler?.enqueueFrame(frame);
       } else {
         frame.close();

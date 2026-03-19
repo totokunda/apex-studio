@@ -62,6 +62,8 @@ import {
   isPolygonInsidePolygon,
   mergePolygons,
 } from "@/lib/polygon";
+import { SharedAudioContextProvider } from "./clips/shared/SharedAudioContextProvider";
+
 
 const getFiniteNumber = (value: number | undefined, fallback = 0): number =>
   Number.isFinite(value) ? (value as number) : fallback;
@@ -2790,7 +2792,7 @@ const Preview: React.FC<PreviewProps> = () => {
   }, []);
   
   return (
-    <>
+    <SharedAudioContextProvider>
       {isFullscreen ? (
         <FullscreenPreview onExit={() => setIsFullscreen(false)} />
       ) : (
@@ -2917,7 +2919,7 @@ const Preview: React.FC<PreviewProps> = () => {
                   }}
                 />
                 
-                {sortClips(filterClips(clips)).map((clip: AnyClipProps) => {
+                {sortClips(filterClips(clips)).map((clip: AnyClipProps, idx) => {
 
                   const clipAtFrameNoOverlap = clipWithinFrame(
                     clip,
@@ -2937,7 +2939,6 @@ const Preview: React.FC<PreviewProps> = () => {
                             rectHeight={rectHeight}
                             applicators={applicators}
                             overlap={clipAtFrameNoOverlap}
-                            hidden={!clipAtFrameNoOverlap}
                           />
                         );
                       case "image":
@@ -3133,7 +3134,7 @@ const Preview: React.FC<PreviewProps> = () => {
           {/* Fullscreen button */}
           <button
             onClick={() => setIsFullscreen(true)}
-            className="absolute bottom-4 right-4 p-2 bg-brand cursor-pointer hover:bg-brand-background-dark hover:text-brand-accent-light text-white rounded-md transition-colors"
+            className="absolute z-30 bottom-4 right-4 p-2 bg-brand cursor-pointer hover:bg-brand-background-dark hover:text-white text-white rounded-md transition-colors"
           >
             <SlSizeFullscreen className="h-3 w-3" />
           </button>
@@ -3165,7 +3166,7 @@ const Preview: React.FC<PreviewProps> = () => {
           })}
         </>
       }
-    </>
+    </SharedAudioContextProvider>
   );
 };
 

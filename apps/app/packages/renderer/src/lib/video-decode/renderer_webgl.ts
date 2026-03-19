@@ -38,6 +38,26 @@ class WebGLRenderer extends Renderer {
   #focusFrame: number | null = null;
   #filters: FilterClipProps[] = [];
   #useMask: boolean = true;
+  currentSignature: string | null = null;
+
+  setCurrentSignature(signature: string | null): void {
+    this.currentSignature = signature;
+  }
+
+  getCurrentSignature(): string | null {
+    return this.currentSignature;
+  }
+
+  createUpdateSignature(maskFrame: number, clip: VideoClipProps, focusFrame: number, filters: FilterClipProps[], useMask: boolean): string {
+    const signature = JSON.stringify({
+      maskFrame,
+      clip,
+      focusFrame,
+      filters,
+      useMask,
+    });
+    return signature;
+  }
 
   update(maskFrame: number, clip: VideoClipProps, focusFrame: number, filters: FilterClipProps[], useMask: boolean): void {
     this.#filterParams = {
