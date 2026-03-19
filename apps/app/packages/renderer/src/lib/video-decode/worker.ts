@@ -62,7 +62,7 @@ type DestroyPayload = {
     type: "destroy"
     data: {
         id: string;
-        canvasId: string;
+        canvasId?: string;
     }
 }
 
@@ -124,7 +124,6 @@ type RenderState = {
     stopRender: boolean;
     preload?: boolean;
 }
-
 
 const videoStates = new Map<string, VideoState>();
 const canvasStates = new Map<string, OffscreenCanvas>();
@@ -220,7 +219,9 @@ const init = async (payload: InitPayload): Promise<void> => {
         source: source
     });
 
+
     const videoTrack = await input.getPrimaryVideoTrack();
+
     if (!videoTrack) {
         console.error("No video track found");
         return;
@@ -329,6 +330,7 @@ const init = async (payload: InitPayload): Promise<void> => {
             hasAlpha: hasAlpha
         });
 
+
         if (hasAlpha) {
             pendingColorFramesByTimestamp.set(id, new Map());
             alphaFramesByTimestamp.set(id, new Map());
@@ -368,6 +370,7 @@ const init = async (payload: InitPayload): Promise<void> => {
                 }
                 return drawToRenderer(id, merged, renderState);
             }
+
             pendingColorFramesByTimestamp.get(id)?.set(ts, frame);
   
         }
@@ -400,6 +403,7 @@ const init = async (payload: InitPayload): Promise<void> => {
           } 
 
           const alphaFrames = alphaFramesByTimestamp.get(id);
+
           if (alphaFrames) {
             if (alphaFrames.size >= 60) {
             const firstKey = alphaFrames?.keys().next().value;
@@ -423,8 +427,8 @@ const init = async (payload: InitPayload): Promise<void> => {
             alphaDecoderStates.set(id, alphaDecoder);
         }
 
-         
         self.postMessage({ type: "init_complete", data: { id, duration } });
+
     };
 }
 
@@ -745,8 +749,10 @@ const pause = async (payload: PausePayload): Promise<void> => {
 
 const destroy = async (payload: DestroyPayload): Promise<void> => {
     const { id, canvasId } = payload.data;
+
     const renderer = renderers.get(id);
     renderer?.stop?.();
+    
     const renderState = renderStates.get(id);
     const decoderState = decoderStates.get(id);
 
@@ -759,7 +765,9 @@ const destroy = async (payload: DestroyPayload): Promise<void> => {
     renderState.stopRender = true;
 
     videoStates.delete(id);
-    canvasStates.delete(canvasId);
+    if (canvasId) {
+        canvasStates.delete(canvasId);
+    }
     encodedPacketSinkStates.delete(id);
     renderStates.delete(id);
     decoderStates.delete(id);
@@ -773,6 +781,7 @@ const destroy = async (payload: DestroyPayload): Promise<void> => {
     } catch (e) {
         console.error("Error closing decoder", e);
     }
+    
 
 }
 

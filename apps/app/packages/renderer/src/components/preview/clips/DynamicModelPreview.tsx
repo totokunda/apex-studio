@@ -10,6 +10,7 @@ import _ from "lodash";
 
 interface DynamicModelPreviewProps {
   clip: ModelClipProps;
+  decoderKey?: string;
   rectWidth: number;
   rectHeight: number;
   applicators: BaseClipApplicator[];
@@ -21,6 +22,7 @@ interface DynamicModelPreviewProps {
 
 const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
   clip,
+  decoderKey,
   rectWidth,
   rectHeight,
   applicators,
@@ -77,6 +79,7 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
           masks: [],
           preprocessors: [],
         })}
+        decoderKey={decoderKey}
         rectWidth={rectWidth}
         rectHeight={rectHeight}
         applicators={applicators}

@@ -394,6 +394,7 @@ const FullscreenPreview: React.FC<FullscreenPreviewProps> = ({ onExit }) => {
                       rectHeight={rectHeight}
                       applicators={applicators}
                       overlap={clipAtFrameNoOverlap}
+                      decoderKey={`fullscreen::${clip.clipId}`}
                     />
                   );
                 case "shape":

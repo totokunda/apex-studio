@@ -183,13 +183,18 @@ const JobsMenu: React.FC = () => {
           (typeof job?.message === "string" && job.message) ||
           "Job failed";
         const last = lastToastedErrorByJobIdRef.current.get(jobId);
-        if (last === msg) continue;
-        lastToastedErrorByJobIdRef.current.set(jobId, msg);
+        const stored = sessionStorage.getItem("jobs-menu-toasted-errors");
+        const lastToasted = stored ? JSON.parse(stored) : {};
+        // Check
+        if (lastToasted[jobId] === msg || last === msg) continue;
+        lastToasted[jobId] = msg;
+        sessionStorage.setItem("jobs-menu-toasted-errors", JSON.stringify(lastToasted));
         const category = String((job as any)?.category || "job");
         toast.error(`${capitalizeWords(category)} Failed`, {
           id: `job-error-${jobId}`,
           description: msg,
           duration: 8000,
+          dismissible: true,
         });
       }
     } catch {
