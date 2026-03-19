@@ -53,6 +53,7 @@ spec:
   - sage
   - metal_flash
   - efficient_dot_product_attention
+  components:
   - type: scheduler
     label: Scheduler
     default: Beta57Scheduler
@@ -72,6 +73,10 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 253806934
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
   - type: text_encoder
     label: WAN Text Encoder
     base: UMT5EncoderModel
@@ -82,14 +87,26 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 11361851224
+      resource_requirements:
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 6731313000
+      resource_requirements:
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     - path: totoku/apex-models/Wan2.1-T2V/text_encoder/text_encoder-q8_0.gguf
       variant: Q8
       precision: q8_0
       type: gguf
+      file_size: 7027437536
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     tokenizer_class: T5Tokenizer
     tokenizer_name: totoku/apex-models
     tokenizer_kwargs:
@@ -103,22 +120,42 @@ spec:
       variant: default
       precision: bf16
       type: safetensors
+      file_size: 32591644930
+      resource_requirements:
+        min_vram_gb: 29
+        recommended_vram_gb: 39
     - path: totoku/apex-models/Wan2.2-S2V/transformer/transformer-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8_e4m3fn
       type: safetensors
+      file_size: 18540764250
+      resource_requirements:
+        min_vram_gb: 22
+        recommended_vram_gb: 30
     - path: totoku/apex-models/Wan2.2-S2V/transformer/transformer-q8_0.gguf
       variant: Q8
       precision: q8_0
       type: gguf
+      file_size: 19418856544
+      resource_requirements:
+        min_vram_gb: 20
+        recommended_vram_gb: 27
     - path: totoku/apex-models/Wan2.2-S2V/transformer/transformer-q6_k.gguf
       variant: Q6
       precision: q6_k
       type: gguf
+      file_size: 16015899744
+      resource_requirements:
+        min_vram_gb: 14
+        recommended_vram_gb: 19
     - path: totoku/apex-models/Wan2.2-S2V/transformer/transformer-q4_k_m.gguf
       variant: Q4
       precision: q4_k_m
       type: gguf
+      file_size: 12393397344
+      resource_requirements:
+        min_vram_gb: 10
+        recommended_vram_gb: 14
   - type: helper
     name: audio_processor
     label: Audio Processor
@@ -129,6 +166,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 1841
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   - type: helper
     name: audio_encoder
     label: Audio Encoder
@@ -139,6 +180,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 1261945024
+      resource_requirements:
+        min_vram_gb: 5
+        recommended_vram_gb: 9
   defaults:
     run:
       num_inference_steps: 8

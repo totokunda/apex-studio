@@ -45,12 +45,14 @@ spec:
     name: high_noise_lightning_lora
     label: High Noise Lightning LoRA
     component: high_noise_transformer
+    file_size: 1226977424
   - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/low_noise_model.safetensors
     scale: 1.0
     verified: true
     name: low_noise_lightning_lora
     label: Low Noise Lightning LoRA
     component: low_noise_transformer
+    file_size: 1226977424
   components:
   - type: scheduler
     label: Scheduler
@@ -109,8 +111,8 @@ spec:
     name: high_noise_transformer
     base: wan.fun_vace
     block_modules:
-      - blocks
-      - vace_blocks
+    - blocks
+    - vace_blocks
     model_path:
     - path: alibaba-pai/Wan2.2-VACE-Fun-A14B/high_noise_model
       variant: default
@@ -201,14 +203,13 @@ spec:
         min_vram_gb: 9
         recommended_vram_gb: 13
     config_path: alibaba-pai/Wan2.2-VACE-Fun-A14B/high_noise_model/config.json
-  
   - type: transformer
     label: Low Noise Transformer
     name: low_noise_transformer
     base: wan.fun_vace
     block_modules:
-      - vace_blocks
-      - blocks
+    - vace_blocks
+    - blocks
     model_path:
     - path: alibaba-pai/Wan2.2-VACE-Fun-A14B/low_noise_model
       variant: default
@@ -591,7 +592,8 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

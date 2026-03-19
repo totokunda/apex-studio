@@ -44,12 +44,14 @@ spec:
     name: high_noise_lightning_lora
     label: High Noise Lightning LoRA
     component: high_noise_transformer
+    file_size: 1226977424
   - source: lightx2v/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V2.0/low_noise_model.safetensors
     scale: 1.0
     verified: true
     name: low_noise_lightning_lora
     label: Low Noise Lightning LoRA
     component: low_noise_transformer
+    file_size: 1226977424
   components:
   - type: scheduler
     label: Scheduler

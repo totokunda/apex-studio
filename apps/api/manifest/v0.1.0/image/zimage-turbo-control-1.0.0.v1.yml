@@ -76,6 +76,9 @@ spec:
       variant: Var
       custom: true
       file_size: 8044982048
+      resource_requirements:
+        min_vram_gb: 12
+        recommended_vram_gb: 16
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: Tongyi-MAI/Z-Image-Turbo
     tokenizer_kwargs:
@@ -85,8 +88,25 @@ spec:
     base: zimage.control
     config_path: Tongyi-MAI/Z-Image-Turbo/transformer/config.json
     config:
-      control_layers_places: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28]
-      control_refiner_layers_places: [0, 1]
+      control_layers_places:
+      - 0
+      - 2
+      - 4
+      - 6
+      - 8
+      - 10
+      - 12
+      - 14
+      - 16
+      - 18
+      - 20
+      - 22
+      - 24
+      - 26
+      - 28
+      control_refiner_layers_places:
+      - 0
+      - 1
       add_control_noise_refiner: true
       add_control_noise_refiner_correctly: true
       control_in_dim: 33

@@ -340,3 +340,4 @@ spec:
     label: Camera Angles
     verified: true
     source: https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/resolve/main/qwen-image-edit-2511-multiple-angles-lora.safetensors
+    file_size: 295140688

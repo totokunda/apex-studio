@@ -42,11 +42,13 @@ spec:
     label: Qwen Image Lightning 4 Steps
     verified: true
     source: lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
+    file_size: 849608296
   - scale: 0.0
     name: Camera Lora
     label: Camera Lora
     verified: true
     source: https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/resolve/main/qwen-image-edit-2511-multiple-angles-lora.safetensors
+    file_size: 295140688
   components:
   - type: scheduler
     label: Scheduler
@@ -105,6 +107,9 @@ spec:
       variant: Default Variant Local
       custom: true
       file_size: 16584475660
+      resource_requirements:
+        min_vram_gb: 19
+        recommended_vram_gb: 26
     tokenizer_class: Qwen2Tokenizer
     tokenizer_name: Qwen/Qwen-Image
     tokenizer_kwargs:

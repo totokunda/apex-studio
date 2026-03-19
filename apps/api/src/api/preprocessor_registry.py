@@ -155,15 +155,6 @@ def list_preprocessors(check_downloaded: bool = False) -> List[Dict[str, Any]]:
     return sorted(result, key=lambda x: x["name"])
 
 
-def initialize_download_tracking():
-    """
-    Backwards-compatibility shim (no-op).
-
-    Download status is derived from the preprocessor manifest's `files:` section by
-    checking for the presence of those files on disk.
-    """
-    return None
-
 
 def check_preprocessor_downloaded(preprocessor_name: str) -> bool:
     """

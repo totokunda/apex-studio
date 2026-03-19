@@ -2773,6 +2773,11 @@ def _run_engine_from_manifest_impl(
                 "Model weights ready",
                 {"status": "processing", "stage": "weights_download"},
             )
+        
+
+        db = get_manifest_db()
+        for path in getattr(engine, "downloaded_paths", []):
+            db.refresh_manifests_by_path(str(path))
 
         # Compute FPS once so we don't capture the full engine/config inside callbacks.
         fps_for_video: int = 16
@@ -3306,10 +3311,7 @@ def _run_engine_from_manifest_impl(
                 db.refresh_manifest(manifest_id)
  
             
-            logger.info(f"Downloaded paths: {getattr(engine, 'downloaded_paths', [])}")
-                
-            for path in getattr(engine, "downloaded_paths", []):
-                db.refresh_manifests_by_path(str(path))
+            
         # Ensure we aggressively release references.
         # If the engine is pooled, do NOT clear torch caches (keeps it warm).
         # If not pooled, do best-effort offload + cache clearing.

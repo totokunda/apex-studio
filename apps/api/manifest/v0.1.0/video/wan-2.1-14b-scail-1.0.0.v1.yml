@@ -38,7 +38,7 @@ spec:
   - flash
   - flash3
   - sage
-  - metal_flash               
+  - metal_flash
   - efficient_dot_product_attention
   loras:
   - source: lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors
@@ -47,6 +47,7 @@ spec:
     label: Lightx2v LoRA
     component: transformer
     verified: true
+    file_size: 739472104
   components:
   - type: scheduler
     label: Scheduler
@@ -457,7 +458,8 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

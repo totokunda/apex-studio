@@ -56,8 +56,8 @@ spec:
       type: safetensors
       file_size: 507592616
       resource_requirements:
-        min_vram_gb: 11
-        recommended_vram_gb: 15
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/vae/config.json
   - type: text_encoder
     label: WAN Text Encoder
@@ -70,16 +70,16 @@ spec:
       type: safetensors
       file_size: 11361874539
       resource_requirements:
-        min_vram_gb: 17
-        recommended_vram_gb: 23
+        min_vram_gb: 15
+        recommended_vram_gb: 20
     - path: Kijai/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
       variant: FP8
       precision: fp8
       type: safetensors
       file_size: 6731333792
       resource_requirements:
-        min_vram_gb: 15
-        recommended_vram_gb: 20
+        min_vram_gb: 13
+        recommended_vram_gb: 18
     config_path: Wan-AI/Wan2.2-I2V-A14B-Diffusers/text_encoder/config.json
   - type: transformer
     label: MOVA Audio Transformer
@@ -90,6 +90,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 2838471297
+      resource_requirements:
+        min_vram_gb: 7
+        recommended_vram_gb: 11
     config_path: OpenMOSS-Team/MOVA-360p/audio_dit/config.json
   - type: vae
     label: MOVA Audio VAE
@@ -100,6 +104,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 743103265
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     config_path: OpenMOSS-Team/MOVA-360p/audio_vae/config.json
   - type: helper
     label: Dual Tower Bridge
@@ -110,6 +118,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 5319562016
+      resource_requirements:
+        min_vram_gb: 8
+        recommended_vram_gb: 12
     config_path: OpenMOSS-Team/MOVA-360p/dual_tower_bridge/config.json
   - type: transformer
     label: High Noise Transformer
@@ -120,6 +132,10 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 28578011818
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     config_path: OpenMOSS-Team/MOVA-360p/video_dit/config.json
   - type: transformer
     label: Low Noise Transformer
@@ -130,8 +146,11 @@ spec:
       variant: default
       precision: fp16
       type: safetensors
+      file_size: 28578011820
+      resource_requirements:
+        min_vram_gb: 26
+        recommended_vram_gb: 35
     config_path: OpenMOSS-Team/MOVA-360p/video_dit_2/config.json
-
   defaults:
     run:
       num_inference_steps: 50
@@ -232,7 +251,12 @@ spec:
       type: text
       panel: advanced_prompting
       required: false
-      default: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指"
+      default: "\u8272\u8C03\u8273\u4E3D\uFF0C\u8FC7\u66DD\uFF0C\u9759\u6001\uFF0C\
+        \u7EC6\u8282\u6A21\u7CCA\u4E0D\u6E05\uFF0C\u5B57\u5E55\uFF0C\u98CE\u683C\uFF0C\
+        \u4F5C\u54C1\uFF0C\u753B\u4F5C\uFF0C\u753B\u9762\uFF0C\u9759\u6B62\uFF0C\u6574\
+        \u4F53\u53D1\u7070\uFF0C\u6700\u5DEE\u8D28\u91CF\uFF0C\u4F4E\u8D28\u91CF\uFF0C\
+        JPEG\u538B\u7F29\u6B8B\u7559\uFF0C\u4E11\u964B\u7684\uFF0C\u6B8B\u7F3A\u7684\
+        \uFF0C\u591A\u4F59\u7684\u624B\u6307"
     - id: resolution
       label: Resolution
       description: Select the resolution of the output image
@@ -348,14 +372,16 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false
       required: false
     - id: use_easy_cache
       label: Use Easy Cache
-      description: Use the Easy Cache to speed up the generation, at the cost of some quality.
+      description: Use the Easy Cache to speed up the generation, at the cost of some
+        quality.
       type: boolean
       panel: easy_cache
       required: false

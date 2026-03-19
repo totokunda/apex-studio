@@ -340,3 +340,4 @@ spec:
     label: Qwen Image Lightning 8 Steps
     verified: true
     source: lightx2v/Qwen-Image-Lightning/Qwen-Image-Edit-2509/Qwen-Image-Edit-2509-Lightning-8steps-V1.0-bf16.safetensors
+    file_size: 849608296

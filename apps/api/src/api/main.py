@@ -32,6 +32,7 @@ from src.utils.defaults import (
 
 from src.manifest.startup_migration import run_startup_manifest_migration_safe
 import errno
+from .component_watchdog import start_components_watchdog, stop_components_watchdog
 
 _ray_ready: bool = False
 _ray_start_error: Optional[str] = None
@@ -121,11 +122,6 @@ async def _start_background_services() -> None:
 
         get_ray_ws_bridge()
 
-        # Initialize preprocessor download tracking
-        from .preprocessor_registry import initialize_download_tracking
-
-        initialize_download_tracking()
-
         _ray_ready = True
     except Exception as e:
         _ray_start_error = repr(e)
@@ -135,13 +131,15 @@ async def _start_background_services() -> None:
 async def lifespan(app: FastAPI):
 
     _start_parent_watchdog()
+    
     # Startup-only migration: preserve compatibility for users with legacy
     # downloaded weights by mapping v0.1.0 paths into v0.1.2 local manifests.
     run_startup_manifest_migration_safe()
     # Startup: initialize Ray and related services before accepting requests.
     # This avoids thread-based Ray init races during early request handling.
+    start_components_watchdog()
     await _start_background_services()
-
+    
     # Start background task for polling Ray updates
     from .preprocessor import poll_ray_updates
 
@@ -156,6 +154,8 @@ async def lifespan(app: FastAPI):
         await poll_task
     except asyncio.CancelledError:
         pass
+
+    stop_components_watchdog()
     shutdown_ray()
 
 

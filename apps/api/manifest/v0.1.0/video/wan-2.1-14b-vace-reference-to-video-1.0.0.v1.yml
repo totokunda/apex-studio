@@ -44,12 +44,14 @@ spec:
     label: Lightx2v LoRA
     component: transformer
     verified: true
+    file_size: 631344264
   - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Phantom_Wan_14B_FusionX_LoRA.safetensors
     scale: 0.0
     name: fusionx_lora
     label: FusionX LoRA
     component: transformer
     verified: true
+    file_size: 316822496
   components:
   - type: scheduler
     label: Scheduler
@@ -423,7 +425,8 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

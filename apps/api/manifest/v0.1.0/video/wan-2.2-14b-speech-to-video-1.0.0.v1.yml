@@ -31,12 +31,14 @@ spec:
     label: Lightx2v T2V LoRA
     component: transformer
     verified: true
+    file_size: 631344264
   - source: vrgamedevgirl84/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_T2V_14B_FusionX_LoRA.safetensors
     scale: 1.0
     name: fusionx_t2v_lora
     label: FusionX T2V LoRA
     component: transformer
     verified: true
+    file_size: 316822496
   compute_requirements:
     min_cuda_compute_capability: 7.5
     supported_compute_types:
@@ -457,7 +459,8 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

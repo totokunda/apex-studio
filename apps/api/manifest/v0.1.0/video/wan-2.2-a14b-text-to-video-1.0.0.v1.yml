@@ -43,12 +43,14 @@ spec:
     name: high_noise_lightning_lora
     label: High Noise Lightning LoRA
     component: high_noise_transformer
+    file_size: 613518320
   - source: lightx2v/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors
     scale: 1.0
     verified: true
     name: low_noise_lightning_lora
     label: Low Noise Lightning LoRA
     component: low_noise_transformer
+    file_size: 613518320
   components:
   - type: scheduler
     label: Scheduler
@@ -494,7 +496,8 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

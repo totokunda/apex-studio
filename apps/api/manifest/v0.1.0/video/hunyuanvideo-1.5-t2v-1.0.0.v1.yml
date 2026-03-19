@@ -33,6 +33,7 @@ spec:
     label: Lightx2v LoRA
     component: transformer
     verified: true
+    file_size: 341065682
   attention_types:
   - sdpa
   - flash
@@ -40,7 +41,6 @@ spec:
   - flash3
   - metal_flash
   - efficient_dot_product_attention
-  
   components:
   - type: scheduler
     label: Scheduler
@@ -149,7 +149,6 @@ spec:
         min_vram_gb: 11
         recommended_vram_gb: 15
       file_size: 4920538336
-    
   - type: text_encoder
     label: Qwen2.5 VL Text Encoder
     base: Qwen2_5_VLForConditionalGeneration
@@ -400,7 +399,8 @@ spec:
         value: aggressive
     - id: rope_on_cpu
       label: Rope Frequency on CPU
-      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are moved to GPU only when needed.
+      description: Keep RoPE frequency tables on CPU to save VRAM; small slices are
+        moved to GPU only when needed.
       type: boolean
       panel: chunking_profile
       default: false

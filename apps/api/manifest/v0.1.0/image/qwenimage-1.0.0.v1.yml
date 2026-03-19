@@ -40,12 +40,14 @@ spec:
     verified: true
     label: Lightning LoRA 4 Steps
     component: transformer
+    file_size: 849608296
   - name: lightning-lora-8-steps
     source: lightx2v/Qwen-Image-Lightning/Qwen-Image-Lightning-8steps-V1.0-bf16.safetensors
     scale: 0.0
     verified: true
     label: Lightning LoRA 8 Steps
     component: transformer
+    file_size: 15
   components:
   - type: scheduler
     label: Scheduler

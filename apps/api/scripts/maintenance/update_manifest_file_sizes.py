@@ -287,12 +287,14 @@ def update_manifest_file(path: Path) -> bool:
     components: List[Dict[str, Any]] = spec.get("components") or []
     loras = spec.get("loras") or []
     changed = False
-
+    
     for comp in components:
+
         if not isinstance(comp, dict):
             continue
         component_type = comp.get("type") or ""
         mp = comp.get("model_path")
+        
         if mp is None:
             continue
         # Normalize string → list[dict]
@@ -317,6 +319,7 @@ def update_manifest_file(path: Path) -> bool:
                 continue
             # Prefer explicit "path", but also allow "url" for remote artefacts
             path_value = item.get("path") or item.get("url")
+ 
             if not path_value or not isinstance(path_value, str):
                 continue
 
