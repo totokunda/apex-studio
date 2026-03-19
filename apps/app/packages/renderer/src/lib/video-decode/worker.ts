@@ -14,8 +14,9 @@ const DATABASE_NAME = "media-packets";
 type InitPayload = {
     type: "init"
     data: {
+        canvasId: string;
         id: string;
-        canvas: OffscreenCanvas;
+        canvas?: OffscreenCanvas;
         path: string;
         renderer: "webgl2" | "webgpu" | "2d";
         width: number;
@@ -61,6 +62,7 @@ type DestroyPayload = {
     type: "destroy"
     data: {
         id: string;
+        canvasId: string;
     }
 }
 
@@ -199,9 +201,19 @@ const handleMessage = (event: MessageEvent<Payload>): void => {
 }
 
 const init = async (payload: InitPayload): Promise<void> => {
-    const { canvas, path, id, renderer: rendererName = "2d", width, height } = payload.data;
+    let { canvasId, canvas, path, id, renderer: rendererName = "2d", width, height } = payload.data;
     const source = resolveSource(path);
-    canvasStates.set(id, canvas);
+
+    if (!canvas) {
+        // ensure canvas is present in canvasStates
+        canvas = canvasStates.get(canvasId);
+        if (!canvas) {
+            console.error("Canvas not found");
+            return;
+        }
+    } else {
+        canvasStates.set(canvasId, canvas);
+    }
 
     const input = new Input({
         formats: ALL_FORMATS,
@@ -732,7 +744,7 @@ const pause = async (payload: PausePayload): Promise<void> => {
 }
 
 const destroy = async (payload: DestroyPayload): Promise<void> => {
-    const { id } = payload.data;
+    const { id, canvasId } = payload.data;
     const renderer = renderers.get(id);
     renderer?.stop?.();
     const renderState = renderStates.get(id);
@@ -747,7 +759,7 @@ const destroy = async (payload: DestroyPayload): Promise<void> => {
     renderState.stopRender = true;
 
     videoStates.delete(id);
-    canvasStates.delete(id);
+    canvasStates.delete(canvasId);
     encodedPacketSinkStates.delete(id);
     renderStates.delete(id);
     decoderStates.delete(id);

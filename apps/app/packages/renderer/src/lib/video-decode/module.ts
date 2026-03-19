@@ -5,6 +5,7 @@ const worker = new Worker(new URL('./dist/worker.js', import.meta.url), {
 });
 
 interface InitParams {
+    canvasId: string;
     canvas: HTMLCanvasElement;
     sourceOrPath: string;
     id: string;
@@ -46,6 +47,7 @@ interface PauseParams {
 
 interface DestroyParams {
     id: string;
+    canvasId: string;
 }
 
 interface UpdateRendererParams {
@@ -93,12 +95,9 @@ class VideoDecoderModule {
     }
 
     init(params: InitParams) {
-        const { canvas, sourceOrPath, id, renderer, onInitComplete, onFrame, onUpdateComplete, width, height } = params;
+        const { canvasId, canvas, sourceOrPath, id, renderer, onInitComplete, onFrame, onUpdateComplete, width, height } = params;
 
-        if (this.transferredCanvases.has(canvas)) {
-            return;
-        }
-
+        
         if (onInitComplete) {
             this.initCallbacks.set(id, onInitComplete);
         }
@@ -113,12 +112,27 @@ class VideoDecoderModule {
         }
 
         // check if the canvas is already transferred 
+        if (this.transferredCanvases.has(canvas)) {
+            
+            return this.worker.postMessage({
+                type: "init",
+                data: {
+                    canvasId,
+                    path:sourceOrPath,
+                    id,
+                    renderer,
+                    width,
+                    height
+                }
+            });
+        }
         const offscreenCanvas = canvas.transferControlToOffscreen();
         this.transferredCanvases.add(canvas);
 
         this.worker.postMessage({
             type: "init",
             data: {
+                canvasId,
                 canvas: offscreenCanvas,
                 path:sourceOrPath,
                 id,

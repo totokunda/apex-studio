@@ -1,4 +1,4 @@
-import { FilterClipProps, MediaInfo, VideoClipProps } from "@/lib/types";
+import { AnyClipProps, FilterClipProps, MediaInfo, VideoClipProps, clipSignature } from "@/lib/types";
 import React, {
   useCallback,
   useEffect,
@@ -64,15 +64,59 @@ const toSourceProjectFrame = (
   return Math.max(0, (trimStart || 0) + timelineLocalFrame * speedFactor);
 };
 
-const createUpdateSignature = (maskFrame: number, clip: VideoClipProps, focusFrame: number, filters: FilterClipProps[], useMask: boolean): string => {
-  return JSON.stringify({
-    maskFrame,
-    clip,
-    focusFrame,
-    filters,
-    useMask,
-  });
+function filtersSignature(filters: FilterClipProps[]): string {
+  if (!filters?.length) return "";
+  return filters
+    .map((f) =>
+      [
+        f.clipId ?? "",
+        f.smallPath ?? "",
+        f.fullPath ?? "",
+        f.intensity ?? 100,
+        f.startFrame ?? 0,
+        f.endFrame ?? 0,
+      ].join(",")
+    )
+    .join("|");
 }
+
+function clipRenderSignature(clip: VideoClipProps): string {
+  const base = clipSignature(clip as AnyClipProps);
+  const adj = [
+    clip?.brightness,
+    clip?.contrast,
+    clip?.hue,
+    clip?.saturation,
+    clip?.blur,
+    clip?.sharpness,
+    clip?.noise,
+    clip?.vignette,
+    clip?.colorTintColor,
+    clip?.colorTintIntensity,
+    clip?.scanLines,
+    clip?.chromaticAberration,
+    clip?.interlace,
+    clip?.pixelate,
+    clip?.jitter,
+  ].join(",");
+  return `${base};${adj}`;
+}
+
+const createUpdateSignature = (
+  maskFrame: number,
+  clip: VideoClipProps,
+  focusFrame: number,
+  filters: FilterClipProps[],
+  useMask: boolean
+): string => {
+  return [
+    maskFrame,
+    focusFrame,
+    useMask ? "1" : "0",
+    clipRenderSignature(clip),
+    filtersSignature(filters),
+  ].join("::");
+};
 
 const VideoPreview: React.FC<
   VideoClipProps & {
@@ -119,7 +163,7 @@ const VideoPreview: React.FC<
   hidden = false,
 }) => {
 
-  const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(assetId) || null);
+  
   // `mediaInfo` is stored in a ref for fast access by decoder callbacks, but ref updates
   // don't trigger React renders. We bump this version whenever `mediaInfo.current` changes
   // so aspect-fit sizing and Konva props update immediately (no "wait until drag" issues).
@@ -353,6 +397,11 @@ const VideoPreview: React.FC<
     return makeDecoderId(selectedAssetId);
   }, [selectedAssetId, clipId, decoderKey, inputMode, inputId]);
 
+  const mediaInfo = useRef<MediaInfo | null>(getMediaInfoCached(selectedAssetId) || null);
+
+  useEffect(() => {
+    mediaInfo.current = getMediaInfoCached(selectedAssetId ?? "") || null;
+  }, [selectedAssetId]);
 
   const maskFrameForCurrentFocus = useMemo(() => {
     if (clip) {
@@ -531,7 +580,6 @@ const VideoPreview: React.FC<
     isInFrameRef.current = isInFrame;
   }, [isInFrame]);
 
-
   // Create canvas once and expose to Konva Image via state so initial render receives it
   useEffect(() => {
     if (!canvasRef.current) {
@@ -549,7 +597,6 @@ const VideoPreview: React.FC<
       setImageSource(null);
     };
   }, []);
-
 
   // Compute aspect-fit display size and offsets within the preview rect
   const { displayWidth, displayHeight, offsetX, offsetY } = useMemo(() => {
@@ -656,6 +703,7 @@ const VideoPreview: React.FC<
     initCompleteRef.current = true;
     const targetFrameInfo = getTargetFrameInfoRef.current();
     if (!isInFrameRef.current) return;
+    
     if (targetFrameInfo) {
       if (isPlayingRef.current) {
         // we want to continue iterating from the current frame
@@ -686,9 +734,9 @@ const VideoPreview: React.FC<
 
   const decoderSources = useMemo(() => {
     // get all assetIDs from the clip and preprocessors
-    const assetIds = [assetId, ...(clip?.preprocessors ?? []).map((p) => p.assetId)];
+    const assetIds = [selectedAssetId, ...(clip?.preprocessors ?? []).map((p) => p.assetId)];
     return assetIds.filter((id): id is string => id !== undefined);
-  }, [mediaInfo.current?.path, clip?.preprocessors]);
+  }, [clip?.preprocessors, selectedAssetId]);
 
 
   useEffect(() => {
@@ -707,6 +755,7 @@ const VideoPreview: React.FC<
       );
 
       videoDecoder.init({
+         canvasId: clipId,
          canvas: canvasRef.current,
          sourceOrPath: currentMediaInfo?.path || "",
          renderer: "2d",
@@ -728,6 +777,7 @@ const VideoPreview: React.FC<
         const currentDecoderId = makeDecoderId(source);
         videoDecoder.destroy({
           id: currentDecoderId,
+          canvasId: clipId,
         });
       }
     }
