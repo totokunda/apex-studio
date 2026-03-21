@@ -4,6 +4,18 @@ import torch
 
 from src.transformer.ltx2.base2.timestep_embedding import PixArtAlphaCombinedTimestepSizeEmbeddings
 
+# Number of AdaLN modulation parameters per transformer block.
+# Base: 2 params (shift + scale) x 3 norms (self-attn, feed-forward, output).
+ADALN_NUM_BASE_PARAMS = 6
+# Cross-attention AdaLN adds 3 more (scale, shift, gate) for the CA norm.
+ADALN_NUM_CROSS_ATTN_PARAMS = 3
+
+
+def adaln_embedding_coefficient(cross_attention_adaln: bool) -> int:
+    """Total number of AdaLN parameters per block."""
+    return ADALN_NUM_BASE_PARAMS + (ADALN_NUM_CROSS_ATTN_PARAMS if cross_attention_adaln else 0)
+
+
 
 class AdaLayerNormSingle(torch.nn.Module):
     r"""

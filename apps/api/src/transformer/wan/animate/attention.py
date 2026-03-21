@@ -130,6 +130,7 @@ class WanAttnProcessor:
             dropout_p=0.0,
             is_causal=False,
         )
+        
         hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
         hidden_states = hidden_states.type_as(query)
 

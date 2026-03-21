@@ -18,7 +18,7 @@ from src.utils.defaults import get_cache_path
 import os
 from src.types.media import InputAudio
 from src.vae.ltx2audio.ops import AudioProcessor
-
+import math
 
 
 class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
@@ -83,6 +83,9 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
                 get_cache_path(),
                 f"text_encoder_{sanitize_path_for_filename(os.path.basename(yaml_path))}.safetensors",
             )
+        
+        self.video_text_feature_dim = 4096
+        self.audio_text_feature_dim = 2048
 
     def _parse_num_frames(self, duration: str | int, fps: float) -> int:
         if isinstance(duration, int):
@@ -97,9 +100,9 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         else:
             raise ValueError(f"Invalid duration: {duration}")
     
-    def _run_connectors(self, connectors: torch.nn.Module, normed_concated_encoded_text_features: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    def _run_connectors(self, connectors: torch.nn.Module, normed_concated_encoded_video_text_features: torch.Tensor, normed_concated_encoded_audio_text_features: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask = connectors(
-            normed_concated_encoded_text_features, attention_mask
+            normed_concated_encoded_video_text_features, normed_concated_encoded_audio_text_features, attention_mask
         )
         return connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask
     
@@ -186,9 +189,10 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         
         return audio_conditionings
         
-    def _encode_text(self, prompts=List[str], device: Optional[torch.device] = None, offload: bool = True) -> torch.Tensor:
+    def _encode_text(self, prompts=List[str], device: Optional[torch.device] = None, offload: bool = True, version: str = "v1") -> torch.Tensor:
         device = device or self.device
-        normed_concated_encoded_text_features_list = []
+        normed_concated_encoded_video_text_features_list = []
+        normed_concated_encoded_audio_text_features_list = []
         
        # hash each prompt individually
         prompt_hashes = [self.hash({"prompt": prompt}) for prompt in prompts]
@@ -215,10 +219,10 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         attention_mask_list = []
         dtype = self.component_dtypes["text_encoder"]
         for prompt in prompts:
-            normed_concated_encoded_text_features, attention_mask = self._preprocess_text(prompt)
-            normed_concated_encoded_text_features_list.append(normed_concated_encoded_text_features)
+            normed_concated_encoded_video_text_features, normed_concated_encoded_audio_text_features, attention_mask = self._preprocess_text(prompt, version=version)
+            normed_concated_encoded_video_text_features_list.append(normed_concated_encoded_video_text_features)
+            normed_concated_encoded_audio_text_features_list.append(normed_concated_encoded_audio_text_features)
             attention_mask_list.append(attention_mask)
-        
         
         if offload:
             self._offload("text_encoder")
@@ -229,8 +233,8 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         result = []
         connectors = connectors.to(dtype)
 
-        for normed_concated_encoded_text_features, attention_mask in zip(normed_concated_encoded_text_features_list, attention_mask_list):
-            connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask = self._run_connectors(connectors, normed_concated_encoded_text_features, attention_mask)
+        for normed_concated_encoded_video_text_features, normed_concated_encoded_audio_text_features, attention_mask in zip(normed_concated_encoded_video_text_features_list, normed_concated_encoded_audio_text_features_list, attention_mask_list):
+            connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask = self._run_connectors(connectors, normed_concated_encoded_video_text_features, normed_concated_encoded_audio_text_features, attention_mask)
             result.append((connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask))
         
         if offload:
@@ -244,7 +248,7 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         return result
         
     
-    def _preprocess_text(self, text: str, device: Optional[torch.device] = None, padding_side: str = "left") -> Tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    def _preprocess_text(self, text: str, device: Optional[torch.device] = None, padding_side: str = "left", version: str = "v1") -> Tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """
         Encode a given string into feature tensors suitable for downstream tasks.
         Args:
@@ -263,17 +267,24 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         
         token_pairs = self.tokenize_with_weights(tokenizer, text)["gemma"]
 
-        
         model = self.text_encoder.model
         input_ids = torch.tensor([[t[0] for t in token_pairs]], device=device)
         attention_mask = torch.tensor([[w[1] for w in token_pairs]], device=device)
         outputs = model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
 
-        normed_concated_encoded_text_features = self._run_norm_and_concat_padded_batch(
-            hidden_states=outputs.hidden_states, attention_mask=attention_mask, padding_side=padding_side
-        )
+        if version == "v1":
+            normed_concated_encoded_text_features = self._run_norm_and_concat_padded_batch(
+                hidden_states=outputs.hidden_states, attention_mask=attention_mask, padding_side=padding_side
+            )
         
-        return normed_concated_encoded_text_features, attention_mask
+            return normed_concated_encoded_text_features, normed_concated_encoded_text_features, attention_mask
+        
+        normed = self.norm_and_concat_per_token_rms(outputs.hidden_states, attention_mask)
+        normed = normed.to(outputs.hidden_states[0].dtype)
+        embedding_dim = model.config.hidden_size
+        normed_video_text_features = self.rescale_norm(normed, self.video_text_feature_dim, embedding_dim)
+        normed_audio_text_features = self.rescale_norm(normed, self.audio_text_feature_dim, embedding_dim)
+        return normed_video_text_features, normed_audio_text_features, attention_mask
     
     def tokenize_with_weights(self, tokenizer: AutoTokenizer, text: str, return_word_ids: bool = False) -> dict[str, list[tuple[int, int]]]:
         """
@@ -328,3 +339,27 @@ class LTX2Shared(LTX2AudioProcessingMixin, BaseEngine):
         
         return normed_concated_encoded_text_features.to(dtype)
        
+    
+    def norm_and_concat_per_token_rms(
+        self,
+        encoded_text: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-token RMSNorm normalization for V2 models.
+        Args:
+            encoded_text: [B, T, D, L]
+            attention_mask: [B, T] binary mask
+        Returns:
+            [B, T, D*L] normalized tensor with padding zeroed out.
+        """
+        B, T, D, L = encoded_text.shape  # noqa: N806
+        variance = torch.mean(encoded_text**2, dim=2, keepdim=True)  # [B,T,1,L]
+        normed = encoded_text * torch.rsqrt(variance + 1e-6)
+        normed = normed.reshape(B, T, D * L)
+        mask_3d = attention_mask.bool().unsqueeze(-1)  # [B, T, 1]
+        return torch.where(mask_3d, normed, torch.zeros_like(normed))
+
+
+    def rescale_norm(self, x: torch.Tensor, target_dim: int, source_dim: int) -> torch.Tensor:
+        """Rescale normalization: x * sqrt(target_dim / source_dim)."""
+        return x * math.sqrt(target_dim / source_dim)

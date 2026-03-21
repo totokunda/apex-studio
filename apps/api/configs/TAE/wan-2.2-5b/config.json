@@ -1,6 +1,7 @@
 {
     "patch_size": 2,
     "latent_channels": 48,
+    "model_type": "wan22",
     "latents_mean": [
     -0.2289,
     -0.0052,

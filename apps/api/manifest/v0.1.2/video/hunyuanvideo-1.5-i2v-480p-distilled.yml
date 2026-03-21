@@ -48,7 +48,7 @@ spec:
   - type: vae
     label: Tiny HunyuanVideo VAE
     name: __tiny_transformer_vae__
-    base: hunyuanvideo15
+    base: tae
     config_id: TAE/hy15
     model_path:
     - path: totoku/apex-models/HunyuanVideo-1.5/vae/lightvae-bf16.safetensors
@@ -264,6 +264,18 @@ spec:
         - - vae_tile_sample_min_width
         - - vae_tile_sample_stride_height
         - - vae_tile_sample_stride_width
+    - name: cache
+      label: Cache
+      collapsible: true
+      default_open: false
+      layout:
+        flow: column
+        rows:
+        - - use_cache
+        - - cache_start_step
+        - - cache_end_step
+        - - cache_step_interval
+        - - cache_type
     inputs:
     - id: prompt
       label: Prompt
@@ -459,3 +471,54 @@ spec:
       min: 64
       max: 2048
       step: 64
+
+    - id: use_cache
+      label: Use Cache
+      description: Use cache to speed up inference.
+      type: boolean
+      panel: cache
+      default: false
+      required: false
+    - id: cache_start_step
+      label: Cache Start Step
+      description: The step to start caching.
+      type: number+slider
+      value_type: integer
+      panel: cache
+      default: 11
+      min: 1
+      max: 100
+      step: 1
+    - id: cache_end_step
+      label: Cache End Step
+      description: The step to end caching.
+      type: number+slider
+      value_type: integer
+      panel: cache
+      default: 45
+      min: 1
+      max: 100
+      step: 1
+    - id: cache_step_interval
+      label: Cache Step Interval
+      description: The interval to cache.
+      type: number+slider
+      value_type: integer
+      panel: cache
+      default: 4
+      min: 1
+      max: 100
+      step: 1
+    - id: cache_type
+      label: Cache Type
+      description: The type of cache to use.
+      type: select
+      panel: cache
+      default: deepcache
+      options:
+      - name: DeepCache
+        value: deepcache
+      - name: TaylorCache
+        value: taylorcache
+      - name: TeaCache
+        value: teacache

@@ -2050,6 +2050,8 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         vae_tile_kwargs: Optional[Dict[str, Any]] = None,
         use_tiny_vae: bool = False,
     ):
+        # save latents to file
+
         if use_tiny_vae:
             # Should always have this when using tiny vae
             component_name = "__tiny_transformer_vae__"
@@ -2640,7 +2642,14 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
                 hardware_profile=hardware_profile,
             )
             
-            selected_items.append(selected_item)
+            selected_items.append({
+                "kind": "model",
+                "path": selected_item.get("path"),
+                "variant": selected_item.get("variant"),
+                "precision": selected_item.get("precision"),
+                "type": selected_item.get("type"),
+                "file_size": selected_item.get("file_size"),
+            })
         
         for component in components_cfg:
             if not isinstance(component, dict):

@@ -51,6 +51,7 @@ class Attention(torch.nn.Module):
         dim_head: int = 64,
         norm_eps: float = 1e-6,
         rope_type: LTXRopeType = LTXRopeType.INTERLEAVED,
+        apply_gated_attention: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -68,6 +69,11 @@ class Attention(torch.nn.Module):
         self.to_q = torch.nn.Linear(query_dim, inner_dim, bias=True)
         self.to_k = torch.nn.Linear(context_dim, inner_dim, bias=True)
         self.to_v = torch.nn.Linear(context_dim, inner_dim, bias=True)
+        
+        if apply_gated_attention:
+            self.to_gate_logits = torch.nn.Linear(query_dim, heads, bias=True)
+        else:
+            self.to_gate_logits = None
 
         self.to_out = torch.nn.Sequential(torch.nn.Linear(inner_dim, query_dim, bias=True), torch.nn.Identity())
 
@@ -78,6 +84,8 @@ class Attention(torch.nn.Module):
         mask: torch.Tensor | None = None,
         pe: torch.Tensor | None = None,
         k_pe: torch.Tensor | None = None,
+        perturbation_mask: torch.Tensor | None = None,
+        all_perturbed: bool = False,
     ) -> torch.Tensor:
         x = x_list[0]
         x_list.clear()
@@ -86,27 +94,53 @@ class Attention(torch.nn.Module):
             context = context_list[0]
             context_list.clear()
         
-        
-        q = self.to_q(x)
         context = x if context is None else context
-        x = None
-        k = self.to_k(context)
-        v = self.to_v(context)
-        del x, context
-        context = None
-        self.norm_q(q)
-        self.norm_k(k)
-
-        if pe is not None:
-            apply_rotary_emb_inplace(q, pe, self.rope_type)
-            apply_rotary_emb_inplace(k, pe if k_pe is None else k_pe, self.rope_type)
-        q = rearrange(q, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head)  
-        k = rearrange(k, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head)
-        v = rearrange(v, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head)
-        qkv_list = [q, k, v]
-        q = k = v = None
-        out = wrapped_attention(qkv_list, mask)
-
-        out = rearrange(out, "b h s d -> b s (h d)")
+        use_attention = not all_perturbed
         
+        v = self.to_v(context)
+        
+        if not use_attention:
+            out = v
+        else:
+            q = self.to_q(x)
+
+            x = None
+            k = self.to_k(context)
+
+            del x, context
+            context = None
+            self.norm_q(q)
+            self.norm_k(k)
+
+            if pe is not None:
+                apply_rotary_emb_inplace(q, pe, self.rope_type)
+                apply_rotary_emb_inplace(k, pe if k_pe is None else k_pe, self.rope_type)
+            q = rearrange(q, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head)  
+            k = rearrange(k, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head)
+            v = rearrange(v, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head)
+            qkv_list = [q, k, v]
+            q = k = v = None
+            out = wrapped_attention(qkv_list, mask)
+
+            out = rearrange(out, "b h s d -> b s (h d)")
+            
+            if perturbation_mask is not None:
+                out = out * perturbation_mask + v * (1 - perturbation_mask)
+            
+        
+        if self.to_gate_logits is not None:
+            gate_logits = self.to_gate_logits(x)  # (B, T, H)
+            b, t, _ = out.shape
+            # Reshape to (B, T, H, D) for per-head gating
+            out = out.view(b, t, self.heads, self.dim_head)
+            # Apply gating: 2 * sigmoid(x) so that zero-init gives identity (2 * 0.5 = 1.0)
+            gates = 2.0 * torch.sigmoid(gate_logits)  # (B, T, H)
+            out = out * gates.unsqueeze(-1)  # (B, T, H, D) * (B, T, H, 1)
+            # Reshape back to (B, T, H*D)
+            out = out.view(b, t, self.heads * self.dim_head)
+
         return self.to_out(out)
+
+
+class AttentionCallable(Protocol):
+    def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor: ...

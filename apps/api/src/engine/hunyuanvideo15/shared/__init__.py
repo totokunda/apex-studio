@@ -35,9 +35,7 @@ class HunyuanVideo15Shared(BaseEngine):
             self.vae.spatial_compression_ratio if getattr(self, "vae", None) else 16
         )
         self.video_processor = HunyuanVideo15ImageProcessor(
-            vae_scale_factor=self.vae_scale_factor_spatial,
-            do_resize=False,
-            do_convert_rgb=True,
+            vae_scale_factor=self.vae_scale_factor_spatial
         )
         self.target_size = (
             self.transformer.config.target_size

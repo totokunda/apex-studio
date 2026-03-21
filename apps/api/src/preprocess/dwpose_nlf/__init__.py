@@ -183,6 +183,7 @@ class DwposeNlfDetector(DwposeDetector):
         pretrained_nlf_safetensors_model_path = custom_hf_download(
             pretrained_nlf_safetensors_model_path, nlf_safetensors_filename
         )
+        print(f"pretrained_nlf_onnx_model_path: {pretrained_nlf_onnx_model_path}")
         det_model_path = custom_hf_download(pretrained_det_model_or_path, det_filename)
         pose_model_path = custom_hf_download(pretrained_model_or_path, pose_filename)
         if (
@@ -228,6 +229,7 @@ class DwposeNlfDetector(DwposeDetector):
         )
 
         model_state_dict = load_file(pretrained_nlf_safetensors_model_path)
+
         multimodel.load_state_dict(model_state_dict)
         multimodel.crop_model.backbone.half()
         multimodel.crop_model.heatmap_head.layer.half()

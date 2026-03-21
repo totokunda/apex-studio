@@ -19,6 +19,9 @@ class Modality:
         torch.Tensor
     )  # Shape: (B, 3, T) for video, where 3 is the number of dimensions and T is the number of tokens
     context: torch.Tensor
+    sigma: torch.Tensor
     enabled: bool = True
     context_mask: torch.Tensor | None = None
     frame_indices: torch.Tensor | None = None
+      # Shape: (B,). Current sigma value, used for cross-attention timestep calculation.
+    attention_mask: torch.Tensor | None = None

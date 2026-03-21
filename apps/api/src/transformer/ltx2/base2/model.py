@@ -1,7 +1,7 @@
 from enum import Enum
 import torch
 from src.engine.ltx22.shared.guidance.perturbations import BatchedPerturbationConfig
-from src.transformer.ltx2.base2.adaln import AdaLayerNormSingle
+from src.transformer.ltx2.base2.adaln import AdaLayerNormSingle, adaln_embedding_coefficient
 
 from src.transformer.ltx2.base2.modality import Modality
 from src.transformer.ltx2.base2.rope import LTXRopeType
@@ -168,9 +168,12 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         rope_type: str | LTXRopeType = LTXRopeType.INTERLEAVED,
         use_middle_indices_grid: bool = True,
         attention_type: None = None,
+        apply_gated_attention: bool = False,
+        cross_attention_adaln: bool = False,
         chunking_profile: str = "none",
         ffn_chunk_size: Optional[int] = None,
         ffn_chunk_dim: int = 1,
+        
     ) -> None:
         super().__init__()
 
@@ -183,7 +186,8 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         self.timestep_scale_multiplier = timestep_scale_multiplier
         self.positional_embedding_theta = rope_theta
         self.av_ca_timestep_scale_multiplier = cross_attn_timestep_scale_multiplier
-
+        self.cross_attention_adaln = cross_attention_adaln
+        
         cross_pe_max_pos = None
         if self.model_type.is_video_enabled():
             self.positional_embedding_max_pos = [pos_embed_max_pos, base_height, base_width]
@@ -223,7 +227,12 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
             audio_cross_attention_dim=audio_cross_attention_dim,
             norm_eps=norm_eps,
             attention_type=attention_type,
+            apply_gated_attention=apply_gated_attention,
         )
+        
+    @property
+    def _adaln_embedding_coefficient(self) -> int:
+        return adaln_embedding_coefficient(self.cross_attention_adaln)
 
     def _init_video(
         self,
@@ -242,6 +251,10 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         self.caption_projection = PixArtAlphaTextProjection(
             in_features=caption_channels,
             hidden_size=self.inner_dim,
+        )
+        
+        self.prompt_adaln_single = (
+            AdaLayerNormSingle(self.inner_dim, embedding_coefficient=2) if self.cross_attention_adaln else None
         )
 
         # Video output components
@@ -263,6 +276,10 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
 
         self.audio_adaln_single = AdaLayerNormSingle(
             self.audio_inner_dim,
+        )
+        
+        self.audio_prompt_adaln_single = (
+            AdaLayerNormSingle(self.audio_inner_dim, embedding_coefficient=2) if self.cross_attention_adaln else None
         )
 
         # Audio caption projection
@@ -325,6 +342,7 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
                 positional_embedding_theta=self.positional_embedding_theta,
                 rope_type=self.rope_type,
                 av_ca_timestep_scale_multiplier=self.av_ca_timestep_scale_multiplier,
+                prompt_adaln=getattr(self, "prompt_adaln_single", None),
             )
             self.audio_args_preprocessor = MultiModalTransformerArgsPreprocessor(
                 patchify_proj=self.audio_patchify_proj,
@@ -343,6 +361,7 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
                 positional_embedding_theta=self.positional_embedding_theta,
                 rope_type=self.rope_type,
                 av_ca_timestep_scale_multiplier=self.av_ca_timestep_scale_multiplier,
+                prompt_adaln=getattr(self, "audio_prompt_adaln_single", None),
             )
         elif self.model_type.is_video_enabled():
             self.video_args_preprocessor = TransformerArgsPreprocessor(
@@ -357,6 +376,7 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
                 double_precision_rope=self.double_precision_rope,
                 positional_embedding_theta=self.positional_embedding_theta,
                 rope_type=self.rope_type,
+                prompt_adaln=getattr(self, "prompt_adaln_single", None),
             )
         elif self.model_type.is_audio_enabled():
             self.audio_args_preprocessor = TransformerArgsPreprocessor(
@@ -371,6 +391,7 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
                 double_precision_rope=self.double_precision_rope,
                 positional_embedding_theta=self.positional_embedding_theta,
                 rope_type=self.rope_type,
+                prompt_adaln=getattr(self, "audio_prompt_adaln_single", None),
             )
 
     def _init_transformer_blocks(
@@ -382,6 +403,7 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         audio_cross_attention_dim: int,
         norm_eps: float,
         attention_type: None,
+        apply_gated_attention: bool,
     ) -> None:
         """Initialize transformer blocks for LTX."""
         video_config = (
@@ -390,6 +412,8 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
                 heads=self.num_attention_heads,
                 d_head=attention_head_dim,
                 context_dim=cross_attention_dim,
+                apply_gated_attention=apply_gated_attention,
+                cross_attention_adaln=self.cross_attention_adaln,
             )
             if self.model_type.is_video_enabled()
             else None
@@ -400,6 +424,8 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
                 heads=self.audio_num_attention_heads,
                 d_head=audio_attention_head_dim,
                 context_dim=audio_cross_attention_dim,
+                apply_gated_attention=apply_gated_attention,
+                cross_attention_adaln=self.cross_attention_adaln,
             )
             if self.model_type.is_audio_enabled()
             else None

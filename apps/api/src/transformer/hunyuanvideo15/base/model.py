@@ -43,10 +43,13 @@ from diffusers.models.normalization import AdaLayerNormContinuous, AdaLayerNormZ
 from src.transformer.efficiency.ops import (
     apply_cos_sin_rope_inplace,
     chunked_feed_forward_inplace,
+    apply_scale_shift_inplace,
+    apply_gate_inplace,
 )
 from src.transformer.efficiency.mod import InplaceRMSNorm
 from src.transformer.efficiency.list_clear import unwrap_single_item_list
 from src.attention import attention_register
+from src.utils.step_mem import step_mem
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -655,21 +658,46 @@ class HunyuanVideo15TransformerBlock(nn.Module):
             )
 
         # 3. Modulation and residual connection
-        hidden_states = hidden_states + attn_output * gate_msa.unsqueeze(1)
-        encoder_hidden_states = (
-            encoder_hidden_states + context_attn_output * c_gate_msa.unsqueeze(1)
-        )
+        if inference_mode:
+            apply_gate_inplace(
+                attn_output, gate_msa.unsqueeze(1).to(dtype=attn_output.dtype)
+            )
+            hidden_states.add_(attn_output)
+            apply_gate_inplace(
+                context_attn_output,
+                c_gate_msa.unsqueeze(1).to(dtype=context_attn_output.dtype),
+            )
+            encoder_hidden_states.add_(context_attn_output)
+        else:
+            hidden_states = hidden_states + attn_output * gate_msa.unsqueeze(1)
+            encoder_hidden_states = (
+                encoder_hidden_states + context_attn_output * c_gate_msa.unsqueeze(1)
+            )
+            
+            del attn_output, context_attn_output, gate_msa, c_gate_msa
 
         norm_hidden_states = self.norm2(hidden_states)
         norm_encoder_hidden_states = self.norm2_context(encoder_hidden_states)
 
-        norm_hidden_states = (
-            norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
-        )
-        norm_encoder_hidden_states = (
-            norm_encoder_hidden_states * (1 + c_scale_mlp[:, None])
-            + c_shift_mlp[:, None]
-        )
+        if inference_mode:
+            apply_scale_shift_inplace(
+                norm_hidden_states, scale_mlp[:, None], shift_mlp[:, None]
+            )
+            apply_scale_shift_inplace(
+                norm_encoder_hidden_states,
+                c_scale_mlp[:, None],
+                c_shift_mlp[:, None],
+            )
+        else:
+            norm_hidden_states = (
+                norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+            )
+            norm_encoder_hidden_states = (
+                norm_encoder_hidden_states * (1 + c_scale_mlp[:, None])
+                + c_shift_mlp[:, None]
+            )
+            
+            del scale_mlp, shift_mlp, c_scale_mlp, c_shift_mlp
 
         # 4. Feed-forward
         if self._ff_chunk_size is not None:
@@ -686,10 +714,23 @@ class HunyuanVideo15TransformerBlock(nn.Module):
             ff_output = self.ff(norm_hidden_states)
             context_ff_output = self.ff_context(norm_encoder_hidden_states)
 
-        hidden_states = hidden_states + gate_mlp.unsqueeze(1) * ff_output
-        encoder_hidden_states = (
-            encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
-        )
+        if inference_mode:
+            apply_gate_inplace(
+                ff_output, gate_mlp.unsqueeze(1).to(dtype=ff_output.dtype)
+            )
+            hidden_states.add_(ff_output)
+            apply_gate_inplace(
+                context_ff_output,
+                c_gate_mlp.unsqueeze(1).to(dtype=context_ff_output.dtype),
+            )
+            encoder_hidden_states.add_(context_ff_output)
+        else:
+            hidden_states = hidden_states + gate_mlp.unsqueeze(1) * ff_output
+            encoder_hidden_states = (
+                encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
+            )
+            
+            del gate_mlp, c_gate_mlp, context_ff_output, ff_output
 
         return hidden_states, encoder_hidden_states
 
@@ -1134,7 +1175,7 @@ class HunyuanVideo15Transformer3DModel(
                     precomputed_attn_mask,
                     image_rotary_emb,
                 )
-
+ 
         # Free the precomputed mask after all blocks
         del precomputed_attn_mask
 

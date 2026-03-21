@@ -805,19 +805,6 @@ def _get_manifest_id_index_cached(cache_key: str) -> Dict[str, str]:
     return _build_manifest_id_index_uncached()
 
 
-def _get_manifest_id_index() -> Dict[str, str]:
-    """
-    Get the manifest id index, optionally cached controlled by the same env flags
-    used for manifest list caching.
-    """
-    enabled = _env_truthy(
-        os.getenv("APEX_MANIFEST_CACHE", os.getenv("APEX_MANIFEST_CACHE_ENABLED", "0"))
-    )
-    if not enabled:
-        return _build_manifest_id_index_uncached()
-    buster = os.getenv("APEX_MANIFEST_CACHE_BUSTER", "")
-    cache_key = f"v2:{buster}:{_manifest_cache_buster_token()}"
-    return _get_manifest_id_index_cached(cache_key)
 
 
 def load_yaml_content(file_path: Path) -> Dict[Any, Any]:

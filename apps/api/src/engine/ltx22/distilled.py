@@ -3,22 +3,19 @@ from typing import Union, List, Optional, Tuple, Callable
 import torch
 from src.helpers.ltx2.upsampler import upsample_video
 from src.types import InputImage, InputAudio
-from src.utils.cache import empty_cache
 from src.utils.progress import safe_emit_progress, make_mapped_progress
-from src.engine.ltx2.multimodal_guidance import MultiModalGuider, MultiModalGuiderParams
 from src.engine.ltx22.shared.diffusion_steps import SchedulerDiffusionStep, configure_scheduler_sigmas
-from src.engine.ltx22.shared.guiders import MultiModalGuider, MultiModalGuiderParams
 from src.engine.ltx22.shared.noisers import GaussianNoiser
 from src.engine.ltx22.shared.types import LatentState, VideoPixelShape
 from src.engine.ltx22.shared.protocols import DiffusionStepProtocol
-from src.engine.ltx22.shared.helpers import image_conditionings_by_replacing_latent, denoise_audio_video, euler_denoising_loop, multi_modal_guider_denoising_func, simple_denoising_func
+from src.engine.ltx22.shared.helpers import combined_image_conditionings, denoise_audio_video, euler_denoising_loop, multi_modal_guider_denoising_func, simple_denoising_func
 from src.engine.ltx22.shared.utils import PipelineComponents
 from src.engine.ltx22.shared.constants import DISTILLED_SIGMA_VALUES, STAGE_2_DISTILLED_SIGMA_VALUES
 from src.engine.ltx22.shared.tiling import _build_tiling_config
 from src.vae.ltx2.model import decode_video 
 from src.vae.ltx2audio.model import decode_audio
 
-class LTX2TI2VEngine(LTX2Shared):
+class LTX2DistilledEngine(LTX2Shared):
     """LTX2 Text-to-Image-to-Video Engine Implementation"""
 
     def __init__(self, yaml_path: str, **kwargs):
@@ -143,7 +140,7 @@ class LTX2TI2VEngine(LTX2Shared):
         else:
             audio_conditionings = []
         safe_emit_progress(progress_callback, 0.20, "Building image conditionings")
-        stage_1_conditionings = image_conditionings_by_replacing_latent(
+        stage_1_conditionings = combined_image_conditionings(
             images=images,
             height=stage_1_output_shape.height,
             width=stage_1_output_shape.width,
@@ -223,7 +220,7 @@ class LTX2TI2VEngine(LTX2Shared):
             self.load_component_by_name("video_vae")
         self.to_device(self.video_vae)
         
-        stage_2_conditionings = image_conditionings_by_replacing_latent(
+        stage_2_conditionings = combined_image_conditionings(
             images=images,
             height=stage_2_output_shape.height,
             width=stage_2_output_shape.width,

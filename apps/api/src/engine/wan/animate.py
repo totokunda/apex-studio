@@ -8,7 +8,7 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from diffusers.pipelines.wan.image_processor import WanAnimateImageProcessor
 from copy import deepcopy
-
+from src.utils.step_mem import step_mem
 
 class WanAnimateEngine(WanShared):
     """WAN Animate Engine Implementation"""
@@ -722,6 +722,7 @@ class WanAnimateEngine(WanShared):
                 len(timesteps) - num_inference_steps * self.scheduler.order
             )
             self._num_timesteps = len(timesteps)
+            
 
             latents = self.denoise(
                 timesteps=timesteps,

@@ -61,7 +61,7 @@ spec:
   - type: vae
     label: Tiny HunyuanVideo VAE
     name: __tiny_transformer_vae__
-    base: hunyuanvideo15
+    base: tae
     config_id: TAE/hy15
     model_path:
     - path: totoku/apex-models/HunyuanVideo-1.5/vae/lightvae-bf16.safetensors

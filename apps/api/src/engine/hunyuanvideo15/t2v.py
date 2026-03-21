@@ -276,12 +276,15 @@ class HunyuanVideo15T2VEngine(HunyuanVideo15Shared):
                 )
             self.cache_helper.enable()
             logger.info(f"Enabled {cache_type} cache")
+            
         
+
         with self._progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
                 
+  
                 if self.cache_helper is not None:
                     self.cache_helper.cur_timestep = i
 

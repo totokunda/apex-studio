@@ -1,5 +1,3 @@
-from typing import Optional, Tuple, Union
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,7 +14,7 @@ from src.transformer.ltx2.base2.rope import (
 )
 
 from src.transformer.ltx2.base2.attention import Attention
-
+import math
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor | None = None, eps: float = 1e-6) -> torch.Tensor:
     """Root-mean-square (RMS) normalize `x` over its last dimension.
@@ -238,13 +236,23 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
         rope_double_precision: bool,
         causal_temporal_positioning: bool,
         rope_type: str = "interleaved",
+        version="v1",
     ):
         super().__init__()
 
-        self.text_proj_in = nn.Linear(
-            caption_channels * text_proj_in_factor, caption_channels, bias=False
-        )
-        
+        self.version = version
+        if version == "v1":
+            self.text_proj_in = nn.Linear(
+                caption_channels * text_proj_in_factor, caption_channels, bias=False
+            )
+        else:
+            self.video_proj_in = nn.Linear(
+                caption_channels * text_proj_in_factor, caption_channels, bias=False
+            )
+            self.audio_proj_in = nn.Linear(
+                caption_channels * text_proj_in_factor, caption_channels, bias=False
+            )
+
         if rope_type == "interleaved":
             rope_type = LTXRopeType.INTERLEAVED
         elif rope_type == "split":
@@ -277,7 +285,8 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
 
     def forward(
         self,
-        text_encoder_hidden_states: torch.Tensor,
+        video_encoder_hidden_states: torch.Tensor,
+        audio_encoder_hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
         additive_mask: bool = False,
     ):
@@ -289,13 +298,19 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
             )
             attention_mask = attention_mask.to(text_dtype) * torch.finfo(text_dtype).max
 
-        text_encoder_hidden_states = self.text_proj_in(text_encoder_hidden_states)
+        if self.version == "v1": 
+            # we only need to project our video since video and audio are identical in this version
+            text_encoder_hidden_states = self.text_proj_in(video_encoder_hidden_states)
+            video_encoder_hidden_states = text_encoder_hidden_states
+            audio_encoder_hidden_states = text_encoder_hidden_states
+        else:
+            # we need to project both video and audio
+            video_encoder_hidden_states = self.video_proj_in(video_encoder_hidden_states)
+            audio_encoder_hidden_states = self.audio_proj_in(audio_encoder_hidden_states)
         
-
         video_text_embedding, new_attn_mask = self.video_connector(
-            text_encoder_hidden_states, attention_mask
+            video_encoder_hidden_states, attention_mask
         )
-
 
         attn_mask = (new_attn_mask < 1e-6).to(torch.int64)
         attn_mask = attn_mask.reshape(
@@ -305,7 +320,8 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
         new_attn_mask = attn_mask.squeeze(-1)
 
         audio_text_embedding, _ = self.audio_connector(
-            text_encoder_hidden_states, attention_mask
+            audio_encoder_hidden_states, attention_mask
         )
 
         return video_text_embedding, audio_text_embedding, new_attn_mask
+    

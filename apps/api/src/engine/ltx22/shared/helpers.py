@@ -1,5 +1,3 @@
-import gc
-import logging
 from dataclasses import replace
 
 import torch
@@ -37,6 +35,45 @@ from src.utils.progress import safe_emit_progress
 
 
 import PIL.Image
+
+
+
+
+def combined_image_conditionings(
+    images: list[tuple[PIL.Image.Image, int, float]],
+    height: int,
+    width: int,
+    video_encoder: VideoEncoder,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> list[ConditioningItem]:
+    """Create a list of conditionings by replacing the latent at the first frame with the encoded image if present
+    and using other encoded images as the keyframe conditionings."""
+    conditionings = []
+    for image, frame_idx, strength in images:
+        image = load_image_conditioning(
+            image=image,
+            height=height,
+            width=width,
+            dtype=dtype,
+            device=device,
+        )
+        encoded_image = video_encoder(image)
+        if frame_idx == 0:
+            conditioning = VideoConditionByLatentIndex(
+                latent=encoded_image,
+                strength=strength,
+                latent_idx=0,
+            )
+        else:
+            conditioning = VideoConditionByKeyframeIndex(
+                keyframes=encoded_image,
+                strength=strength,
+                frame_idx=frame_idx,
+            )
+        conditionings.append(conditioning)
+    return conditionings
+
 
 def image_conditionings_by_replacing_latent(
     images: list[tuple[PIL.Image.Image, int, float]],
@@ -333,6 +370,8 @@ def modality_from_latent_state(
         enabled=enabled,
         latent=state.latent,
         timesteps=timesteps,
+        sigma=sigma,
+        attention_mask=state.attention_mask,
         frame_indices=frame_indices,
         positions=state.positions,
         context=context,

@@ -1,0 +1,107 @@
+{ 
+ "_class_name": "VocoderWithBWE",
+  "_diffusers_version": "0.37.0.dev0",
+  "vocoder": {
+        "upsample_initial_channel": 1536,
+        "resblock": "AMP1",
+        "upsample_rates": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "resblock_kernel_sizes": [
+          3,
+          7,
+          11
+        ],
+        "upsample_kernel_sizes": [
+          11,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "resblock_dilation_sizes": [
+          [
+            1,
+            3,
+            5
+          ],
+          [
+            1,
+            3,
+            5
+          ],
+          [
+            1,
+            3,
+            5
+          ]
+        ],
+        "stereo": true,
+        "use_tanh_at_final": false,
+        "activation": "snakebeta",
+        "use_bias_at_final": false
+      },
+      "bwe": {
+        "upsample_initial_channel": 512,
+        "resblock": "AMP1",
+        "upsample_rates": [
+          6,
+          5,
+          2,
+          2,
+          2
+        ],
+        "resblock_kernel_sizes": [
+          3,
+          7,
+          11
+        ],
+        "upsample_kernel_sizes": [
+          12,
+          11,
+          4,
+          4,
+          4
+        ],
+        "resblock_dilation_sizes": [
+          [
+            1,
+            3,
+            5
+          ],
+          [
+            1,
+            3,
+            5
+          ],
+          [
+            1,
+            3,
+            5
+          ]
+        ],
+        "stereo": true,
+        "use_tanh_at_final": false,
+        "activation": "snakebeta",
+        "use_bias_at_final": false,
+        "apply_final_activation": false,
+        "n_fft": 512,
+        "win_size": 512,
+        "num_mels": 64
+    },
+    "stft": {
+          "filter_length":  512,
+          "hop_length": 80,
+          "win_length": 512,
+          "n_mel_channels": 64
+    },
+    "input_sampling_rate": 16000,
+    "output_sampling_rate": 48000,
+    "hop_length": 80
+}

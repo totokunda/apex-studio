@@ -254,6 +254,7 @@ spec:
       layout:
         flow: column
         rows:
+        - - chunking_profile
         - - rope_on_cpu
     - name: vae
       label: VAE / Memory
@@ -266,7 +267,6 @@ spec:
         - - vae_tile_sample_min_width
         - - vae_tile_sample_stride_height
         - - vae_tile_sample_stride_width
-        - - chunking_profile
     inputs:
     - id: subject_image
       label: Subject Image

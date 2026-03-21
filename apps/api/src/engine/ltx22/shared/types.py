@@ -180,13 +180,15 @@ class LatentState:
     denoise_mask: torch.Tensor
     positions: torch.Tensor
     clean_latent: torch.Tensor
-
+    attention_mask: torch.Tensor | None = None
+    
     def clone(self) -> "LatentState":
         return LatentState(
             latent=self.latent.clone(),
             denoise_mask=self.denoise_mask.clone(),
             positions=self.positions.clone(),
             clean_latent=self.clean_latent.clone(),
+            attention_mask=self.attention_mask.clone() if self.attention_mask is not None else None,
         )
 
 

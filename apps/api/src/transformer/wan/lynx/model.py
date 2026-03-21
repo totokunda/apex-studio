@@ -15,6 +15,12 @@ from diffusers.models.transformers.transformer_wan import *
 
 from diffusers.models.attention import Attention
 
+from diffusers.utils import (
+    USE_PEFT_BACKEND,
+    scale_lora_layers,
+    unscale_lora_layers,
+)
+
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 from src.transformer.wan.lynx.attention import WanAttnProcessor2_0
 from src.transformer.efficiency.ops import (

@@ -27,6 +27,10 @@ class TransformerArgs:
     cross_scale_shift_timestep: torch.Tensor | None
     cross_gate_timestep: torch.Tensor | None
     enabled: bool
+    prompt_timestep: torch.Tensor | None = None
+    self_attention_mask: torch.Tensor | None = (
+        None  # Additive log-space self-attention bias (B, 1, T, T), None = full attention
+    )
 
 def _can_broadcast_timesteps(frame_indices: torch.Tensor | None, frame_count: int) -> bool:
     if frame_indices is None or frame_indices.ndim != 2:
@@ -76,6 +80,7 @@ class TransformerArgsPreprocessor:
         double_precision_rope: bool,
         positional_embedding_theta: float,
         rope_type: LTXRopeType,
+        prompt_adaln: AdaLayerNormSingle | None = None,
     ) -> None:
         self.patchify_proj = patchify_proj
         self.adaln = adaln
@@ -88,6 +93,7 @@ class TransformerArgsPreprocessor:
         self.double_precision_rope = double_precision_rope
         self.positional_embedding_theta = positional_embedding_theta
         self.rope_type = rope_type
+        self.prompt_adaln = prompt_adaln
 
     def _prepare_timestep(
         self,
@@ -98,7 +104,6 @@ class TransformerArgsPreprocessor:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Prepare timestep embeddings."""
         
-
         timestep = timestep * self.timestep_scale_multiplier
         timestep = _maybe_compress_timesteps(timestep, frame_indices, batch_size)
         timestep, embedded_timestep = self.adaln(
@@ -128,6 +133,34 @@ class TransformerArgsPreprocessor:
         context = context.view(batch_size, -1, x.shape[-1])
 
         return context, attention_mask
+    
+    def _prepare_self_attention_mask(
+        self, attention_mask: torch.Tensor | None, x_dtype: torch.dtype
+    ) -> torch.Tensor | None:
+        """Prepare self-attention mask by converting [0,1] values to additive log-space bias.
+        Input shape: (B, T, T) with values in [0, 1].
+        Output shape: (B, 1, T, T) with 0.0 for full attention and a large negative value
+        for masked positions.
+        Positions with attention_mask <= 0 are fully masked (mapped to the dtype's minimum
+        representable value). Strictly positive entries are converted via log-space for
+        smooth attenuation, with small values clamped for numerical stability.
+        Returns None if input is None (no masking).
+        """
+        if attention_mask is None:
+            return None
+
+        # Convert [0, 1] attention mask to additive log-space bias:
+        #   1.0 -> log(1.0) = 0.0  (no bias, full attention)
+        #   0.0 -> finfo.min        (fully masked)
+        finfo = torch.finfo(x_dtype)
+        eps = finfo.tiny
+
+        bias = torch.full_like(attention_mask, finfo.min, dtype=x_dtype)
+        positive = attention_mask > 0
+        if positive.any():
+            bias[positive] = torch.log(attention_mask[positive].clamp(min=eps)).to(x_dtype)
+
+        return bias.unsqueeze(1)  # (B, 1, T, T) for head broadcast
 
     def _prepare_attention_mask(self, attention_mask: torch.Tensor | None, x_dtype: torch.dtype) -> torch.Tensor | None:
         """Prepare attention mask."""
@@ -177,6 +210,7 @@ class TransformerArgsPreprocessor:
         weight_dtype = getattr(weight, "dtype", None)
         
         x = self.patchify_proj(latent)
+        batch_size = x.shape[0]
         timestep, embedded_timestep = self._prepare_timestep(
             modality.timesteps,
             x.shape[0],
@@ -194,6 +228,12 @@ class TransformerArgsPreprocessor:
             x_dtype=latent_dtype,
             frame_indices=modality.frame_indices,
         )
+        prompt_timestep = None
+        if self.prompt_adaln is not None:
+            prompt_timestep, _ = self._prepare_timestep(
+                modality.sigma, self.prompt_adaln, batch_size, modality.latent.dtype
+            )
+        self_attention_mask = self._prepare_self_attention_mask(modality.attention_mask, latent_dtype)
         return TransformerArgs(
             x=x,
             context=context,
@@ -205,6 +245,8 @@ class TransformerArgsPreprocessor:
             cross_scale_shift_timestep=None,
             cross_gate_timestep=None,
             enabled=modality.enabled,
+            prompt_timestep=prompt_timestep,
+            self_attention_mask=self_attention_mask,
         )
 
 
@@ -227,6 +269,7 @@ class MultiModalTransformerArgsPreprocessor:
         positional_embedding_theta: float,
         rope_type: LTXRopeType,
         av_ca_timestep_scale_multiplier: int,
+        prompt_adaln: AdaLayerNormSingle | None = None,
     ) -> None:
         self.simple_preprocessor = TransformerArgsPreprocessor(
             patchify_proj=patchify_proj,
@@ -240,6 +283,7 @@ class MultiModalTransformerArgsPreprocessor:
             double_precision_rope=double_precision_rope,
             positional_embedding_theta=positional_embedding_theta,
             rope_type=rope_type,
+            prompt_adaln=prompt_adaln,
         )
         self.cross_scale_shift_adaln = cross_scale_shift_adaln
         self.cross_gate_adaln = cross_gate_adaln
@@ -250,27 +294,36 @@ class MultiModalTransformerArgsPreprocessor:
     def prepare(
         self,
         modality: Modality,
+        cross_modality: Modality | None = None,
     ) -> TransformerArgs:
-    
         transformer_args = self.simple_preprocessor.prepare(modality)
+        if cross_modality is None:
+            return transformer_args
+
+        if cross_modality.sigma.numel() > 1:
+            if cross_modality.sigma.shape[0] != modality.timesteps.shape[0]:
+                raise ValueError("Cross modality sigma must have the same batch size as the modality")
+            if cross_modality.sigma.ndim != 1:
+                raise ValueError("Cross modality sigma must be a 1D tensor")
+
+        cross_timestep = cross_modality.sigma.view(
+            modality.timesteps.shape[0], 1, *[1] * len(modality.timesteps.shape[2:])
+        )
+
         cross_pe = self.simple_preprocessor._prepare_positional_embeddings(
-            positions=modality.positions,
+            positions=modality.positions[:, 0:1, :],
             inner_dim=self.audio_cross_attention_dim,
-            max_pos=self.simple_preprocessor.max_pos,
+            max_pos=[self.cross_pe_max_pos],
             use_middle_indices_grid=True,
             num_attention_heads=self.simple_preprocessor.num_attention_heads,
             x_dtype=modality.latent.dtype,
-            frame_indices=modality.frame_indices,
-            rope_axes=(0,),
-            rope_max_pos=[self.cross_pe_max_pos],
         )
 
         cross_scale_shift_timestep, cross_gate_timestep = self._prepare_cross_attention_timestep(
-            timestep=modality.timesteps,
+            timestep=cross_timestep,
             timestep_scale_multiplier=self.simple_preprocessor.timestep_scale_multiplier,
             batch_size=transformer_args.x.shape[0],
             hidden_dtype=modality.latent.dtype,
-            frame_indices=modality.frame_indices,
         )
 
         return replace(

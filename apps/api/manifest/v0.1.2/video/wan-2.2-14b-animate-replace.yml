@@ -283,6 +283,7 @@ spec:
         - - vae_tile_sample_min_width
         - - vae_tile_sample_stride_height
         - - vae_tile_sample_stride_width
+        - - segment_frame_length
     inputs:
     - id: image
       label: Image
@@ -483,3 +484,13 @@ spec:
       min: 64
       max: 2048
       step: 64
+    - id: segment_frame_length
+      label: Segment Frame Length
+      description: Number of frames in each segment.
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 77
+      min: 1
+      max: 1000
+      step: 1

@@ -6,12 +6,12 @@ from dataclasses import dataclass, replace
 import torch
 
 from src.engine.ltx22.shared.guidance.perturbations import BatchedPerturbationConfig, PerturbationType
+from src.transformer.ltx2.base2.adaln import adaln_embedding_coefficient
 from src.transformer.ltx2.base2.attention import Attention
 from src.transformer.ltx2.base2.feed_forward import FeedForward
 from src.transformer.ltx2.base2.rope import LTXRopeType
 from src.transformer.ltx2.base2.transformer_args import TransformerArgs
 from src.engine.ltx22.shared.utils import rms_norm
-from src.utils.step_mem import step_mem
 
 def _reshape_hidden_states(hidden_states: torch.Tensor, frames: int) -> torch.Tensor:
     return hidden_states.reshape(hidden_states.shape[0], frames, -1, hidden_states.shape[-1])
@@ -47,6 +47,8 @@ class TransformerConfig:
     heads: int
     d_head: int
     context_dim: int
+    apply_gated_attention: bool = False
+    cross_attention_adaln: bool = False
 
 
 class BasicAVTransformerBlock(torch.nn.Module):
@@ -71,6 +73,7 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 rope_type=rope_type,
                 norm_eps=norm_eps,
                 attention_function=attention_function,
+                apply_gated_attention=video.apply_gated_attention,
             )
             self.attn2 = Attention(
                 query_dim=video.dim,
@@ -80,9 +83,11 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 rope_type=rope_type,
                 norm_eps=norm_eps,
                 attention_function=attention_function,
+                apply_gated_attention=video.apply_gated_attention,
             )
             self.ff = FeedForward(video.dim, dim_out=video.dim)
-            self.scale_shift_table = torch.nn.Parameter(torch.empty(6, video.dim))
+            video_sst_size = adaln_embedding_coefficient(video.cross_attention_adaln)
+            self.scale_shift_table = torch.nn.Parameter(torch.empty(video_sst_size, video.dim))
 
         if audio is not None:
             self.audio_attn1 = Attention(
@@ -93,6 +98,7 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 rope_type=rope_type,
                 norm_eps=norm_eps,
                 attention_function=attention_function,
+                apply_gated_attention=audio.apply_gated_attention,
             )
         
             self.audio_attn2 = Attention(
@@ -103,9 +109,11 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 rope_type=rope_type,
                 norm_eps=norm_eps,
                 attention_function=attention_function,
+                apply_gated_attention=audio.apply_gated_attention,
             )
             self.audio_ff = FeedForward(audio.dim, dim_out=audio.dim)
-            self.audio_scale_shift_table = torch.nn.Parameter(torch.empty(6, audio.dim))
+            audio_sst_size = adaln_embedding_coefficient(audio.cross_attention_adaln)
+            self.audio_scale_shift_table = torch.nn.Parameter(torch.empty(audio_sst_size, audio.dim))
 
         if audio is not None and video is not None:
             # Q: Video, K,V: Audio
@@ -117,6 +125,7 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 rope_type=rope_type,
                 norm_eps=norm_eps,
                 attention_function=attention_function,
+                apply_gated_attention=video.apply_gated_attention,
             )
 
             # Q: Audio, K,V: Video
@@ -128,10 +137,20 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 rope_type=rope_type,
                 norm_eps=norm_eps,
                 attention_function=attention_function,
+                apply_gated_attention=audio.apply_gated_attention,
             )
 
             self.scale_shift_table_a2v_ca_audio = torch.nn.Parameter(torch.empty(5, audio.dim))
             self.scale_shift_table_a2v_ca_video = torch.nn.Parameter(torch.empty(5, video.dim))
+        
+        self.cross_attention_adaln = (video is not None and video.cross_attention_adaln) or (
+            audio is not None and audio.cross_attention_adaln
+        )
+
+        if self.cross_attention_adaln and video is not None:
+            self.prompt_scale_shift_table = torch.nn.Parameter(torch.empty(2, video.dim))
+        if self.cross_attention_adaln and audio is not None:
+            self.audio_prompt_scale_shift_table = torch.nn.Parameter(torch.empty(2, audio.dim))
 
         self.norm_eps = norm_eps
         self.ff_chunk_min_tokens = 1024
@@ -195,7 +214,7 @@ class BasicAVTransformerBlock(torch.nn.Module):
         run_a2v = run_vx and (audio is not None and audio.enabled and ax.numel() > 0)
         run_v2a = run_ax and (video is not None and video.enabled and vx.numel() > 0)
         
- 
+
         if run_vx:
             vshift_msa, vscale_msa, vgate_msa = self.get_ada_values(
                 self.scale_shift_table, vx.shape[0], video.timesteps, slice(0, 3)

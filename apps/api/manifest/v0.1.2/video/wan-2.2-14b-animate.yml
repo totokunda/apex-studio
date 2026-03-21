@@ -251,6 +251,7 @@ spec:
       layout:
         flow: column
         rows:
+        - - segment_frame_length
         - - num_inference_steps
         - - guidance_scale
         - - seed
@@ -462,3 +463,13 @@ spec:
       min: 64
       max: 2048
       step: 64
+    - id: segment_frame_length
+      label: Segment Frame Length
+      description: Number of frames in each segment.
+      type: number+slider
+      value_type: integer
+      panel: sampling
+      default: 77
+      min: 1
+      max: 1000
+      step: 1

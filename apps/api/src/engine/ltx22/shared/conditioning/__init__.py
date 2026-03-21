@@ -6,6 +6,7 @@ from src.engine.ltx22.shared.conditioning.types import (
     VideoConditionByKeyframeIndex,
     VideoConditionByLatentIndex,
     VideoConditionByReferenceLatent,
+    ConditioningItemAttentionStrengthWrapper,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "VideoConditionByKeyframeIndex",
     "VideoConditionByLatentIndex",
     "VideoConditionByReferenceLatent",
+    "ConditioningItemAttentionStrengthWrapper",
 ]

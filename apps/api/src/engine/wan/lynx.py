@@ -15,6 +15,11 @@ class LynxEngine(WanShared):
 
     def __init__(self, yaml_path: str, **kwargs):
         super().__init__(yaml_path, auto_apply_loras=False, **kwargs)
+        self._adapter_path = None
+        self._lynx_helper = None
+
+    
+    def setup_helper(self):
         self._adapter_path = self._resolve_adapter_path()
         self._lynx_helper = WanLynxHelper(adapter_path=self._adapter_path)
 
@@ -31,6 +36,7 @@ class LynxEngine(WanShared):
             None,
         )
         extra_model_path = transformer_component.get("extra_model_paths", [])[0]
+        
         return (
             extra_model_path
             or cfg.get("adapter_path")
@@ -81,6 +87,7 @@ class LynxEngine(WanShared):
         vae_tile_sample_stride_width: int = 192,
         **kwargs,
     ):
+        self.setup_helper()
         safe_emit_progress(progress_callback, 0.0, "Starting Lynx pipeline")
         
         self.vae_tile_kwargs = {

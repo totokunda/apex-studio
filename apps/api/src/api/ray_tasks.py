@@ -4,6 +4,10 @@ Ray tasks for preprocessor operations
 
 from typing import Dict, Any, Optional, Callable, List, Tuple
 from pathlib import Path
+import base64
+from datetime import date, datetime
+from enum import Enum
+from uuid import UUID
 from urllib.parse import urlparse
 import ray
 import traceback
@@ -578,6 +582,64 @@ def _safe_fs_component(value: Any, *, fallback: str = "job", max_len: int = 120)
     return s
 
 
+_OMIT_JSON_SAFE = object()
+
+def _json_safe_for_persist(obj: Any) -> Any:
+    """
+    Recursively produce a structure that `json.dumps` can encode.
+
+    - Drops dict entries and list elements that cannot be made JSON-safe.
+    - Converts Path, date/datetime, UUID, Enum, and UTF-8 bytes to JSON-friendly values.
+    """
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, dict):
+        out: Dict[str, Any] = {}
+        for k, v in obj.items():
+            key = k if isinstance(k, str) else str(k)
+            sv = _json_safe_for_persist(v)
+            if sv is _OMIT_JSON_SAFE:
+                continue
+            out[key] = sv
+        return out
+    if isinstance(obj, (list, tuple)):
+        out_list: List[Any] = []
+        for item in obj:
+            si = _json_safe_for_persist(item)
+            if si is not _OMIT_JSON_SAFE:
+                out_list.append(si)
+        return out_list
+    if isinstance(obj, set):
+        try:
+            ordered = sorted(obj)
+        except TypeError:
+            ordered = list(obj)
+        out_set: List[Any] = []
+        for item in ordered:
+            si = _json_safe_for_persist(item)
+            if si is not _OMIT_JSON_SAFE:
+                out_set.append(si)
+        return out_set
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            return {"__bytes_b64__": base64.b64encode(obj).decode("ascii")}
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, UUID):
+        return str(obj)
+    if isinstance(obj, Enum):
+        return obj.value
+    try:
+        json.dumps(obj)
+        return obj
+    except (TypeError, ValueError, OverflowError):
+        return _OMIT_JSON_SAFE
+
+
 def _persist_run_config(
     manifest_path: str,
     engine_kwargs: Dict[str, Any],
@@ -684,10 +746,12 @@ def _persist_run_config(
         persisted_engine_kwargs: Dict[str, Any] = dict(engine_kwargs or {})
         persisted_engine_kwargs["yaml_path"] = manifest_path
 
-        payload = {
-            "engine_kwargs": persisted_engine_kwargs,
-            "inputs": persisted_inputs,
-        }
+        payload = _json_safe_for_persist(
+            {
+                "engine_kwargs": persisted_engine_kwargs,
+                "inputs": persisted_inputs,
+            }
+        )
 
         json_path = run_dir / "model_inputs.json"
         with json_path.open("w", encoding="utf-8") as f:
@@ -2224,6 +2288,7 @@ def _execute_preprocessor(
     send_progress: Callable[[Optional[float], str, Optional[Dict[str, Any]]], None],
     start_frame: Optional[int] = None,
     end_frame: Optional[int] = None,
+    send_complete_progress: bool = True,
     **kwargs,
 ) -> Dict[str, Any]:
     # Keep large objects explicitly tracked so we can drop refs in `finally`.
@@ -2274,16 +2339,17 @@ def _execute_preprocessor(
 
         logger.info(f"{results_dict}")
 
-        send_progress(
-            1.0,
-            "Complete",
-            {
-                "status": "complete",
-                "result_path": result_path,
-                "preview_url": preview_url,
-                "type": media_type,
-            },
-        )
+        if send_complete_progress:
+            send_progress(
+                1.0,
+                "Complete",
+                {
+                    "status": "complete",
+                    "result_path": result_path,
+                    "preview_url": preview_url,
+                    "type": media_type,
+                },
+            )
         return {
             "job_id": job_id,
             "status": "complete",
@@ -2405,17 +2471,17 @@ def _execute_preprocessor(
             "kwargs": kwargs,
         }
         logger.info(f"{results_dict}")
-
-        send_progress(
-            1.0,
-            "Complete",
-            {
-                "status": "complete",
-                "result_path": result_path,
-                "preview_url": preview_url,
-                "type": cache.type,
-            },
-        )
+        if send_complete_progress:
+            send_progress(
+                1.0,
+                "Complete",
+                {
+                    "status": "complete",
+                    "result_path": result_path,
+                    "preview_url": preview_url,
+                    "type": cache.type,
+                },
+            )
 
         return {
             "status": "complete",
@@ -2548,7 +2614,6 @@ def _run_engine_from_manifest_impl(
         from src.engine.registry import UniversalEngine
         from src.utils.defaults import DEFAULT_CACHE_PATH
         import numpy as np
-        from PIL import Image
 
         logger.info(manifest_path, "manifest_path")
 
@@ -2965,13 +3030,16 @@ def _run_engine_from_manifest_impl(
                 0.0,
                 f"Running {job['preprocessor_name']} preprocessor for {job['input_id']}",
             )
+            
             result = _execute_preprocessor(
                 job["preprocessor_name"],
                 job["input_path"],
-                f"{job_id}:{job['input_id']}",
+                f"{job['input_id']}:{job_id}",
                 stage_send_progress,
+                send_complete_progress=False,
                 **job.get("preprocessor_kwargs", {}),
             )
+            
             if result.get("status") != "complete":
                 raise RuntimeError(
                     result.get("error")
@@ -3205,8 +3273,8 @@ def _run_engine_from_manifest_impl(
 
         render_func = render_on_step_callback_audio_video if is_ovi_model or is_ltx_audio_video_engine else render_on_step_callback_audio if is_foley_model or is_mmaudio_engine else render_on_step_callback
 
-        if _bool_env("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
-            _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
+        #if _bool_env("ENABLE_PERSIST_RUN_CONFIG", "false") == "true":
+        _persist_run_config(manifest_path, input_kwargs, prepared_inputs)
 
         # get if the model is video or image
         if has_fps:

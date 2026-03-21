@@ -10,7 +10,7 @@ from src.engine.ltx22.shared.guiders import MultiModalGuider, MultiModalGuiderPa
 from src.engine.ltx22.shared.noisers import GaussianNoiser
 from src.engine.ltx22.shared.types import LatentState, VideoPixelShape
 from src.engine.ltx22.shared.protocols import DiffusionStepProtocol
-from src.engine.ltx22.shared.helpers import image_conditionings_by_replacing_latent, denoise_audio_video, euler_denoising_loop, multi_modal_guider_denoising_func, simple_denoising_func
+from src.engine.ltx22.shared.helpers import combined_image_conditionings,  denoise_audio_video, euler_denoising_loop, multi_modal_guider_denoising_func, simple_denoising_func
 from src.engine.ltx22.shared.utils import PipelineComponents
 from src.engine.ltx22.shared.constants import STAGE_2_DISTILLED_SIGMA_VALUES
 from src.engine.ltx22.shared.tiling import _build_tiling_config
@@ -52,6 +52,7 @@ class LTX2TI2VEngine(LTX2Shared):
         images: List[Tuple[InputImage, int, float]] | None = None,
         offload: bool = True,
         progress_callback: Optional[Callable[[float, str], None]] = None,
+        version: str = "v1",
         **kwargs,
         ):
         safe_emit_progress(progress_callback, 0.0, "Starting text-to-image-to-video pipeline")
@@ -109,9 +110,8 @@ class LTX2TI2VEngine(LTX2Shared):
             height = new_height
             width = new_width
             
-        
         safe_emit_progress(progress_callback, 0.05, "Encoding text")
-        text_encoder_results = self._encode_text([prompt, negative_prompt], offload=offload)
+        text_encoder_results = self._encode_text([prompt, negative_prompt], offload=offload, version=version)
         safe_emit_progress(progress_callback, 0.12, "Text encoded")
         context_p, context_n = text_encoder_results
         v_context_p, a_context_p, _ = context_p
@@ -190,7 +190,7 @@ class LTX2TI2VEngine(LTX2Shared):
         else:
             audio_conditionings = []
         safe_emit_progress(progress_callback, 0.20, "Building image conditionings")
-        stage_1_conditionings = image_conditionings_by_replacing_latent(
+        stage_1_conditionings = combined_image_conditionings(
             images=images,
             height=stage_1_output_shape.height,
             width=stage_1_output_shape.width,
@@ -220,6 +220,7 @@ class LTX2TI2VEngine(LTX2Shared):
             device=self.device,
             denoise_progress_callback=stage_1_denoise_progress,
         )
+        
         safe_emit_progress(progress_callback, 0.42, "Stage 1 complete, upsampling latents")
         latent_upsampler = self.helpers["latent_upsampler"]
         self.to_device(latent_upsampler)
@@ -268,7 +269,7 @@ class LTX2TI2VEngine(LTX2Shared):
             self.load_component_by_name("video_vae")
         self.to_device(self.video_vae)
         
-        stage_2_conditionings = image_conditionings_by_replacing_latent(
+        stage_2_conditionings = combined_image_conditionings(
             images=images,
             height=stage_2_output_shape.height,
             width=stage_2_output_shape.width,
