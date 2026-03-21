@@ -693,7 +693,8 @@ const VideoPreview: React.FC<
     
     if (!isPlayingRef.current && data.success && isInFrameRef.current) {
       const targetFrameInfo = getTargetFrameInfoRef.current();
-      
+
+
       if (targetFrameInfo) {
         videoDecoder.seek({
           id: data.id,
@@ -738,11 +739,20 @@ const VideoPreview: React.FC<
     }
   }, [videoDecoder]);
 
+  const preprocessorsSourceKey = (clip?.preprocessors ?? [])
+    .map((p) => p.assetId)
+    .filter((id): id is string => id !== undefined)
+    .slice()
+    .sort()
+    .join("\0");
+
   const decoderSources = useMemo(() => {
-    // get all assetIDs from the clip and preprocessors
-    const assetIds = [selectedAssetId, ...(clip?.preprocessors ?? []).map((p) => p.assetId)];
+    const assetIds = [
+      selectedAssetId,
+      ...(clip?.preprocessors ?? []).map((p) => p.assetId),
+    ];
     return assetIds.filter((id): id is string => id !== undefined);
-  }, [clip?.preprocessors, selectedAssetId]);
+  }, [selectedAssetId, preprocessorsSourceKey]);
 
 
   useEffect(() => {
@@ -788,6 +798,7 @@ const VideoPreview: React.FC<
     }
 
   }, [clipId, decoderSources]);
+
 
   useUnmount(() => {
     for (const source of decoderSources) {

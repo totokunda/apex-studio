@@ -180,6 +180,7 @@ export interface GenerateContext {
     error: (msg: string) => void;
   };
   setSelectedTab: (tab: string) => void;
+  setIsPreparingGeneration: (clipId: string, isPreparingGeneration: boolean) => void;
 }
 
 const mapOffloadToEngineInputs = (
@@ -322,6 +323,7 @@ const buildSelectedComponentDefaults = (manifest: any): Record<string, any> => {
 };
 
 export const runModelGeneration = async (ctx: GenerateContext) => {
+  
   // Start preview cleanup timer once per session (best-effort).
   startPreviewFolderAutoCleanup({ runImmediately: true });
 
@@ -344,8 +346,11 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
     updateClip,
     toast,
     setSelectedTab,
+    setIsPreparingGeneration,
   } = ctx;
 
+  try {
+    setIsPreparingGeneration(clipId, true);
   toast.info("Preparing inputs and starting generation...");
   const modelValues = getModelValues(clipId);
 
@@ -1117,4 +1122,8 @@ export const runModelGeneration = async (ctx: GenerateContext) => {
   } catch (err: any) {
     toast.error(err?.message || "Failed to start generation");
   }
+  } finally {
+    setIsPreparingGeneration(clipId, false);
+  }
+
 };

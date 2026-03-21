@@ -70,7 +70,7 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
 
 
 
-  if (info?.video || (!info && typeGuess === "video" && src)) {
+  if (info?.video) {
 
     return (
       <VideoPreview
@@ -79,7 +79,6 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
           masks: [],
           preprocessors: [],
         })}
-        decoderKey={decoderKey}
         rectWidth={rectWidth}
         rectHeight={rectHeight}
         applicators={applicators}
@@ -92,7 +91,7 @@ const DynamicModelPreview: React.FC<DynamicModelPreviewProps> = ({
     );
   }
 
-  if (info?.image || (!info && typeGuess === "image" && src)) {
+  if (info?.image) {
     return (
       <ImagePreview
         {...({

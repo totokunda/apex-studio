@@ -1,5 +1,40 @@
+import { clipSignature } from "../types";
 import { Renderer } from "./renderer";
 import { CompositorShader } from "@/components/preview/webgl-filters";
+function filtersSignature(filters) {
+  if (!filters?.length) return "";
+  return filters.map(
+    (f) => [
+      f.clipId ?? "",
+      f.smallPath ?? "",
+      f.fullPath ?? "",
+      f.intensity ?? 100,
+      f.startFrame ?? 0,
+      f.endFrame ?? 0
+    ].join(",")
+  ).join("|");
+}
+function clipRenderSignature(clip) {
+  const base = clipSignature(clip);
+  const adj = [
+    clip?.brightness,
+    clip?.contrast,
+    clip?.hue,
+    clip?.saturation,
+    clip?.blur,
+    clip?.sharpness,
+    clip?.noise,
+    clip?.vignette,
+    clip?.colorTintColor,
+    clip?.colorTintIntensity,
+    clip?.scanLines,
+    clip?.chromaticAberration,
+    clip?.interlace,
+    clip?.pixelate,
+    clip?.jitter
+  ].join(",");
+  return `${base};${adj}`;
+}
 class Canvas2DRenderer extends Renderer {
   #canvas;
   #ctx;
@@ -30,14 +65,13 @@ class Canvas2DRenderer extends Renderer {
     return this.currentSignature;
   }
   createUpdateSignature(maskFrame, clip, focusFrame, filters, useMask) {
-    const signature = JSON.stringify({
+    return [
       maskFrame,
-      clip,
       focusFrame,
-      filters,
-      useMask
-    });
-    return signature;
+      useMask ? "1" : "0",
+      clipRenderSignature(clip),
+      filtersSignature(filters)
+    ].join("::");
   }
   async update(maskFrame, clip, focusFrame, filters, useMask) {
     this.#filterParams = {

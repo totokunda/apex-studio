@@ -408,7 +408,7 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
             Configure offloading for each component in the model.
         </p>
     <div className="flex flex-col p-4 justify-start items-stretch w-full">
-      <div className="flex flex-col gap-3 w-full">
+      <div className="flex flex-col gap-3 w-full mb-4">
         {components.map((comp, idx) => {
           const key = getComponentKey(comp);
           const label = getLabel(comp);

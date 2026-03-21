@@ -1,6 +1,45 @@
+import { clipSignature } from "../types";
+import { AnyClipProps } from "../types";
 import {  FilterClipProps, VideoClipProps } from "../types";
 import { Renderer } from "./renderer";
 import { CompositorShader, FilterParams, WebGLHaldClut } from "@/components/preview/webgl-filters";
+function filtersSignature(filters: FilterClipProps[]): string {
+  if (!filters?.length) return "";
+  return filters
+    .map((f) =>
+      [
+        f.clipId ?? "",
+        f.smallPath ?? "",
+        f.fullPath ?? "",
+        f.intensity ?? 100,
+        f.startFrame ?? 0,
+        f.endFrame ?? 0,
+      ].join(",")
+    )
+    .join("|");
+}
+
+function clipRenderSignature(clip: VideoClipProps): string {
+  const base = clipSignature(clip as AnyClipProps);
+  const adj = [
+    clip?.brightness,
+    clip?.contrast,
+    clip?.hue,
+    clip?.saturation,
+    clip?.blur,
+    clip?.sharpness,
+    clip?.noise,
+    clip?.vignette,
+    clip?.colorTintColor,
+    clip?.colorTintIntensity,
+    clip?.scanLines,
+    clip?.chromaticAberration,
+    clip?.interlace,
+    clip?.pixelate,
+    clip?.jitter,
+  ].join(",");
+  return `${base};${adj}`;
+}
 
 class Canvas2DRenderer extends Renderer {
   
@@ -37,15 +76,22 @@ class Canvas2DRenderer extends Renderer {
     return this.currentSignature;
   }
 
-  createUpdateSignature(maskFrame: number, clip: VideoClipProps, focusFrame: number, filters: FilterClipProps[], useMask: boolean): string {
-    const signature = JSON.stringify({
+  
+  
+  createUpdateSignature(
+    maskFrame: number,
+    clip: VideoClipProps,
+    focusFrame: number,
+    filters: FilterClipProps[],
+    useMask: boolean
+  ): string {
+    return [
       maskFrame,
-      clip,
       focusFrame,
-      filters,
-      useMask,
-    });
-    return signature;
+      useMask ? "1" : "0",
+      clipRenderSignature(clip),
+      filtersSignature(filters),
+    ].join("::");
   }
 
   async update(maskFrame: number, clip: VideoClipProps, focusFrame: number, filters: FilterClipProps[], useMask: boolean): Promise<void> {

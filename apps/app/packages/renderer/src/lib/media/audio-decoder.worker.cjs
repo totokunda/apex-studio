@@ -29,7 +29,7 @@
     mod
   ));
 
-  // src/lib/media/audio-decoder.worker.ts
+  // packages/renderer/src/lib/media/audio-decoder.worker.ts
   var import_mediabunny = __require("mediabunny");
   var import_node_fs = __require("node:fs");
   var nodeFs = __toESM(__require("node:fs/promises"), 1);

@@ -20,6 +20,7 @@ import PreprocessorParametersPanel from '../properties/preprocessor/Preprocessor
 import { FaStop } from 'react-icons/fa'
 import { cancelPreprocessor } from '@/lib/preprocessor/api'
 import { toast } from 'sonner';
+import { usePrepareStore } from '@/lib/engine/prepare-store';
 
 import { usePreprocessorJobActions } from '@/lib/preprocessor/api';
 import { useDrawingStore } from '@/lib/drawing';
@@ -89,7 +90,6 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const [selectedTab, setSelectedTab] = useState<string>(clip?.type === 'text' ? "text" : "transform");
   const { clearJob, stopTracking } = usePreprocessorJobActions();
   const { startTracking: startEngineTracking, stopTracking: stopEngineTracking, clearJob: clearEngineJob } = useEngineJobActions();
-  const [isPreparingGeneration, setIsPreparingGeneration] = useState(false);
   const [showDownloadConfirm, setShowDownloadConfirm] = useState(false);
   const [pendingModelDownloads, setPendingModelDownloads] = useState<PendingModelDownloadItem[]>([]);
   const [backendTorchDevice, setBackendTorchDevice] = useState<string>("");
@@ -97,6 +97,8 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
   const getRawModelValues = useClipStore((s) => s.getRawModelValues);
   const modelDownloadProfile = useSettingsStore((s) => s.modelDownloadProfile);
   const queryClient = useQueryClient();
+  const {getIsPreparingGeneration, setIsPreparingGeneration} = usePrepareStore();
+  const isPreparingGeneration = getIsPreparingGeneration(clipId);
   const allowFp8ForPopup = useMemo(() => {
     const dev = String(backendTorchDevice || "").trim().toLowerCase();
     return dev.startsWith("cuda");
@@ -758,12 +760,11 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
     toast.info(`Preprocessor ${preprocessor.preprocessor.name} stopped`);
   }, [selectedPreprocessorId, getPreprocessorById, getClipFromPreprocessorId, stopTracking, clearJob, updatePreprocessor, preprocessor]);
 
+  
   const startGeneration = useCallback(async () => {
     // Note: setIsPreparingGeneration(true) is now called in handleGenerate for immediate feedback
-    try {
-      // Always read the latest clip from the store so newly-changed offload settings
-      // (and other model settings) are included in the engine request.
       const latestClip = clipId ? getClipById(clipId) : clip;
+
       await runModelGeneration({
         clipId,
         clip: latestClip,
@@ -783,10 +784,9 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         updateClip,
         toast,
         setSelectedTab,
+        setIsPreparingGeneration,
       });
-    } finally {
-      setIsPreparingGeneration(false);
-    }
+    
   }, [
     clipId,
     clip,
@@ -807,7 +807,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
 
   const handleGenerate = useCallback(async () => {
     // Set preparing state immediately for instant visual feedback
-    setIsPreparingGeneration(true);
+    setIsPreparingGeneration(clipId, true);
     
     try {
       let manifest: any = manifestData || (clip as any)?.manifest;
@@ -834,7 +834,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
       }
       await startGeneration();
     } catch (error) {
-      setIsPreparingGeneration(false); // Clear state on error
+      setIsPreparingGeneration(clipId, false); // Clear state on error
       throw error;
     }
   }, [hasModel, isModelDownloaded, manifestData, clip, manifestId, queryClient, collectPendingModelDownloads, startGeneration]);
@@ -1072,7 +1072,7 @@ const ClipPropertiesPanel:React.FC<PropertiesPanelProps> = ({panelSize}) => {
         onOpenChange={(open) => {
           setShowDownloadConfirm(open);
           if (!open) setPendingModelDownloads([]);
-          setIsPreparingGeneration(false);
+          setIsPreparingGeneration(clipId, false);
         }}
       >
         <DialogContent className="max-w-xl bg-brand-background text-brand-light border border-brand-light/10 p-0 gap-0 font-inter">

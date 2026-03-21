@@ -137,6 +137,7 @@ const decoderInUseStates = new Map<string, boolean>();
 const alphaAssetStates = new Map<string, MergeAlphaState>();
 const alphaFramesByTimestamp = new Map<string, Map<number, VideoFrame>>();
 const pendingColorFramesByTimestamp = new Map<string, Map<number, VideoFrame>>();
+const decoderFunctions = new Map<string, { onFrame: (frame: VideoFrame) => void, onAlphaFrame: (frame: VideoFrame) => void, onError: (error: Error) => void }>();
 
 const seekQueueStates:Map<string, SeekPayload | null> = new Map();
 const seekInProgressStates:Map<string, boolean> = new Map();
@@ -145,6 +146,7 @@ const haldClutInstance = new WebGLHaldClut(readFileBuffer);
 
 type Payload = InitPayload | SeekPayload | IteratePayload | PausePayload | DestroyPayload | UpdateRendererPayload | PreloadPayload;
 
+const noop = () => {};
 const resolveSource = (path: string): Source => {
     const filePath = fileURLToPathInWorker(path);
     if (!existsSync(filePath)) {
@@ -417,8 +419,10 @@ const init = async (payload: InitPayload): Promise<void> => {
         }
 
         const onError = (error: Error) => {
-            console.log(error);
+            console.error(error);
         }
+
+        decoderFunctions.set(id, { onFrame: onColorFrame, onAlphaFrame: onAlphaFrame, onError: onError });
 
         const [decoder, alphaDecoder] = createDecoderState(videoStates.get(id)!, onColorFrame, onAlphaFrame, onError);
         decoderStates.set(id, decoder);
@@ -604,13 +608,34 @@ const seek = async (payload: SeekPayload): Promise<void> => {
         }
     } catch (e) {
         // reset and configure decoders
-        decoder.reset();
-        decoder.configure(videoState.videoConfig);
+        console.error("Error seeking decoder", e);
         const alphaDecoder = alphaDecoderStates.get(id);
+        let needsReinit = false;
         if (alphaDecoder) {
-            alphaDecoder.reset();
-            alphaDecoder.configure(videoState.videoConfig);
+            if (alphaDecoder.state !== "closed") {
+                alphaDecoder.reset();
+                alphaDecoder.configure(videoState.videoConfig);
+            } else {
+                needsReinit = true;
+            }
         }
+        if (decoder.state !== "closed" && !needsReinit) {
+            decoder.reset();
+            decoder.configure(videoState.videoConfig);
+        } else {
+            needsReinit = true;
+        }
+        if (needsReinit) {
+            const { onFrame, onAlphaFrame, onError }  = decoderFunctions.get(id)!;
+            // create new decoder
+            const [decoder, alphaDecoder] = createDecoderState(videoState, onFrame, onAlphaFrame, onError);
+            decoderStates.set(id, decoder);
+            if (alphaDecoder) {
+                alphaDecoderStates.set(id, alphaDecoder);
+            }
+        }
+        
+        
     }
     finally {
         decoderInUseStates.set(id, false);
@@ -722,13 +747,31 @@ const iterate = async (payload: IteratePayload): Promise<void> => {
             }
         }
     }  catch (e) {
-        // reset and configure decoders
-        decoder.reset();
-        decoder.configure(videoState.videoConfig);
+        console.error("Error iterating decoder", e);
         const alphaDecoder = alphaDecoderStates.get(id);
+        let needsReinit = false;
         if (alphaDecoder) {
-            alphaDecoder.reset();
-            alphaDecoder.configure(videoState.videoConfig);
+            if (alphaDecoder.state !== "closed") {
+                alphaDecoder.reset();
+                alphaDecoder.configure(videoState.videoConfig);
+            } else {
+                needsReinit = true;
+            }
+        }
+        if (decoder.state !== "closed" && !needsReinit) {
+            decoder.reset();
+            decoder.configure(videoState.videoConfig);
+        } else {
+            needsReinit = true;
+        }
+        if (needsReinit) {
+            const { onFrame, onAlphaFrame, onError }  = decoderFunctions.get(id)!;
+            // create new decoder
+            const [decoder, alphaDecoder] = createDecoderState(videoState, onFrame, onAlphaFrame, onError);
+            decoderStates.set(id, decoder);
+            if (alphaDecoder) {
+                alphaDecoderStates.set(id, alphaDecoder);
+            }
         }
     } finally {
         decoderInUseStates.set(id, false);
@@ -755,6 +798,7 @@ const destroy = async (payload: DestroyPayload): Promise<void> => {
     
     const renderState = renderStates.get(id);
     const decoderState = decoderStates.get(id);
+
 
     if (!renderState) {
         console.error("Render state not found");
