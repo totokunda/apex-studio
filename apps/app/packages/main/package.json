@@ -13,8 +13,6 @@
   },
   "dependencies": {
     "@app/export-renderer": "*",
-    "@app/media-native": "*",
-    "@app/mlt-backend": "*",
     "@app/preload": "*",
     "@app/renderer": "*",
     "electron-updater": "6.6.2",

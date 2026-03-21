@@ -6,9 +6,10 @@
   "scripts": {
     "predev": "node scripts/build-video.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/build-video.mjs",
+    "prebuild": "node scripts/build-video.mjs && node scripts/build-audio.mjs",
     "build:video": "node scripts/build-video.mjs",
-    "build": "npm run build:video && tsc && NODE_OPTIONS='--max-old-space-size=8192' vite build",
+    "build:audio": "node scripts/build-audio.mjs",
+    "build": "npm run build:video && npm run build:audio && tsc && NODE_OPTIONS='--max-old-space-size=8192' vite build",
     "preview": "vite preview"
   },
   "dependencies": {

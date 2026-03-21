@@ -29,8 +29,9 @@
     mod
   ));
 
-  // packages/renderer/src/lib/media/audio-decoder.worker.ts
+  // src/lib/media/audio-decoder.worker.ts
   var import_mediabunny = __require("mediabunny");
+  var import_node_fs = __require("node:fs");
   var nodeFs = __toESM(__require("node:fs/promises"), 1);
   function fileURLToPathInWorker(raw) {
     try {
@@ -137,6 +138,15 @@
       prefetchProfile: "fileSystem"
     });
   }
+  var resolveSource = (path) => {
+    const filePath = fileURLToPathInWorker(path);
+    if (!(0, import_node_fs.existsSync)(filePath)) {
+      const url = new URL(`app://user-data/${filePath}`);
+      return new import_mediabunny.UrlSource(url);
+    } else {
+      return createNodeFileSource(filePath);
+    }
+  };
   self.onmessage = async (e) => {
     const msg = e.data;
     try {
@@ -215,7 +225,7 @@
     if (!filePath) {
       throw new Error("Missing file path for audio source");
     }
-    input = new import_mediabunny.Input({ formats, source: createNodeFileSource(filePath) });
+    input = new import_mediabunny.Input({ formats, source: resolveSource(cfg.asset.path) });
     state.input = input;
     const audioTrack = await state.input.getPrimaryAudioTrack();
     if (!audioTrack) throw new Error("No audio track found in worker");

@@ -4,7 +4,10 @@ import {
   StreamSource,
   ALL_FORMATS,
   AudioSample,
+  UrlSource,
+  Source,
 } from "mediabunny";
+import { existsSync } from "node:fs";
 import * as nodeFs from "node:fs/promises";
 
 // Minimal asset shape expected from the main thread
@@ -222,6 +225,16 @@ function createNodeFileSource(filePath: string): StreamSource {
   });
 }
 
+const resolveSource = (path: string): Source => {
+  const filePath = fileURLToPathInWorker(path);
+  if (!existsSync(filePath)) {
+      const url = new URL(`app://user-data/${filePath}`);
+      return new UrlSource(url);
+  } else {
+      return createNodeFileSource(filePath);
+  }
+}
+
 // Message listener
 self.onmessage = async (e: MessageEvent<AudioWorkerMessage>) => {
   const msg = e.data;
@@ -321,7 +334,7 @@ async function handleConfigure(
   if (!filePath) {
     throw new Error("Missing file path for audio source");
   }
-  input = new Input({ formats, source: createNodeFileSource(filePath) });
+  input = new Input({ formats, source: resolveSource(cfg.asset.path) });
 
   state.input = input;
 
