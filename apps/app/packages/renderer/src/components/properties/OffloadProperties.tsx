@@ -398,7 +398,6 @@ const OffloadProperties: React.FC<OffloadPropertiesProps> = ({ clipId }) => {
     }
   }, [clipId, manifestId]);
   
-
   return (
     <div>
         <h3 className="text-brand-light text-[12px] font-medium text-start ml-4 mt-4">
