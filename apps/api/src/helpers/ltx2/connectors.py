@@ -139,7 +139,7 @@ class Embeddings1DConnector(torch.nn.Module):
         )
 
         self.num_learnable_registers = num_learnable_registers
-        if self.num_learnable_registers:
+        if self.num_learnable_registers: 
             self.learnable_registers = torch.nn.Parameter(
                 torch.rand(self.num_learnable_registers, self.inner_dim, dtype=torch.bfloat16) * 2.0 - 1.0
             )
@@ -271,6 +271,7 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
             causal_temporal_positioning=causal_temporal_positioning,
             rope_type=rope_type,
         )
+        
         self.audio_connector = Embeddings1DConnector(
             num_attention_heads=audio_connector_num_attention_heads,
             attention_head_dim=audio_connector_attention_head_dim,
@@ -316,6 +317,7 @@ class LTX2TextConnectors(ModelMixin, ConfigMixin):
         attn_mask = attn_mask.reshape(
             video_text_embedding.shape[0], video_text_embedding.shape[1], 1
         )
+        
         video_text_embedding = video_text_embedding * attn_mask
         new_attn_mask = attn_mask.squeeze(-1)
 

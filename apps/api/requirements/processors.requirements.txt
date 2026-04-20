@@ -10,6 +10,7 @@
 # Vision / segmentation / detection
 facexlib==0.3.0
 insightface @ https://raw.githubusercontent.com/cobanov/insightface_windows/d97fe110e1e5653f9814033291524147f2111d0f/whls/insightface-0.7.3-cp312-cp312-win_amd64.whl ; sys_platform == "win32"
+insightface==0.7.3 ; sys_platform != "win32"
 mediapipe==0.10.21
 mmengine==0.10.7
 ptlflow
@@ -32,7 +33,7 @@ git+https://github.com/totokunda/sam2.git ; sys_platform != "darwin" or platform
 # - Everything else: use the stable PyPI release
 git+https://github.com/totokunda/simplepyutils.git
 git+https://github.com/totokunda/florch.git
-git+https://github.com/isarandi/smplfitter.git
+git+https://github.com/totokunda/smplfitter.git
 
 fairscale
 pycocotools

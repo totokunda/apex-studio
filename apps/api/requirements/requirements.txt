@@ -96,3 +96,4 @@ hf_transfer==0.1.9
 pytest==9.0.2
 torchsde==0.2.6
 watchdog==6.0.0
+git+https://github.com/totokunda/audiotools.git

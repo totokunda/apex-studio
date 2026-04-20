@@ -19,7 +19,7 @@ from src.engine.ltx22.shared.guidance.perturbations import (
     PerturbationType,
 )
 
-from src.transformer.ltx2.base2.model import LTX2VideoTransformer3DModel as LTXModel
+
 from src.transformer.ltx2.base2.modality import Modality
 from src.vae.ltx2.model import VideoEncoder
 from src.engine.ltx22.shared.tools import AudioLatentTools, LatentTools, VideoLatentTools
@@ -32,6 +32,11 @@ from src.engine.ltx22.shared.types import (
     PipelineComponents,
 )
 from src.utils.progress import safe_emit_progress
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.transformer.ltx2.base2.model import LTX2VideoTransformer3DModel as LTXModel
 
 
 import PIL.Image
@@ -428,7 +433,7 @@ def timesteps_from_mask(
     return frame_timesteps, frame_indices
 
 def simple_denoising_func(
-    video_context: torch.Tensor, audio_context: torch.Tensor, transformer: LTXModel
+    video_context: torch.Tensor, audio_context: torch.Tensor, transformer: "LTXModel"
 ) -> DenoisingFunc:
     def simple_denoising_step(
         video_state: LatentState, audio_state: LatentState, sigmas: torch.Tensor, step_index: int
@@ -449,7 +454,7 @@ def guider_denoising_func(
     v_context_n: torch.Tensor,
     a_context_p: torch.Tensor,
     a_context_n: torch.Tensor,
-    transformer: LTXModel,
+    transformer: "LTXModel",
 ) -> DenoisingFunc:
     def guider_denoising_step(
         video_state: LatentState, audio_state: LatentState, sigmas: torch.Tensor, step_index: int
@@ -478,7 +483,7 @@ def multi_modal_guider_denoising_func(
     audio_guider: MultiModalGuider,
     v_context: torch.Tensor,
     a_context: torch.Tensor,
-    transformer: LTXModel,
+    transformer: "LTXModel",
 ) -> DenoisingFunc:
     last_denoised_video = None
     last_denoised_audio = None
