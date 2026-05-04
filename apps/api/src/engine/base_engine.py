@@ -1982,8 +1982,6 @@ class BaseEngine(LoaderMixin, ToMixin, OffloadMixin, CompileMixin, CacheMixin):
         if not needs_offload:
             return None
 
-        # Estimate block structure for smarter offloading
-        block_size_bytes, num_blocks = self._estimate_block_structure(component)
 
         # NEW: Use automatic budget offloading by default
         # This automatically calculates optimal VRAM budgets based on:

@@ -19,7 +19,7 @@ from diffusers.models.attention import AttentionMixin
 from diffusers.models.cache_utils import CacheMixin
 from diffusers.models.modeling_utils import ModelMixin
 from typing import Any, Mapping, Optional, Tuple
-from src.utils.cache import empty_cache
+
 
 def avtransformer3d_config_from_base2_config(cfg: Mapping[str, Any]) -> dict[str, Any]:
     """
@@ -166,6 +166,8 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         timestep_scale_multiplier: int = 1000,
         cross_attn_timestep_scale_multiplier: int = 1000,
         rope_type: str | LTXRopeType = LTXRopeType.INTERLEAVED,
+        use_caption_projection: bool = True,
+        use_audio_caption_projection: bool = True,
         use_middle_indices_grid: bool = True,
         attention_type: None = None,
         apply_gated_attention: bool = False,
@@ -187,7 +189,8 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         self.positional_embedding_theta = rope_theta
         self.av_ca_timestep_scale_multiplier = cross_attn_timestep_scale_multiplier
         self.cross_attention_adaln = cross_attention_adaln
-        
+        self.use_caption_projection = use_caption_projection
+        self.use_audio_caption_projection = use_audio_caption_projection
         cross_pe_max_pos = None
         if self.model_type.is_video_enabled():
             self.positional_embedding_max_pos = [pos_embed_max_pos, base_height, base_width]
@@ -245,13 +248,16 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         # Video input components
         self.patchify_proj = torch.nn.Linear(in_channels, self.inner_dim, bias=True)
 
-        self.adaln_single = AdaLayerNormSingle(self.inner_dim)
+        self.adaln_single = AdaLayerNormSingle(self.inner_dim, embedding_coefficient=self._adaln_embedding_coefficient)
 
         # Video caption projection
-        self.caption_projection = PixArtAlphaTextProjection(
-            in_features=caption_channels,
-            hidden_size=self.inner_dim,
-        )
+        if self.use_caption_projection:
+            self.caption_projection = PixArtAlphaTextProjection(
+                in_features=caption_channels,
+                hidden_size=self.inner_dim,
+            )
+        else:
+            self.caption_projection = None
         
         self.prompt_adaln_single = (
             AdaLayerNormSingle(self.inner_dim, embedding_coefficient=2) if self.cross_attention_adaln else None
@@ -276,6 +282,7 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
 
         self.audio_adaln_single = AdaLayerNormSingle(
             self.audio_inner_dim,
+            embedding_coefficient=self._adaln_embedding_coefficient,
         )
         
         self.audio_prompt_adaln_single = (
@@ -283,10 +290,13 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         )
 
         # Audio caption projection
-        self.audio_caption_projection = PixArtAlphaTextProjection(
-            in_features=caption_channels,
-            hidden_size=self.audio_inner_dim,
-        )
+        if self.use_audio_caption_projection:
+            self.audio_caption_projection = PixArtAlphaTextProjection(
+                in_features=caption_channels,
+                hidden_size=self.audio_inner_dim,
+            )
+        else:
+            self.audio_caption_projection = None
 
         # Audio output components
         self.audio_scale_shift_table = torch.nn.Parameter(torch.empty(2, self.audio_inner_dim))
